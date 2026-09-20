@@ -1,11 +1,13 @@
 # Events v1
 
-Authenticated same-origin WebSocket: `/api/v1/events`, session cookie required.
+Implemented by [the core API server](../internal/api/server.go).
+
+Authenticated same-origin WebSocket: `/api/v1/events`, `panasms_session` cookie required.
 Server messages: `{ "version": 1, "type": "...", "data": ... }`.
 
 - `resync`: reread HTTP snapshots after opening/reopening the connection.
 - `storage.changed`: invalidate storage snapshot and read `/api/v1/storage`.
-- `metrics`: data matches the OpenAPI Metrics schema.
+- `metrics`: data matches the [OpenAPI](openapi.yaml) Metrics schema.
 - `cooling`: current CoolingState, including applied profile and duty (not RPM).
 - `cooling.unavailable`: mark the last cooling snapshot unavailable.
 - `metrics.unavailable`: invalidate the metric snapshot and display its failure.

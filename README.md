@@ -1,4 +1,4 @@
-# OstojaOS backend
+# PaNasMs backend
 
 Отдельный репозиторий серверной платформы.
 Начальный рабочий прототип реализован.
@@ -54,5 +54,5 @@ PAM через libpam/cgo, Linux/systemd. Целевая архитектура 
 
 ## Лицензия
 
-Оригинальный код OstojaOS: [PolyForm Noncommercial 1.0.0](LICENSE).
+Оригинальный код PaNasMs: [PolyForm Noncommercial 1.0.0](LICENSE).
 Область применения и исключения для сторонних компонентов: [NOTICE](NOTICE).

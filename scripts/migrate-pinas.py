@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate the local PiNAS prototype installation to OstojaOS 0.2.0."""
+"""Migrate the local PiNAS prototype installation to PaNasMs 0.2.0."""
 import argparse
 import grp
 import hashlib
@@ -74,10 +74,10 @@ def preflight(artifacts):
     if run("dpkg", "--print-architecture").stdout.strip() != "arm64":
         raise RuntimeError("This migration requires ARM64 packages")
     for filename in [
-        "backend/dist/ostojaos-prototype_0.2.0_arm64.deb",
-        "backend/dist/ostojaos-cooling_0.2.0_all.deb",
-        "files-0.2.0-arm64.ostojaos",
-        "terminal-0.2.0-arm64.ostojaos",
+        "backend/dist/panasms-prototype_0.2.0_arm64.deb",
+        "backend/dist/panasms-cooling_0.2.0_all.deb",
+        "files-0.2.0-arm64.panasms",
+        "terminal-0.2.0-arm64.panasms",
         "rollback/pinas-prototype_0.1.2_arm64.deb",
         "rollback/pinas-cooling_0.1.0_all.deb",
     ]:
@@ -90,22 +90,22 @@ def preflight(artifacts):
     manager.KEYS = artifacts / "backend/packaging"
     try:
         for mid in ("files", "terminal"):
-            _, manifests = manager.inspect_bundle(artifacts / (mid + "-0.2.0-arm64.ostojaos"))
+            _, manifests = manager.inspect_bundle(artifacts / (mid + "-0.2.0-arm64.panasms"))
             missing, _ = manager.package_plan(list(manifests.values()))
             if missing:
                 raise RuntimeError("Install module prerequisites before migration: " + ", ".join(missing))
     finally:
         manager.KEYS = original_keys
     for name in STATE + ["/usr/lib/pinas", "/usr/lib/pinas-cooling"]:
-        new = Path(name.replace("pinas", "ostojaos"))
+        new = Path(name.replace("pinas", "panasms"))
         if new.exists() or new.is_symlink():
-            raise RuntimeError("OstojaOS destination already exists: " + str(new))
+            raise RuntimeError("PaNasMs destination already exists: " + str(new))
     try:
-        pwd.getpwnam("ostojaos")
+        pwd.getpwnam("panasms")
     except KeyError:
         pass
     else:
-        raise RuntimeError("OstojaOS account already exists")
+        raise RuntimeError("PaNasMs account already exists")
     account = pwd.getpwnam("pinas")
     if account.pw_gecos != "PiNAS prototype service" or account.pw_shell != "/usr/sbin/nologin":
         raise RuntimeError("Unexpected PiNAS service account")
@@ -143,33 +143,33 @@ def preflight(artifacts):
 
 def restore(backup):
     meta = json.loads((backup / "migration.json").read_text())
-    new_units, _ = units("ostojaos")
+    new_units, _ = units("panasms")
     if new_units:
         run("systemctl", "disable", "--now", *new_units, check=False)
-    cooling = Path("/etc/ostojaos-cooling")
+    cooling = Path("/etc/panasms-cooling")
     if cooling.exists():
-        move(cooling, backup / "failed/etc/ostojaos-cooling")
-    run("dpkg", "--remove", "ostojaos-prototype", "ostojaos-cooling", check=False)
+        move(cooling, backup / "failed/etc/panasms-cooling")
+    run("dpkg", "--remove", "panasms-prototype", "panasms-cooling", check=False)
     for name in STATE:
-        new = name.replace("pinas", "ostojaos")
+        new = name.replace("pinas", "panasms")
         if Path(new).exists():
             move(new, backup / "failed" / new.lstrip("/"))
-    for name in ["/usr/lib/ostojaos", "/usr/lib/ostojaos-cooling"]:
+    for name in ["/usr/lib/panasms", "/usr/lib/panasms-cooling"]:
         if Path(name).exists():
             move(name, backup / "failed" / name.lstrip("/"))
     for old, new in reversed(meta.get("trash_moves", [])):
         if Path(new).exists() and not Path(old).exists():
             move(new, old)
     try:
-        pwd.getpwnam("ostojaos")
+        pwd.getpwnam("panasms")
     except KeyError:
         pass
     else:
-        run("usermod", "-l", "pinas", "-c", "PiNAS prototype service", "ostojaos")
-        if any(g.gr_name == "ostojaos" for g in grp.getgrall()):
-            run("groupmod", "-n", "pinas", "ostojaos")
+        run("usermod", "-l", "pinas", "-c", "PiNAS prototype service", "panasms")
+        if any(g.gr_name == "panasms" for g in grp.getgrall()):
+            run("groupmod", "-n", "pinas", "panasms")
     run("tar", "--acls", "--xattrs", "-xpf", str(backup / "state.tar"), "-C", "/")
-    for unit in Path("/etc/systemd/system").glob("ostojaos-*"):
+    for unit in Path("/etc/systemd/system").glob("panasms-*"):
         if unit.is_file() or unit.is_symlink():
             unit.unlink()
     artifacts = Path(meta["artifacts"])
@@ -189,7 +189,7 @@ def restore(backup):
 def migrate(artifacts):
     registry = preflight(artifacts)
     old_units, enabled = units("pinas")
-    backup = Path("/var/backups/ostojaos-migration") / time.strftime("%Y%m%d-%H%M%S")
+    backup = Path("/var/backups/panasms-migration") / time.strftime("%Y%m%d-%H%M%S")
     backup.mkdir(parents=True, mode=0o700)
     backup.chmod(0o700)
     meta = {
@@ -223,58 +223,58 @@ def migrate(artifacts):
         run("systemctl", "disable", *enabled)
         run("systemctl", "stop", "pinas-cooling.service")
         for name in STATE:
-            move(name, name.replace("pinas", "ostojaos"))
+            move(name, name.replace("pinas", "panasms"))
         run("dpkg", "--remove", "pinas-prototype", "pinas-cooling")
         for name in ["/usr/lib/pinas", "/usr/lib/pinas-cooling"]:
             if Path(name).exists():
                 move(name, backup / "retired" / name.lstrip("/"))
-        run("usermod", "-l", "ostojaos", "-c", "OstojaOS prototype service", "pinas")
-        run("groupmod", "-n", "ostojaos", "pinas")
-        env = Path("/etc/ostojaos/pinas.env")
+        run("usermod", "-l", "panasms", "-c", "PaNasMs prototype service", "pinas")
+        run("groupmod", "-n", "panasms", "pinas")
+        env = Path("/etc/panasms/pinas.env")
         lines = env.read_text().splitlines(keepends=True)
         env.write_text(
             "".join(
-                "OSTOJAOS_" + line[len("PINAS_") :] if line.startswith("PINAS_") else line for line in lines
+                "PANASMS_" + line[len("PINAS_") :] if line.startswith("PINAS_") else line for line in lines
             )
         )
-        env.rename(env.with_name("ostojaos.env"))
-        move("/etc/ostojaos/module-keys/pinas-local.pem", "/etc/ostojaos/module-keys/ostojaos-local.pem")
+        env.rename(env.with_name("panasms.env"))
+        move("/etc/panasms/module-keys/pinas-local.pem", "/etc/panasms/module-keys/panasms-local.pem")
         fstab = Path("/etc/fstab")
         fstab.write_text(
             fstab.read_text()
-            .replace("/etc/pinas/network-credentials/", "/etc/ostojaos/network-credentials/")
-            .replace("# pinas-network-", "# ostojaos-network-")
+            .replace("/etc/pinas/network-credentials/", "/etc/panasms/network-credentials/")
+            .replace("# pinas-network-", "# panasms-network-")
         )
         for unit in Path("/etc/systemd/system").glob("pinas-*"):
             if unit.name.startswith("pinas-smart-") and unit.is_file():
-                target = unit.with_name(unit.name.replace("pinas-", "ostojaos-", 1))
+                target = unit.with_name(unit.name.replace("pinas-", "panasms-", 1))
                 target.write_text(
                     unit.read_text()
-                    .replace("/usr/lib/pinas/", "/usr/lib/ostojaos/")
-                    .replace("pinas-smart-", "ostojaos-smart-")
+                    .replace("/usr/lib/pinas/", "/usr/lib/panasms/")
+                    .replace("pinas-smart-", "panasms-smart-")
                 )
                 target.chmod(0o644)
             unit.unlink()
         # Signed payloads must be reinstalled, never edited in place.
         for mid in registry:
-            move("/var/lib/ostojaos-modules/" + mid, backup / "retired-modules" / mid)
-        Path("/var/lib/ostojaos-modules/registry.json").write_text("{}")
-        Path("/var/lib/ostojaos-modules/catalog.json").write_text("{}")
+            move("/var/lib/panasms-modules/" + mid, backup / "retired-modules" / mid)
+        Path("/var/lib/panasms-modules/registry.json").write_text("{}")
+        Path("/var/lib/panasms-modules/catalog.json").write_text("{}")
         run(
             "dpkg",
             "-i",
-            str(artifacts / "backend/dist/ostojaos-cooling_0.2.0_all.deb"),
-            str(artifacts / "backend/dist/ostojaos-prototype_0.2.0_arm64.deb"),
+            str(artifacts / "backend/dist/panasms-cooling_0.2.0_all.deb"),
+            str(artifacts / "backend/dist/panasms-prototype_0.2.0_arm64.deb"),
         )
-        run("systemctl", "enable", "--now", "ostojaos-cooling.service")
-        sys.path.insert(0, "/usr/lib/ostojaos/management")
+        run("systemctl", "enable", "--now", "panasms-cooling.service")
+        sys.path.insert(0, "/usr/lib/panasms/management")
         import module_manager as manager
 
         manager.UPLOADS.mkdir(mode=0o700, parents=True, exist_ok=True)
         for mid, manifest in registry.items():
             token = uuid.uuid4().hex
             upload = manager.UPLOADS / ("pasha-" + token + ".zip")
-            shutil.copyfile(artifacts / (mid + "-0.2.0-arm64.ostojaos"), upload)
+            shutil.copyfile(artifacts / (mid + "-0.2.0-arm64.panasms"), upload)
             upload.chmod(0o600)
             manager.execute("module.install", {"upload": token}, "pasha")
             if not manifest["enabled"]:
@@ -289,14 +289,14 @@ def migrate(artifacts):
             for old in root.glob(".pinas-trash-*"):
                 if old.is_symlink() or not old.is_dir() or not old.name[len(".pinas-trash-") :].isdigit():
                     continue
-                new = old.with_name(old.name.replace(".pinas-trash-", ".ostojaos-trash-", 1))
+                new = old.with_name(old.name.replace(".pinas-trash-", ".panasms-trash-", 1))
                 meta["trash_moves"].append((str(old), str(new)))
                 save()
                 move(old, new)
-        timers = [u.replace("pinas-", "ostojaos-", 1) for u in enabled if u.endswith(".timer")]
+        timers = [u.replace("pinas-", "panasms-", 1) for u in enabled if u.endswith(".timer")]
         if timers:
             run("systemctl", "enable", "--now", *timers)
-        run("ostojaos-configure")
+        run("panasms-configure")
         for attempt in range(30):
             try:
                 health = json.load(urllib.request.urlopen("http://127.0.0.1/api/v1/health", timeout=2))
@@ -307,19 +307,19 @@ def migrate(artifacts):
             time.sleep(1)
         else:
             raise RuntimeError("New core failed health check")
-        if before != user_state("/var/lib/ostojaos/state.db"):
+        if before != user_state("/var/lib/panasms/state.db"):
             raise RuntimeError("Preferences or wallpaper changed during migration")
         after = mounts()
         for row in before_mounts:
             if row["target"].startswith(("/srv/", "/mnt/", "/media/")) and row not in after:
                 raise RuntimeError("Existing data mount changed: " + row["target"])
-        run("systemctl", "is-active", "ostojaos-core", "ostojaos-agent", "ostojaos-cooling")
+        run("systemctl", "is-active", "panasms-core", "panasms-agent", "panasms-cooling")
         if meta["hostname"] == "pinas":
             hosts = Path("/etc/hosts")
             hosts.write_text(
                 "\n".join(
                     (
-                        " ".join("ostojaos" if part == "pinas" else part for part in line.split())
+                        " ".join("panasms" if part == "pinas" else part for part in line.split())
                         if line.startswith("127.0.1.1")
                         else line
                     )
@@ -327,10 +327,10 @@ def migrate(artifacts):
                 )
                 + "\n"
             )
-            run("hostnamectl", "set-hostname", "ostojaos")
+            run("hostnamectl", "set-hostname", "panasms")
         meta["complete"] = True
         save()
-        print("OstojaOS 0.2.0 active; preferences, wallpapers and data mounts preserved.", flush=True)
+        print("PaNasMs 0.2.0 active; preferences, wallpapers and data mounts preserved.", flush=True)
     except BaseException:
         print("Migration failed; restoring previous installation.", flush=True)
         restore(backup)

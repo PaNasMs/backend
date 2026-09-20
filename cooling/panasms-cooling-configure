@@ -7,13 +7,13 @@ if 'Raspberry Pi 5' not in Path('/proc/device-tree/model').read_text(): raise Sy
 with gpiod.Chip('/dev/gpiochip0') as chip:
     if chip.get_info().label!='pinctrl-rp1' or chip.get_line_info(27).name!='GPIO27': raise SystemExit('GPIO mapping mismatch')
     line=chip.get_line_info(27)
-    if line.used and line.consumer!='ostojaos-cooling': raise SystemExit('GPIO27 already owned by '+str(line.consumer))
-folder=Path('/etc/ostojaos-cooling'); folder.mkdir(mode=0o755,exist_ok=True)
+    if line.used and line.consumer!='panasms-cooling': raise SystemExit('GPIO27 already owned by '+str(line.consumer))
+folder=Path('/etc/panasms-cooling'); folder.mkdir(mode=0o755,exist_ok=True)
 config=folder/'config.json'
 if not config.exists():
     disks=sorted(p for p in glob.glob('/dev/disk/by-id/ata-WDC_WD10JFCX-68N6GN0_*') if '-part' not in p)
     if len(disks)!=4: raise SystemExit('Expected four known WD disks; inspect wiring and disk identities')
     config.write_text(json.dumps({'profile':'balanced','cpuProfile':'balanced','sampleSeconds':60,'disks':disks},indent=2)+'\n')
     config.chmod(0o644)
-subprocess.run(['systemctl','enable','--now','ostojaos-cooling.service'],check=True)
+subprocess.run(['systemctl','enable','--now','panasms-cooling.service'],check=True)
 print('Independent GPIO27 cooling enabled; retained when panel is removed.')

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 systemctl daemon-reload
-echo 'Cooling installed separately from the panel. Run ostojaos-cooling-configure for this GPIO27 hardware.'
-if [ -f /etc/ostojaos-cooling/config.json ] && systemctl is-enabled --quiet ostojaos-cooling.service; then
- systemctl restart ostojaos-cooling.service
+echo 'Cooling installed separately from the panel. Run panasms-cooling-configure for this GPIO27 hardware.'
+if [ -f /etc/panasms-cooling/config.json ] && systemctl is-enabled --quiet panasms-cooling.service; then
+ systemctl restart panasms-cooling.service
 fi

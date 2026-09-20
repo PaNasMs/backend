@@ -29,7 +29,7 @@ def bounds(kind):
 
 def normal(user):
     lo, hi = bounds("UID")
-    require(lo <= user.pw_uid <= hi and user.pw_name != "ostojaos", 'Service account is protected')
+    require(lo <= user.pw_uid <= hi and user.pw_name != "panasms", 'Service account is protected')
 
 
 def account(value):

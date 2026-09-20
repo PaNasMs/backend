@@ -14,7 +14,7 @@ from common import Rejected, require, fingerprint, json_command, command
 ACTIONS = {'network.configure', 'network.confirm', 'network.rollback'}
 NM = 'org.freedesktop.NetworkManager'
 NM_PATH = '/org/freedesktop/NetworkManager'
-STATE_DIR = Path('/run/ostojaos-network')
+STATE_DIR = Path('/run/panasms-network')
 TIMEOUT = 120
 
 import wifi

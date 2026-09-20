@@ -1,13 +1,13 @@
 [Unit]
-Description=OstojaOS read-only filesystem check for %I
+Description=PaNasMs read-only filesystem check for %I
 BindsTo=dev-%i.device
 After=dev-%i.device
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /usr/lib/ostojaos/management/filesystem_health.py %I
+ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/filesystem_health.py %I
 TimeoutStartSec=3700
-RuntimeDirectory=ostojaos-filesystems
+RuntimeDirectory=panasms-filesystems
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 UMask=0077

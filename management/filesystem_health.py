@@ -63,7 +63,7 @@ def mounted_read_only(point):
 from contextlib import contextmanager
 import fcntl
 
-STATE = Path("/run/ostojaos-filesystems")
+STATE = Path("/run/panasms-filesystems")
 
 
 def identity(target):

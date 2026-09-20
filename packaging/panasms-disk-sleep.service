@@ -1,0 +1,11 @@
+[Unit]
+Description=PaNasMs HDD standby settings
+After=local-fs.target
+ConditionPathExists=/etc/panasms/disk-sleep.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/panasms/management/disk_sleep.py
+RuntimeDirectory=panasms-disk-sleep
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=120

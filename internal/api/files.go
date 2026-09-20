@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/modules"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modules"
 	"strconv"
 )
 

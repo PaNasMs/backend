@@ -23,12 +23,12 @@ baseline = [
     "/dev/mmcblk0",
 ]
 before = command(baseline)
-with tempfile.TemporaryDirectory(prefix="ostojaos-eject-") as tmp:
+with tempfile.TemporaryDirectory(prefix="panasms-eject-") as tmp:
     image = Path(tmp) / "disk"
     image.write_bytes(b"")
     image.open("r+b").truncate(128 * 1048576)
     loop = command(["losetup", "--find", "--show", "--partscan", str(image)]).strip()
-    mounts = [Path("/mnt/ostojaos_eject_" + str(os.getpid()) + "_" + str(i)) for i in range(2)]
+    mounts = [Path("/mnt/panasms_eject_" + str(os.getpid()) + "_" + str(i)) for i in range(2)]
     sysroot = Path(tmp) / "sys"
     signal = sysroot / Path(loop).name / "device/delete"
     signal.parent.mkdir(parents=True)

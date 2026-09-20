@@ -27,7 +27,7 @@ def service(value):
         'Select a systemd service',
     )
     require(
-        not value.startswith(("ostojaos-", "ssh", "systemd-", "dbus", "network", "NetworkManager", "getty")),
+        not value.startswith(("panasms-", "ssh", "systemd-", "dbus", "network", "NetworkManager", "getty")),
         'This service is protected from changes through the panel',
     )
     require(
@@ -153,7 +153,7 @@ def plan(action, p, user=None):
 
 def execute(action, p, user=None):
     if action in ("system.poweroff", "system.reboot"):
-        command(["systemd-run", "--unit=ostojaos-power-request", "--on-active=5s",
+        command(["systemd-run", "--unit=panasms-power-request", "--on-active=5s",
                  "--timer-property=AccuracySec=1s", "/usr/bin/systemctl",
                  "--no-block", action.split(".")[1]])
         return {"message": "Power operation scheduled"}
@@ -213,7 +213,7 @@ def export_plan(action, p):
     import ipaddress
 
     target = export_path(p.get("target"))
-    conf = Path("/etc/exports.d/ostojaos.exports")
+    conf = Path("/etc/exports.d/panasms.exports")
     state = conf.read_text() if conf.exists() else ""
     if action == "nfs.export":
         clients = p.get("clients", "").split(",")
@@ -237,7 +237,7 @@ def export_plan(action, p):
 
 def export_execute(action, p):
     target = str(export_path(p["target"]))
-    conf = Path("/etc/exports.d/ostojaos.exports")
+    conf = Path("/etc/exports.d/panasms.exports")
     rows = conf.read_text().splitlines() if conf.exists() else []
     rows = [line for line in rows if not line.startswith(target + " ")]
     if action == "nfs.export":
@@ -259,7 +259,7 @@ def export_execute(action, p):
 
 
 def export_query():
-    path = Path("/etc/exports.d/ostojaos.exports")
+    path = Path("/etc/exports.d/panasms.exports")
     entries = []
     for line in path.read_text().splitlines() if path.exists() else []:
         fields = line.split()

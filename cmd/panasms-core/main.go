@@ -8,18 +8,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"ostojaos.local/backend/internal/api"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/store"
+	"panasms.local/backend/internal/api"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/store"
 	"syscall"
 	"time"
 )
 
 func main() {
 	addr := flag.String("listen", "127.0.0.1:8080", "listen address")
-	db := flag.String("db", "/var/lib/ostojaos/state.db", "SQLite file")
-	static := flag.String("static", "/usr/share/ostojaos/ui", "SPA assets")
-	socket := flag.String("agent", "/run/ostojaos-agent/agent.sock", "agent socket")
+	db := flag.String("db", "/var/lib/panasms/state.db", "SQLite file")
+	static := flag.String("static", "/usr/share/panasms/ui", "SPA assets")
+	socket := flag.String("agent", "/run/panasms-agent/agent.sock", "agent socket")
 	cert := flag.String("cert", "", "TLS certificate")
 	key := flag.String("key", "", "TLS key")
 	allowHTTP := flag.Bool("allow-http", false, "allow unencrypted HTTP outside loopback")
@@ -32,7 +32,7 @@ func main() {
 	if !secure && !*allowHTTP && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback()) {
 		log.Fatal("TLS required outside loopback")
 	}
-	allowed, policyErr := auth.AccessPolicy(os.Getenv("OSTOJAOS_AUTH_MODE"), os.Getenv("OSTOJAOS_ALLOWED_USERS"))
+	allowed, policyErr := auth.AccessPolicy(os.Getenv("PANASMS_AUTH_MODE"), os.Getenv("PANASMS_ALLOWED_USERS"))
 	if policyErr != nil {
 		log.Fatal(policyErr)
 	}
@@ -53,7 +53,7 @@ func main() {
 		defer cancel()
 		srv.Shutdown(c)
 	}()
-	log.Printf("OstojaOS core listening on %s (TLS=%t)", *addr, secure)
+	log.Printf("PaNasMs core listening on %s (TLS=%t)", *addr, secure)
 	if secure {
 		err = srv.ListenAndServeTLS(*cert, *key)
 	} else {

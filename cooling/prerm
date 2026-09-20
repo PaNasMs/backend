@@ -2,11 +2,11 @@
 set -eu
 case "${1:-}" in
  remove|deconfigure)
-  if [ -e /etc/ostojaos-cooling/config.json ]; then
-   echo 'Cooling remains responsible for GPIO27. Transfer cooling to another controller and archive /etc/ostojaos-cooling/config.json before removing this independent package.' >&2
+  if [ -e /etc/panasms-cooling/config.json ]; then
+   echo 'Cooling remains responsible for GPIO27. Transfer cooling to another controller and archive /etc/panasms-cooling/config.json before removing this independent package.' >&2
    exit 1
   fi
-  systemctl disable --now ostojaos-cooling.service || true
+  systemctl disable --now panasms-cooling.service || true
  ;;
- upgrade) systemctl stop ostojaos-cooling.service || true;;
+ upgrade) systemctl stop panasms-cooling.service || true;;
 esac

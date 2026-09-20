@@ -64,7 +64,7 @@ func AccessPolicy(mode, users string) (map[string]bool, error) {
 		}
 	}
 	if len(allowed) == 0 {
-		return nil, errors.New("configure OSTOJAOS_AUTH_MODE=sudo or OSTOJAOS_ALLOWED_USERS")
+		return nil, errors.New("configure PANASMS_AUTH_MODE=sudo or PANASMS_ALLOWED_USERS")
 	}
 	return allowed, nil
 }

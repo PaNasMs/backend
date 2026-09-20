@@ -33,11 +33,11 @@ class Catalog(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(root / 'private')], check=True)
-            subprocess.run(['openssl', 'pkey', '-in', str(root / 'private'), '-pubout', '-out', str(root / 'ostojaos-ci.pem')], check=True)
+            subprocess.run(['openssl', 'pkey', '-in', str(root / 'private'), '-pubout', '-out', str(root / 'panasms-ci.pem')], check=True)
             raw = b'{"schemaVersion":1}'
             (root / 'data').write_bytes(raw)
             subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(root / 'private'), '-rawin', '-in', str(root / 'data'), '-out', str(root / 'signature')], check=True)
-            envelope = {'algorithm': 'Ed25519', 'signer': 'ostojaos-ci', 'signature': base64.b64encode((root / 'signature').read_bytes()).decode()}
+            envelope = {'algorithm': 'Ed25519', 'signer': 'panasms-ci', 'signature': base64.b64encode((root / 'signature').read_bytes()).decode()}
             with patch.object(c.manager, 'KEYS', root):
                 c.verify(raw, envelope)
                 with self.assertRaises(Rejected):

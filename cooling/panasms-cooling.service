@@ -1,15 +1,15 @@
 [Unit]
-Description=OstojaOS independent disk cooling controller
+Description=PaNasMs independent disk cooling controller
 After=local-fs.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/python3 /usr/lib/ostojaos-cooling/controller.py
+ExecStart=/usr/bin/python3 /usr/lib/panasms-cooling/controller.py
 ExecStopPost=/usr/bin/pinctrl set 27 op dh
 Restart=always
 RestartSec=2
 WatchdogSec=15
-RuntimeDirectory=ostojaos-cooling
+RuntimeDirectory=panasms-cooling
 RuntimeDirectoryMode=0755
 UMask=0022
 ProtectSystem=strict
@@ -17,7 +17,7 @@ ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictAddressFamilies=AF_UNIX
-ReadWritePaths=/run/ostojaos-cooling /sys/devices/virtual/thermal/thermal_zone0
+ReadWritePaths=/run/panasms-cooling /sys/devices/virtual/thermal/thermal_zone0
 
 [Install]
 WantedBy=multi-user.target

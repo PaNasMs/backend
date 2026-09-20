@@ -8,8 +8,8 @@ from common import Rejected, require, command, atomic
 
 ACTIONS = {'network.wifi.scan', 'network.wifi.radio', 'network.wifi.connect', 'network.wifi.disconnect'}
 import network as n
-RECOVERY = Path('/var/lib/ostojaos-agent/network-wifi/pending.json')
-HELPER = '/usr/lib/ostojaos/management/wifi.py'
+RECOVERY = Path('/var/lib/panasms-agent/network-wifi/pending.json')
+HELPER = '/usr/lib/panasms/management/wifi.py'
 CONFIG = Path('/etc/NetworkManager/conf.d')
 
 
@@ -26,7 +26,7 @@ def policy_file(adapter, name):
     path, _ = adapter.device(name)
     mac = str(adapter.properties(path, n.NM + '.Device.Wireless')['PermHwAddress']).lower()
     require(re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', mac), 'Wi-Fi adapter has no stable hardware address')
-    return CONFIG / ('90-ostojaos-wifi-' + mac.replace(':', '') + '.conf'), mac
+    return CONFIG / ('90-panasms-wifi-' + mac.replace(':', '') + '.conf'), mac
 
 
 def disabled(adapter, name):
@@ -50,7 +50,7 @@ def configure(adapter, name, enabled):
     if enabled:
         file.unlink(missing_ok=True)
     else:
-        atomic(file, '[device-ostojaos-wifi-' + mac.replace(':', '') + ']\nmatch-device=mac:' + mac + '\nmanaged=0\n', mode=0o644)
+        atomic(file, '[device-panasms-wifi-' + mac.replace(':', '') + ']\nmatch-device=mac:' + mac + '\nmanaged=0\n', mode=0o644)
     adapter.manager.Reload(1)
     adapter.interface(path, 'org.freedesktop.DBus.Properties').Set(n.NM + '.Device', 'Managed', adapter.dbus.Boolean(enabled))
     if not enabled:
@@ -92,11 +92,11 @@ def restore_radios(adapter, before):
         try:
             file, mac = policy_file(adapter, row['name'])
         except adapter.dbus.DBusException:
-            file = CONFIG / ('90-ostojaos-wifi-' + row['mac'].replace(':', '') + '.conf')
+            file = CONFIG / ('90-panasms-wifi-' + row['mac'].replace(':', '') + '.conf')
             if not row['disabled']:
                 file.unlink(missing_ok=True)
             else:
-                atomic(file, '[device-ostojaos-wifi-' + row['mac'].replace(':', '') + ']\nmatch-device=mac:' + row['mac'] + '\nmanaged=0\n', mode=0o644)
+                atomic(file, '[device-panasms-wifi-' + row['mac'].replace(':', '') + ']\nmatch-device=mac:' + row['mac'] + '\nmanaged=0\n', mode=0o644)
             continue
         require(mac == row['mac'], 'A network adapter was replaced; check its settings')
         if row['disabled'] != file.exists():
@@ -259,14 +259,14 @@ def remember(state):
 
 
 def arm(state):
-    command(['systemd-run', '--quiet', '--collect', '--unit=ostojaos-wifi-rollback-' + state['id'],
+    command(['systemd-run', '--quiet', '--collect', '--unit=panasms-wifi-rollback-' + state['id'],
              '--on-active=' + str(n.TIMEOUT) + 's', '--timer-property=AccuracySec=1s',
              '--property=Restart=on-failure', '--property=RestartSec=3s',
              '/usr/bin/python3', '-B', HELPER, '--rollback', state['id']], timeout=15)
 
 
 def disarm(state):
-    command(['systemctl', 'stop', 'ostojaos-wifi-rollback-' + state['id'] + '.timer'], accepted=(0, 5), timeout=15)
+    command(['systemctl', 'stop', 'panasms-wifi-rollback-' + state['id'] + '.timer'], accepted=(0, 5), timeout=15)
 
 
 def rollback(adapter, state):
@@ -422,7 +422,7 @@ if __name__ == '__main__':
         adapter = n.Adapter()
         for row in snapshot(adapter)['devices']:
             if row['disabled']: configure(adapter, row['name'], True)
-        for file in CONFIG.glob('90-ostojaos-wifi-*.conf'): file.unlink()
+        for file in CONFIG.glob('90-panasms-wifi-*.conf'): file.unlink()
         adapter.manager.Reload(1)
         raise SystemExit(0)
     require(sys.argv[1:] == ['--recover'] or (len(sys.argv) == 3 and sys.argv[1] == '--rollback' and re.fullmatch('[a-f0-9]{32}', sys.argv[2])), 'Invalid recovery request')

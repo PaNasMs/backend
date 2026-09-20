@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/user"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/modules"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modules"
 	"strconv"
 	"sync/atomic"
 )
@@ -45,17 +45,17 @@ func Serve(id string, build func(map[string]bool) http.Handler) {
 }
 
 func ServeWithActivity(id string, activity func() int32, build func(map[string]bool) http.Handler) {
-	account, e := user.Lookup("ostojaos")
+	account, e := user.Lookup("panasms")
 	if e != nil {
 		log.Fatal(e)
 	}
 	uid, _ := strconv.Atoi(account.Uid)
 	gid, _ := strconv.Atoi(account.Gid)
-	allowed, e := auth.AccessPolicy(os.Getenv("OSTOJAOS_AUTH_MODE"), os.Getenv("OSTOJAOS_ALLOWED_USERS"))
+	allowed, e := auth.AccessPolicy(os.Getenv("PANASMS_AUTH_MODE"), os.Getenv("PANASMS_ALLOWED_USERS"))
 	if e != nil {
 		log.Fatal(e)
 	}
-	path := "/run/ostojaos-modules/" + id + ".sock"
+	path := "/run/panasms-modules/" + id + ".sock"
 	if e = os.Remove(path); e != nil && !os.IsNotExist(e) {
 		log.Fatal(e)
 	}

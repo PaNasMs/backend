@@ -8,37 +8,37 @@ import subprocess
 import sys
 from pathlib import Path
 
-parser = argparse.ArgumentParser(description='Remove only the OstojaOS prototype; user storage is preserved.')
+parser = argparse.ArgumentParser(description='Remove only the PaNasMs prototype; user storage is preserved.')
 mode = sys.argv[1] if len(sys.argv) == 2 else '--plan'
 if mode not in ('--plan', '--remove', '--purge'):
     parser.error('use --plan, --remove or --purge')
-owned = ['/etc/ostojaos/ostojaos.env', '/etc/ostojaos/tls.key', '/etc/ostojaos/tls.crt',
-         '/var/lib/ostojaos-agent/jobs.db', '/var/lib/ostojaos-agent/jobs.db-wal', '/var/lib/ostojaos-agent/jobs.db-shm',
-         '/var/lib/ostojaos/state.db', '/var/lib/ostojaos/state.db-wal', '/var/lib/ostojaos/state.db-shm']
-print('OstojaOS services, binaries, UI and PAM service configuration will be removed.')
+owned = ['/etc/panasms/panasms.env', '/etc/panasms/tls.key', '/etc/panasms/tls.crt',
+         '/var/lib/panasms-agent/jobs.db', '/var/lib/panasms-agent/jobs.db-wal', '/var/lib/panasms-agent/jobs.db-shm',
+         '/var/lib/panasms/state.db', '/var/lib/panasms/state.db-wal', '/var/lib/panasms/state.db-shm']
+print('PaNasMs services, binaries, UI and PAM service configuration will be removed.')
 print('Module services are stopped; purge also removes uploaded archives, module code and registry. User files remain.')
 print('Purge additionally removes:', ', '.join(owned))
-print('The independent ostojaos-cooling package/service is retained to keep the disks cooled.')
+print('The independent panasms-cooling package/service is retained to keep the disks cooled.')
 print('Linux user data, RAID, filesystems, mounts, other packages and system journal are preserved.')
 if mode == '--plan':
-    subprocess.run(['dpkg-query', '-L', 'ostojaos-prototype'], check=False)
+    subprocess.run(['dpkg-query', '-L', 'panasms-prototype'], check=False)
     sys.exit(0)
 if os.geteuid() != 0:
     sys.exit('Run as root.')
-for parent in ['/etc/ostojaos', '/var/lib/ostojaos', '/var/lib/ostojaos-installer', '/var/lib/ostojaos-agent']:
+for parent in ['/etc/panasms', '/var/lib/panasms', '/var/lib/panasms-installer', '/var/lib/panasms-agent']:
     if Path(parent).is_symlink():
         sys.exit('Refusing operation through symlink: ' + parent)
-marker = Path('/var/lib/ostojaos-installer/created-user').is_file()
+marker = Path('/var/lib/panasms-installer/created-user').is_file()
 try:
-    account = pwd.getpwnam('ostojaos')
+    account = pwd.getpwnam('panasms')
 except KeyError:
     account = None
-if account and (account.pw_gecos != 'OstojaOS prototype service' or account.pw_dir != '/nonexistent'):
+if account and (account.pw_gecos != 'PaNasMs prototype service' or account.pw_dir != '/nonexistent'):
     sys.exit('Service account identity differs from installer record; inspect manually.')
-subprocess.run(['apt-get', '-y', 'purge' if mode == '--purge' else 'remove', 'ostojaos-prototype'], check=True)
+subprocess.run(['apt-get', '-y', 'purge' if mode == '--purge' else 'remove', 'panasms-prototype'], check=True)
 if mode == '--remove':
     sys.exit(0)
-remaining = [p for p in ['/etc/ostojaos', '/var/lib/ostojaos', '/var/lib/ostojaos-agent'] if Path(p).exists()]
+remaining = [p for p in ['/etc/panasms', '/var/lib/panasms', '/var/lib/panasms-agent'] if Path(p).exists()]
 if remaining:
     print('Unmanaged files remain; inspect these directories:', *remaining, sep='\n')
     sys.exit(2)
@@ -56,17 +56,17 @@ if account and marker:
     if leftovers:
         print('Service account retained; it still owns:', *leftovers, sep='\n')
         sys.exit(2)
-    subprocess.run(['userdel', 'ostojaos'], check=True)
+    subprocess.run(['userdel', 'panasms'], check=True)
     try:
-        grp.getgrnam('ostojaos')
+        grp.getgrnam('panasms')
     except KeyError:
         pass
     else:
-        subprocess.run(['groupdel', 'ostojaos'], check=True)
+        subprocess.run(['groupdel', 'panasms'], check=True)
 for name in ['created-user', 'generated-files', 'hardware.json']:
-    Path('/var/lib/ostojaos-installer', name).unlink(missing_ok=True)
+    Path('/var/lib/panasms-installer', name).unlink(missing_ok=True)
 try:
-    Path('/var/lib/ostojaos-installer').rmdir()
+    Path('/var/lib/panasms-installer').rmdir()
 except FileNotFoundError:
     pass
-print('OstojaOS purge complete. System journal entries remain under the OS retention policy.')
+print('PaNasMs purge complete. System journal entries remain under the OS retention policy.')

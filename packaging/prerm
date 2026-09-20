@@ -4,35 +4,35 @@ case "${1:-}" in remove|upgrade|deconfigure)
  python3 - <<'CHECK'
 import sqlite3, json
 from pathlib import Path
-for path in ('/run/ostojaos-network/change.json', '/var/lib/ostojaos-agent/network-wifi/pending.json', '/var/lib/ostojaos-agent/network-sharing/pending.json'):
+for path in ('/run/panasms-network/change.json', '/var/lib/panasms-agent/network-wifi/pending.json', '/var/lib/panasms-agent/network-sharing/pending.json'):
     state=Path(path)
     if state.exists() and json.loads(state.read_text()).get('status') in ('applying','pending'):
         raise SystemExit('Confirm or roll back pending network changes before package changes.')
-p=Path('/var/lib/ostojaos-agent/jobs.db')
+p=Path('/var/lib/panasms-agent/jobs.db')
 if p.exists():
     with sqlite3.connect(str(p)) as db:
         if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]:
-            raise SystemExit('OstojaOS has active operations. Wait for completion or cancel queued tasks before package changes.')
+            raise SystemExit('PaNasMs has active operations. Wait for completion or cancel queued tasks before package changes.')
 CHECK
- systemctl stop 'ostojaos-fs-check@*.service' || true
- systemctl stop ostojaos-core.service ostojaos-agent.service
+ systemctl stop 'panasms-fs-check@*.service' || true
+ systemctl stop panasms-core.service panasms-agent.service
  if [ "$1" = remove ]; then
-  systemctl stop ostojaos-network-sharing.service || true
-  if [ -f /var/lib/ostojaos-agent/network-sharing/groups.json ]; then
-   python3 /usr/lib/ostojaos/management/network_sharing.py --remove
+  systemctl stop panasms-network-sharing.service || true
+  if [ -f /var/lib/panasms-agent/network-sharing/groups.json ]; then
+   python3 /usr/lib/panasms/management/network_sharing.py --remove
   fi
-  python3 /usr/lib/ostojaos/management/wifi.py --remove
-  systemctl disable ostojaos-network-sharing.service || true
-  systemctl stop 'ostojaos-wifi-rollback-*.timer' ostojaos-network-recovery.service || true
-  systemctl disable ostojaos-network-recovery.service || true
-  systemctl stop 'ostojaos-module-*.service' || true
-  systemctl disable 'ostojaos-module-*.service' || true
-  systemctl stop 'ostojaos-smart-*.timer' || true
-  systemctl disable 'ostojaos-smart-*.timer' || true
-  systemctl stop ostojaos-disk-sleep.timer ostojaos-disk-sleep.service || true
-  systemctl disable ostojaos-disk-sleep.timer || true
-  python3 /usr/lib/ostojaos/management/disk_sleep.py --disable || true
-  systemctl disable ostojaos-core.service ostojaos-agent.service
+  python3 /usr/lib/panasms/management/wifi.py --remove
+  systemctl disable panasms-network-sharing.service || true
+  systemctl stop 'panasms-wifi-rollback-*.timer' panasms-network-recovery.service || true
+  systemctl disable panasms-network-recovery.service || true
+  systemctl stop 'panasms-module-*.service' || true
+  systemctl disable 'panasms-module-*.service' || true
+  systemctl stop 'panasms-smart-*.timer' || true
+  systemctl disable 'panasms-smart-*.timer' || true
+  systemctl stop panasms-disk-sleep.timer panasms-disk-sleep.service || true
+  systemctl disable panasms-disk-sleep.timer || true
+  python3 /usr/lib/panasms/management/disk_sleep.py --disable || true
+  systemctl disable panasms-core.service panasms-agent.service
  fi
  ;;
 esac

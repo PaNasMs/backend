@@ -2,7 +2,7 @@ package main
 
 import (
 	"net/http"
-	"ostojaos.local/backend/internal/modulehost"
+	"panasms.local/backend/internal/modulehost"
 )
 
 func main() {

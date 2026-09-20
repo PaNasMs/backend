@@ -9,7 +9,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
-	"ostojaos.local/backend/internal/auth"
+	"panasms.local/backend/internal/auth"
 )
 
 func (s *Server) wallpaper(w http.ResponseWriter, r *http.Request) {

@@ -1,16 +1,16 @@
 [Unit]
-Description=OstojaOS API and web interface
-After=network.target ostojaos-agent.service
-Requires=ostojaos-agent.service
+Description=PaNasMs API and web interface
+After=network.target panasms-agent.service
+Requires=panasms-agent.service
 
 [Service]
-User=ostojaos
-Group=ostojaos
-EnvironmentFile=/etc/ostojaos/ostojaos.env
-ExecStart=/usr/lib/ostojaos/ostojaos-core -listen :80 -allow-http
+User=panasms
+Group=panasms
+EnvironmentFile=/etc/panasms/panasms.env
+ExecStart=/usr/lib/panasms/panasms-core -listen :80 -allow-http
 Restart=on-failure
 RestartSec=3
-StateDirectory=ostojaos
+StateDirectory=panasms
 StateDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=yes

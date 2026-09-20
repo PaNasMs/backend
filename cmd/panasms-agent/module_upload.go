@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"ostojaos.local/backend/internal/auth"
+	"panasms.local/backend/internal/auth"
 	"time"
 )
 
@@ -19,7 +19,7 @@ func moduleUpload(allowed map[string]bool) http.HandlerFunc {
 			http.Error(w, "access denied", 403)
 			return
 		}
-		root := "/var/lib/ostojaos-agent/module-uploads"
+		root := "/var/lib/panasms-agent/module-uploads"
 		if os.MkdirAll(root, 0700) != nil {
 			http.Error(w, "unavailable", 503)
 			return

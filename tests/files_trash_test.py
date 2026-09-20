@@ -46,7 +46,7 @@ class FilesTrashTest(unittest.TestCase):
                     target = Path(root) / "same.txt"
                     target.write_text(root)
                     paths.append(files.execute("file.trash", {"target": str(target)}, "test")["path"])
-                legacy = Path(roots[0]) / (".ostojaos-trash-" + str(os.getuid())) / "123-old.txt"
+                legacy = Path(roots[0]) / (".panasms-trash-" + str(os.getuid())) / "123-old.txt"
                 legacy.write_text("legacy")
                 listing = files.query("test", "trash:")
                 self.assertEqual([p["name"] for p in listing["places"] if p["kind"] == "trash"], ["Trash"])

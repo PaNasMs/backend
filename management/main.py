@@ -59,7 +59,7 @@ def dispatch(mode, user, request):
     require(
         request.get("confirmation") == plan["confirmation"], 'The exact operation target was not confirmed'
     )
-    os.environ["OSTOJAOS_OPERATION"] = "1"
+    os.environ["PANASMS_OPERATION"] = "1"
     return (
         module.execute(action, params, user)
         if module != accounts

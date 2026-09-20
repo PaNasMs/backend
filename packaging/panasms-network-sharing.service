@@ -1,0 +1,15 @@
+[Unit]
+Description=PaNasMs network sharing recovery and uplink routing
+After=NetworkManager.service network-online.target panasms-network-recovery.service
+Wants=network-online.target
+Before=panasms-agent.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/network_sharing.py --service
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

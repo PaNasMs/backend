@@ -11,7 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
-	"ostojaos.local/backend/internal/auth"
+	"panasms.local/backend/internal/auth"
 	"sync"
 	"time"
 )
@@ -53,7 +53,7 @@ func helper(ctx context.Context, mode, user string, body any) (json.RawMessage, 
 	if e != nil {
 		return nil, e
 	}
-	cmd := exec.CommandContext(ctx, "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--", "/usr/bin/python3", "-B", "/usr/lib/ostojaos/management/main.py", mode, user)
+	cmd := exec.CommandContext(ctx, "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--", "/usr/bin/python3", "-B", "/usr/lib/panasms/management/main.py", mode, user)
 	cmd.Stdin = bytes.NewReader(raw)
 	// Helpers return bounded, redacted JSON, never subprocess output or credentials.
 	var output bytes.Buffer

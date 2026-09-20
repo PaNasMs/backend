@@ -23,11 +23,11 @@ def perform(action, params):
 
 
 assert os.geteuid() == 0
-scratch = tempfile.TemporaryDirectory(prefix="ostojaos-storage-test-", dir="/var/tmp")
+scratch = tempfile.TemporaryDirectory(prefix="panasms-storage-test-", dir="/var/tmp")
 loops = []
-array = "/dev/md/ostojaos_test_" + str(os.getpid())
-mount = "/mnt/ostojaos_test_" + str(os.getpid())
-luks = "ostojaos_test_" + str(os.getpid())
+array = "/dev/md/panasms_test_" + str(os.getpid())
+mount = "/mnt/panasms_test_" + str(os.getpid())
+luks = "panasms_test_" + str(os.getpid())
 baseline_args = [
     "lsblk",
     "--json",

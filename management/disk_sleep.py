@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 from common import Rejected, require, command, atomic, integer
 
-CONFIG = Path("/etc/ostojaos/disk-sleep.json")
-STATE = Path("/run/ostojaos-disk-sleep/state.json")
+CONFIG = Path("/etc/panasms/disk-sleep.json")
+STATE = Path("/run/panasms-disk-sleep/state.json")
 TIMEOUTS = (0, 5, 10, 15, 20, 30, 60, 120, 180, 300)
 
 
@@ -53,8 +53,8 @@ def read():
 def save(minutes):
     timer_value(minutes)
     atomic(CONFIG, json.dumps({"minutes": minutes}))
-    command(["systemctl", "enable", "--now", "ostojaos-disk-sleep.timer"])
-    command(["systemctl", "start", "ostojaos-disk-sleep.service"])
+    command(["systemctl", "enable", "--now", "panasms-disk-sleep.timer"])
+    command(["systemctl", "start", "panasms-disk-sleep.service"])
 
 
 def apply(disable=False):

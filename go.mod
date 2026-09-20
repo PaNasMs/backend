@@ -1,4 +1,4 @@
-module ostojaos.local/backend
+module panasms.local/backend
 
 go 1.26.0
 

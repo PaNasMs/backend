@@ -8,8 +8,8 @@ import subprocess
 import threading
 import time
 
-CONFIG = Path('/etc/ostojaos-cooling/config.json')
-STATUS = Path('/run/ostojaos-cooling/status.json')
+CONFIG = Path('/etc/panasms-cooling/config.json')
+STATUS = Path('/run/panasms-cooling/status.json')
 CPU_PROFILES={'quiet':(50000,60000,67500,75000),'balanced':(45000,55000,64000,70000),'performance':(40000,50000,60000,65000)}
 PROFILES = {'quiet': (40, 45, 50), 'balanced': (35, 40, 45), 'performance': (30, 35, 40)}
 
@@ -102,7 +102,7 @@ def main():
     with gpiod.Chip('/dev/gpiochip0') as chip:
         if chip.get_info().label != 'pinctrl-rp1' or chip.get_line_info(27).name != 'GPIO27':
             raise RuntimeError('Unrecognized GPIO mapping; refusing control')
-    request = gpiod.request_lines('/dev/gpiochip0', consumer='ostojaos-cooling', config={27:gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE)})
+    request = gpiod.request_lines('/dev/gpiochip0', consumer='panasms-cooling', config={27:gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE)})
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())

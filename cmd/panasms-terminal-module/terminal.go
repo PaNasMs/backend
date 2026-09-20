@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"ostojaos.local/backend/internal/auth"
+	"panasms.local/backend/internal/auth"
 	"strconv"
 	"strings"
 	"sync/atomic"

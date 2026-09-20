@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/modules"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modules"
 	"strings"
 )
 

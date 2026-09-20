@@ -15,11 +15,11 @@ class SmartScheduleTest(unittest.TestCase):
     def test_both_schedules_are_read_independently(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            base = "ostojaos-smart-" + storage.hashlib.sha256(b"disk").hexdigest()[:16]
+            base = "panasms-smart-" + storage.hashlib.sha256(b"disk").hexdigest()[:16]
             for test, weeks in [("short", 1), ("long", 2)]:
                 cfg = {"test": test, "weeks": weeks, "weekday": 0, "hour": 2, "startDate": "2026-09-21"}
                 (root / (base + "-" + test + ".service")).write_text(
-                    "# OstojaOS schedule: " + json.dumps(cfg) + "\n"
+                    "# PaNasMs schedule: " + json.dumps(cfg) + "\n"
                 )
                 (root / (base + "-" + test + ".timer")).touch()
             self.assertEqual(

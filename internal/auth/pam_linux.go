@@ -8,7 +8,7 @@ import (
 )
 
 func Authenticate(user, password string) error {
-	t, err := pam.StartFunc("ostojaos", user, func(style pam.Style, message string) (string, error) {
+	t, err := pam.StartFunc("panasms", user, func(style pam.Style, message string) (string, error) {
 		switch style {
 		case pam.PromptEchoOff:
 			return password, nil
@@ -34,7 +34,7 @@ func ChangePassword(user, current, next string) error {
 	if err := Authenticate(user, current); err != nil {
 		return err
 	}
-	t, err := pam.StartFunc("ostojaos", user, func(style pam.Style, message string) (string, error) {
+	t, err := pam.StartFunc("panasms", user, func(style pam.Style, message string) (string, error) {
 		switch style {
 		case pam.PromptEchoOff:
 			return next, nil

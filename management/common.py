@@ -20,7 +20,7 @@ def require(ok, message):
 
 
 def command(args, *, data=None, accepted=(0,), timeout=120):
-    if os.environ.get("OSTOJAOS_OPERATION") == "1":
+    if os.environ.get("PANASMS_OPERATION") == "1":
         stages = {
             "mdadm": 'Modifying array',
             "mkfs.ext4": 'Creating file system',
@@ -89,12 +89,12 @@ def atomic(path, text, mode=0o600):
     require(not path.is_symlink(), 'The configuration is a symbolic link')
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        backup = Path("/var/lib/ostojaos-agent/backups")
+        backup = Path("/var/lib/panasms-agent/backups")
         backup.mkdir(parents=True, exist_ok=True, mode=0o700)
         saved = backup / (path.name + "." + str(time.time_ns()))
         shutil.copyfile(path, saved)
         saved.chmod(0o600)
-    fd, tmp = tempfile.mkstemp(prefix=".ostojaos-", dir=path.parent)
+    fd, tmp = tempfile.mkstemp(prefix=".panasms-", dir=path.parent)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, "w") as f:

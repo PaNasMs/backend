@@ -1,0 +1,27 @@
+[Unit]
+Description=PaNasMs restricted system authentication agent
+After=local-fs.target
+
+[Service]
+User=root
+Group=panasms
+EnvironmentFile=/etc/panasms/panasms.env
+ExecStartPre=-/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/python3 /usr/lib/panasms/management/homes.py --recover
+ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/module_manager.py --recover
+ExecStart=/usr/lib/panasms/start-agent
+Restart=on-failure
+RestartSec=3
+StateDirectory=panasms-agent
+StateDirectoryMode=0700
+RuntimeDirectory=panasms-agent
+RuntimeDirectoryMode=0750
+UMask=0007
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/panasms-modules /run/panasms-agent /etc -/home /var/log -/var/lib/samba
+
+[Install]
+WantedBy=multi-user.target

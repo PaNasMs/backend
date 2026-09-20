@@ -4,7 +4,7 @@ from storage import mountpoint
 
 ACTIONS = {"nfs.mount", "nfs.unmount", "smb.mount", "smb.unmount"}
 FSTAB = Path("/etc/fstab")
-CREDENTIALS = Path("/etc/ostojaos/network-credentials")
+CREDENTIALS = Path("/etc/panasms/network-credentials")
 
 
 def key(point):
@@ -12,7 +12,7 @@ def key(point):
 
 
 def marker(point):
-    return "# ostojaos-network-" + key(point)
+    return "# panasms-network-" + key(point)
 
 
 def entries(text):
@@ -134,7 +134,7 @@ def execute(action, p, user):
                 + (
                     ', and the SMB username and password.'
                     if fs == "cifs"
-                    else ' for the OstojaOS IP address in NFS rules.'
+                    else ' for the PaNasMs IP address in NFS rules.'
                 )
             )
         attached = True

@@ -2,8 +2,8 @@ package api
 
 import (
 	"encoding/json"
-	"ostojaos.local/backend/internal/store"
-	"ostojaos.local/backend/internal/system"
+	"panasms.local/backend/internal/store"
+	"panasms.local/backend/internal/system"
 	"testing"
 )
 

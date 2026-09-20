@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 import time
-sys.path.insert(0, '/usr/lib/ostojaos/management')
+sys.path.insert(0, '/usr/lib/panasms/management')
 import network as n
 import network_sharing as s
 
@@ -14,15 +14,15 @@ names=['ossrc0','osdst0','osdst1'];peers=['ospeer0','ospeer1','ospeer2']
 assert s.load()==[], 'Run only before any user sharing groups are configured'
 assert not set(names+peers)&{r['ifname'] for r in json.loads(run('ip','-j','link'))}
 before=n.read_state();a=n.Adapter();source_uuid=None
-marker=Path('/tmp/ostojaos-share-preview-done');marker.unlink(missing_ok=True)
+marker=Path('/tmp/panasms-share-preview-done');marker.unlink(missing_ok=True)
 try:
     for name,peer in zip(names,peers):
         run('ip','link','add',name,'type','veth','peer','name',peer)
         run('ip','link','set',name,'up');run('ip','link','set',peer,'up')
         run('nmcli','device','set',name,'managed','yes')
         run('nmcli','device','set',peer,'managed','no')
-    run('nmcli','connection','add','type','ethernet','ifname',names[0],'con-name','ostojaos-share-preview','ipv4.method','manual','ipv4.addresses','198.18.251.1/24','ipv4.never-default','yes','ipv6.method','disabled','connection.autoconnect','no')
-    source_uuid=run('nmcli','-g','connection.uuid','connection','show','ostojaos-share-preview')
+    run('nmcli','connection','add','type','ethernet','ifname',names[0],'con-name','panasms-share-preview','ipv4.method','manual','ipv4.addresses','198.18.251.1/24','ipv4.never-default','yes','ipv6.method','disabled','connection.autoconnect','no')
+    source_uuid=run('nmcli','-g','connection.uuid','connection','show','panasms-share-preview')
     run('nmcli','connection','up','uuid',source_uuid)
     device=a.device
     def wrapped(name):
@@ -37,7 +37,7 @@ try:
     for _ in range(0 if '--quick' in sys.argv else 200):
         if marker.exists():break
         time.sleep(.5)
-    run('systemd-run','--quiet','--collect','--unit=ostojaos-share-guard-test-'+state['id'],'--on-active=2s','--timer-property=AccuracySec=1s','/usr/bin/python3','-B',s.HELPER,'--rollback',state['id'])
+    run('systemd-run','--quiet','--collect','--unit=panasms-share-guard-test-'+state['id'],'--on-active=2s','--timer-property=AccuracySec=1s','/usr/bin/python3','-B',s.HELPER,'--rollback',state['id'])
     for _ in range(100):
         if n.read_state()['status']=='rolled-back':break
         time.sleep(.2)

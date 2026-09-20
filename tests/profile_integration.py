@@ -17,7 +17,7 @@ if sys.argv[1:] != ["--isolated"]:
         subprocess.call(["unshare", "--mount", "--fork", "--", sys.executable, __file__, "--isolated"])
     )
 subprocess.run(["mount", "--make-rprivate", "/"], check=True)
-with tempfile.TemporaryDirectory(prefix="ostojaos-profile-test-", dir="/var/tmp") as temporary:
+with tempfile.TemporaryDirectory(prefix="panasms-profile-test-", dir="/var/tmp") as temporary:
     root = Path(temporary)
     root.chmod(0o755)
     for name in ["usr", "etc/pam.d", "etc/security", "home/tester", "run", "tmp", "dev"]:
@@ -53,16 +53,16 @@ with tempfile.TemporaryDirectory(prefix="ostojaos-profile-test-", dir="/var/tmp"
         (root / "etc/shadow").chmod(0o600)
         (root / "etc/nsswitch.conf").write_text("passwd: files\nshadow: files\ngroup: files\n")
         shutil.copy("/etc/login.defs", root / "etc/login.defs")
-        for name in ["ostojaos", "common-auth", "common-account", "common-password"]:
+        for name in ["panasms", "common-auth", "common-account", "common-password"]:
             shutil.copy("/etc/pam.d/" + name, root / "etc/pam.d" / name)
         os.chown(root / "home/tester", 64523, 64523)
-        env = dict(os.environ, OSTOJAOS_AUTH_MODE="sudo")
-        env.pop("OSTOJAOS_ALLOWED_USERS", None)
+        env = dict(os.environ, PANASMS_AUTH_MODE="sudo")
+        env.pop("PANASMS_ALLOWED_USERS", None)
         agent = subprocess.Popen(
             [
                 "chroot",
                 str(root),
-                "/usr/lib/ostojaos/ostojaos-agent",
+                "/usr/lib/panasms/panasms-agent",
                 "-socket",
                 "/run/agent.sock",
                 "-peer-uid",

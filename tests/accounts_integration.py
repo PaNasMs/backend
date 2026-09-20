@@ -15,14 +15,14 @@ if sys.argv[1:] != ["--isolated"]:
         )
     )
 subprocess.run(["mount", "--make-rprivate", "/"], check=True)
-with tempfile.TemporaryDirectory(prefix="ostojaos-accounts-test-", dir="/var/tmp") as temporary:
+with tempfile.TemporaryDirectory(prefix="panasms-accounts-test-", dir="/var/tmp") as temporary:
     root = Path(temporary)
     root.chmod(0o755)
     for p in [
         "usr",
         "etc/pam.d",
         "etc/default",
-        "var/lib/ostojaos-agent",
+        "var/lib/panasms-agent",
         "srv/data",
         "etc/security",
         "etc/skel",

@@ -1,7 +1,7 @@
 import pwd
 from common import *
 
-JOURNAL = Path('/var/lib/ostojaos-agent/home-move.json')
+JOURNAL = Path('/var/lib/panasms-agent/home-move.json')
 DEFAULTS = Path('/etc/default/useradd')
 NOLOGIN = Path('/run/nologin')
 PROC = Path('/proc')
@@ -39,11 +39,11 @@ def process_app(process, label, descriptions):
     groups = process.joinpath('cgroup').read_text().splitlines()
     units = [part for line in groups for part in line.split(':', 2)[-1].split('/') if part.endswith('.service')]
     unit = units[-1] if units else ''
-    if unit.startswith('ostojaos-cloud-sync-user-') or unit == 'ostojaos-module-cloud-sync.service':
+    if unit.startswith('panasms-cloud-sync-user-') or unit == 'panasms-module-cloud-sync.service':
         return 'Cloud Sync', 'cloudSync', unit
-    if unit == 'ostojaos-module-terminal.service':
+    if unit == 'panasms-module-terminal.service':
         return 'Terminal', 'terminal', unit
-    if unit == 'ostojaos-module-files.service':
+    if unit == 'panasms-module-files.service':
         return 'Files', 'files', unit
     if label.startswith('sshd'):
         return 'SSH session', 'ssh', unit
@@ -195,8 +195,8 @@ def execute(p):
     require(not NOLOGIN.exists(), 'System maintenance is already in progress')
     state = {'source': str(source), 'target': str(target), 'phase': 'copying', 'sourceIdentity': identity(source),
              'users': [{'name': u.pw_name, 'old': u.pw_dir, 'new': str(target) + u.pw_dir[len(str(source)):]} for u in users],
-             'backup': tempfile.mkdtemp(prefix='.ostojaos-home-', dir=source.parent),
-             'nologin': 'OstojaOS is moving home folders. Please try again shortly.\n'}
+             'backup': tempfile.mkdtemp(prefix='.panasms-home-', dir=source.parent),
+             'nologin': 'PaNasMs is moving home folders. Please try again shortly.\n'}
     journal(state)
     try:
         with NOLOGIN.open('x') as f:

@@ -3,36 +3,36 @@ set -eu
 systemctl daemon-reload || true
 udevadm control --reload-rules || true
 if [ "${1:-}" = purge ]; then
- for dir in /etc/ostojaos /var/lib/ostojaos /var/lib/ostojaos-installer /var/lib/ostojaos-agent; do
+ for dir in /etc/panasms /var/lib/panasms /var/lib/panasms-installer /var/lib/panasms-agent; do
   if [ -L "$dir" ]; then echo "Refusing purge through symlink: $dir" >&2; exit 1; fi
  done
- for file in /etc/ostojaos/ostojaos.env /etc/ostojaos/tls.key /etc/ostojaos/tls.crt /var/lib/ostojaos/state.db /var/lib/ostojaos/state.db-wal /var/lib/ostojaos/state.db-shm /var/lib/ostojaos-agent/jobs.db /var/lib/ostojaos-agent/jobs.db-wal /var/lib/ostojaos-agent/jobs.db-shm; do
+ for file in /etc/panasms/panasms.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm /var/lib/panasms-agent/jobs.db /var/lib/panasms-agent/jobs.db-wal /var/lib/panasms-agent/jobs.db-shm; do
   rm -f -- "$file"
  done
  python3 - <<'CLEAN'
 from pathlib import Path
 import re
 import shutil
-for folder in ('/var/lib/ostojaos-modules', '/var/lib/ostojaos-agent/module-uploads'):
+for folder in ('/var/lib/panasms-modules', '/var/lib/panasms-agent/module-uploads'):
     path=Path(folder)
     if path.is_dir() and not path.is_symlink() and path.stat().st_uid==0:
         shutil.rmtree(path)
-for unit in Path('/etc/systemd/system').glob('ostojaos-module-*.service'):
-    if re.fullmatch(r'ostojaos-module-[a-z][a-z0-9-]{1,39}\.service',unit.name) and not unit.is_symlink():
+for unit in Path('/etc/systemd/system').glob('panasms-module-*.service'):
+    if re.fullmatch(r'panasms-module-[a-z][a-z0-9-]{1,39}\.service',unit.name) and not unit.is_symlink():
         unit.unlink()
-state=Path('/run/ostojaos-filesystems')
+state=Path('/run/panasms-filesystems')
 if state.is_dir() and not state.is_symlink():
     for p in state.iterdir():
         if p.is_file() and not p.is_symlink() and p.stat().st_uid==0 and re.fullmatch(r'[a-zA-Z0-9_-]+\.(json|lock|tmp)',p.name):p.unlink()
     try:state.rmdir()
     except OSError:pass
-cache=Path('/usr/lib/ostojaos/management/__pycache__')
+cache=Path('/usr/lib/panasms/management/__pycache__')
 if cache.is_dir() and not cache.is_symlink():
     for p in cache.glob('*.pyc'):
         if p.is_file() and not p.is_symlink() and p.stat().st_uid==0:p.unlink()
     try:cache.rmdir()
     except OSError:pass
-for folder, names in (('/var/lib/ostojaos-agent/network-sharing', ('pending.json', 'groups.json', 'boot')), ('/var/lib/ostojaos-agent/network-wifi', ('pending.json',)), ('/run/ostojaos-network', ('change.json', 'lock'))):
+for folder, names in (('/var/lib/panasms-agent/network-sharing', ('pending.json', 'groups.json', 'boot')), ('/var/lib/panasms-agent/network-wifi', ('pending.json',)), ('/run/panasms-network', ('change.json', 'lock'))):
     directory=Path(folder)
     if directory.is_dir() and not directory.is_symlink():
         for name in names:
@@ -40,27 +40,27 @@ for folder, names in (('/var/lib/ostojaos-agent/network-sharing', ('pending.json
             if path.is_file() and not path.is_symlink() and path.stat().st_uid==0:path.unlink()
         try:directory.rmdir()
         except OSError:pass
-for folder in ('/usr/lib/ostojaos/management','/usr/lib/ostojaos'):
+for folder in ('/usr/lib/panasms/management','/usr/lib/panasms'):
     try:Path(folder).rmdir()
     except OSError:pass
-Path('/etc/ostojaos/disk-sleep.json').unlink(missing_ok=True)
-root=Path('/var/lib/ostojaos-agent/backups')
+Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)
+root=Path('/var/lib/panasms-agent/backups')
 if root.exists() and not root.is_symlink():
     for p in root.iterdir():
         if p.is_file() and not p.is_symlink() and p.stat().st_uid==0 and re.fullmatch(r'[A-Za-z0-9_.-]+\.\d+',p.name):p.unlink()
     try:root.rmdir()
     except OSError:pass
-for timer in Path('/etc/systemd/system').glob('ostojaos-smart-*.timer'):
+for timer in Path('/etc/systemd/system').glob('panasms-smart-*.timer'):
     import subprocess
-    if re.fullmatch(r'ostojaos-smart-[0-9a-f]{16}(?:-short|-long)?\.timer',timer.name):
+    if re.fullmatch(r'panasms-smart-[0-9a-f]{16}(?:-short|-long)?\.timer',timer.name):
         subprocess.run(['systemctl','disable','--now',timer.name],check=False)
         timer.unlink(missing_ok=True);timer.with_suffix('.service').unlink(missing_ok=True)
 CLEAN
  systemctl daemon-reload || true
- rmdir /var/lib/ostojaos-agent 2>/dev/null || true
- rmdir /etc/ostojaos /var/lib/ostojaos 2>/dev/null || true
- if [ -f /var/lib/ostojaos-installer/created-user ]; then
-  echo 'Dedicated locked service account ostojaos retained. Use ostojaos-uninstall --purge for checked account cleanup, or keep it for reinstall.'
+ rmdir /var/lib/panasms-agent 2>/dev/null || true
+ rmdir /etc/panasms /var/lib/panasms 2>/dev/null || true
+ if [ -f /var/lib/panasms-installer/created-user ]; then
+  echo 'Dedicated locked service account panasms retained. Use panasms-uninstall --purge for checked account cleanup, or keep it for reinstall.'
  fi
  echo 'User data, Linux users, RAID, mounts and system journal preserved.'
 fi

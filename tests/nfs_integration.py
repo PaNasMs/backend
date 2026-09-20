@@ -10,9 +10,9 @@ import host
 from common import command
 
 assert os.geteuid() == 0
-with tempfile.TemporaryDirectory(prefix="ostojaos-nfs-test-", dir="/var/tmp") as scratch:
-    source = "/mnt/ostojaos_nfs_source_" + str(os.getpid())
-    client = "/mnt/ostojaos_nfs_client_" + str(os.getpid())
+with tempfile.TemporaryDirectory(prefix="panasms-nfs-test-", dir="/var/tmp") as scratch:
+    source = "/mnt/panasms_nfs_source_" + str(os.getpid())
+    client = "/mnt/panasms_nfs_client_" + str(os.getpid())
     loop = None
     try:
         image = Path(scratch) / "disk.img"
@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix="ostojaos-nfs-test-", dir="/var/tmp") as
         print("PASS NFS export/mount/read/write/unmount/unexport with Linux UID permissions")
     finally:
         subprocess.run(["umount", client], capture_output=True)
-        conf = Path("/etc/exports.d/ostojaos.exports")
+        conf = Path("/etc/exports.d/panasms.exports")
         if conf.exists():
             conf.write_text(
                 "\n".join(line for line in conf.read_text().splitlines() if not line.startswith(source + " "))

@@ -12,7 +12,7 @@ from common import command
 
 assert os.geteuid() == 0
 loops = []
-array = "/dev/md/ostojaos_members_" + str(os.getpid())
+array = "/dev/md/panasms_members_" + str(os.getpid())
 
 
 def perform(action, p):
@@ -30,7 +30,7 @@ def idle():
     raise RuntimeError("array operation timeout")
 
 
-with tempfile.TemporaryDirectory(prefix="ostojaos-members-test-", dir="/var/tmp") as scratch:
+with tempfile.TemporaryDirectory(prefix="panasms-members-test-", dir="/var/tmp") as scratch:
     try:
         for i in range(4):
             img = Path(scratch) / str(i)

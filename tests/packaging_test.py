@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTest(unittest.TestCase):
     def test_shell_syntax(self):
-        for name in ["preinst", "postinst", "prerm", "postrm", "ostojaos-configure", "start-agent"]:
+        for name in ["preinst", "postinst", "prerm", "postrm", "panasms-configure", "start-agent"]:
             subprocess.run(["sh", "-n", str(ROOT / "packaging" / name)], check=True)
         subprocess.run(["sh", "-n", str(ROOT / "scripts/build-deb.sh")], check=True)
 
@@ -30,11 +30,11 @@ class PackagingTest(unittest.TestCase):
                 path.write_text(script)
                 result = subprocess.run(["sh", str(path), "install"], capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(b"Existing PiNAS installation", result.stderr)
+                self.assertIn(b"Existing legacy NAS installation", result.stderr)
                 self.assertEqual(sentinel.read_text(), "existing configuration")
 
     def test_hardware_detection_without_control_writes(self):
-        inspect = runpy.run_path(str(ROOT / "packaging/ostojaos-inspect-hardware"))["inspect"]
+        inspect = runpy.run_path(str(ROOT / "packaging/panasms-inspect-hardware"))["inspect"]
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             hw = root / "class/hwmon/hwmon0"
@@ -65,40 +65,40 @@ class PackagingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             for p in [
-                "etc/ostojaos",
-                "var/lib/ostojaos",
-                "var/lib/ostojaos-installer",
-                "var/lib/ostojaos-agent/backups",
-                "usr/lib/ostojaos/management/__pycache__",
+                "etc/panasms",
+                "var/lib/panasms",
+                "var/lib/panasms-installer",
+                "var/lib/panasms-agent/backups",
+                "usr/lib/panasms/management/__pycache__",
                 "etc/systemd/system",
-                "run/ostojaos-filesystems",
+                "run/panasms-filesystems",
                 "bin",
                 "data",
             ]:
                 (root / p).mkdir(parents=True)
             owned = [
-                root / "etc/ostojaos/ostojaos.env",
-                root / "etc/ostojaos/tls.key",
-                root / "etc/ostojaos/tls.crt",
-                root / "var/lib/ostojaos/state.db",
+                root / "etc/panasms/panasms.env",
+                root / "etc/panasms/tls.key",
+                root / "etc/panasms/tls.crt",
+                root / "var/lib/panasms/state.db",
             ]
             for p in owned:
                 p.write_text("owned")
             for name in ["jobs.db", "jobs.db-wal", "jobs.db-shm"]:
-                p = root / "var/lib/ostojaos-agent" / name
+                p = root / "var/lib/panasms-agent" / name
                 p.write_text("owned")
                 owned.append(p)
-            backup = root / "var/lib/ostojaos-agent/backups/fstab.123456"
+            backup = root / "var/lib/panasms-agent/backups/fstab.123456"
             backup.write_text("old config")
-            pycache = root / "usr/lib/ostojaos/management/__pycache__/main.cpython-313.pyc"
+            pycache = root / "usr/lib/panasms/management/__pycache__/main.cpython-313.pyc"
             pycache.write_text("cache")
             for suffix in ["timer", "service"]:
-                p = root / ("etc/systemd/system/ostojaos-smart-0123456789abcdef." + suffix)
+                p = root / ("etc/systemd/system/panasms-smart-0123456789abcdef." + suffix)
                 p.write_text("owned")
                 owned.append(p)
-            preserved = root / "etc/systemd/system/ostojaos-cooling.service"
+            preserved = root / "etc/systemd/system/panasms-cooling.service"
             preserved.write_text("independent cooling")
-            sentinel = root / "var/lib/ostojaos/do-not-delete"
+            sentinel = root / "var/lib/panasms/do-not-delete"
             sentinel.write_text("user data")
             data = root / "data/important"
             data.write_text("storage")
@@ -106,17 +106,17 @@ class PackagingTest(unittest.TestCase):
             (root / "bin/systemctl").chmod(0o755)
             (root / "bin/udevadm").write_text("#!/bin/sh\nexit 0\n")
             (root / "bin/udevadm").chmod(0o755)
-            runtime = root / "run/ostojaos-filesystems/sde1.json"
+            runtime = root / "run/panasms-filesystems/sde1.json"
             runtime.write_text("cache")
-            preserved_runtime = root / "run/ostojaos-filesystems/user-note"
+            preserved_runtime = root / "run/panasms-filesystems/user-note"
             preserved_runtime.write_text("keep")
             script = (ROOT / "packaging/postrm").read_text()
             for prefix in [
-                "/etc/ostojaos",
-                "/var/lib/ostojaos",
-                "/usr/lib/ostojaos",
+                "/etc/panasms",
+                "/var/lib/panasms",
+                "/usr/lib/panasms",
                 "/etc/systemd/system",
-                "/run/ostojaos-filesystems",
+                "/run/panasms-filesystems",
             ]:
                 script = script.replace(prefix, str(root) + prefix)
             path = root / "postrm"
@@ -146,8 +146,11 @@ class PackagingTest(unittest.TestCase):
             tool.write_text('#!/bin/sh\necho "$@" >> "' + str(log) + '"\n')
             tool.chmod(0o755)
             script = (
-                (ROOT / "packaging/prerm").read_text().replace("/var/lib/ostojaos-agent/jobs.db", str(dbpath))
+                (ROOT / "packaging/prerm").read_text().replace("/var/lib/panasms-agent/jobs.db", str(dbpath))
             )
+            wifi = root / "wifi.py"
+            wifi.write_text("")
+            script = script.replace("/usr/lib/panasms/management/wifi.py", str(wifi))
             path = root / "prerm"
             path.write_text(script)
             env = dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"])
@@ -158,7 +161,7 @@ class PackagingTest(unittest.TestCase):
                 db.execute("update jobs set status='succeeded'")
             db.close()
             subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
-            self.assertIn("stop ostojaos-core.service ostojaos-agent.service", log.read_text())
+            self.assertIn("stop panasms-core.service panasms-agent.service", log.read_text())
 
     def test_purge_refuses_symlink_parent(self):
         with tempfile.TemporaryDirectory() as d:
@@ -166,11 +169,11 @@ class PackagingTest(unittest.TestCase):
             (root / "etc").mkdir()
             (root / "outside").mkdir()
             (root / "outside/tls.key").write_text("preserve")
-            (root / "etc/ostojaos").symlink_to(root / "outside", target_is_directory=True)
+            (root / "etc/panasms").symlink_to(root / "outside", target_is_directory=True)
             script = (
                 (ROOT / "packaging/postrm")
                 .read_text()
-                .replace("/etc/ostojaos", str(root / "etc/ostojaos"))
+                .replace("/etc/panasms", str(root / "etc/panasms"))
                 .replace("systemctl daemon-reload || true", ":")
             )
             p = root / "script"

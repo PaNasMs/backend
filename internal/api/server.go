@@ -12,11 +12,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/cooling"
-	"ostojaos.local/backend/internal/modules"
-	"ostojaos.local/backend/internal/store"
-	"ostojaos.local/backend/internal/system"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/modules"
+	"panasms.local/backend/internal/store"
+	"panasms.local/backend/internal/system"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,7 +102,7 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 	return true
 }
 func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
-	cookie, e := r.Cookie("ostojaos_session")
+	cookie, e := r.Cookie("panasms_session")
 	if e != nil {
 		return auth.Identity{}, e
 	}
@@ -128,7 +128,7 @@ func (s *Server) Handler() http.Handler {
 				if s.Secure {
 					scheme = "https"
 				}
-				if r.Header.Get("Origin") != scheme+"://"+r.Host || r.Header.Get("X-OstojaOS-Request") != "1" {
+				if r.Header.Get("Origin") != scheme+"://"+r.Host || r.Header.Get("X-PaNasMs-Request") != "1" {
 					fail(w, 403, "Invalid request origin")
 					return
 				}
@@ -153,7 +153,7 @@ func (s *Server) Handler() http.Handler {
 		})
 		r.Get("/api/v1/session", func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, 200, r.Context().Value(identityKey{})) })
 		r.Post("/api/v1/logout", func(w http.ResponseWriter, r *http.Request) {
-			c, _ := r.Cookie("ostojaos_session")
+			c, _ := r.Cookie("panasms_session")
 			if e := s.Store.Revoke(c.Value); e != nil {
 				fail(w, 500, "Could not end session")
 				return
@@ -314,7 +314,7 @@ func (s *Server) Handler() http.Handler {
 type identityKey struct{}
 
 func (s *Server) cookie(w http.ResponseWriter, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: "ostojaos_session", Value: value, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{Name: "panasms_session", Value: value, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
 }
 func (s *Server) permit(address string) bool {
 	s.limitMu.Lock()

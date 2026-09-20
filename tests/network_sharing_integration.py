@@ -14,7 +14,7 @@ def run(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
 
 def main():
-    os.environ.pop('OSTOJAOS_OPERATION', None)
+    os.environ.pop('PANASMS_OPERATION', None)
     names=['ossrc0','osdst0','osdst1']
     peers=['ospeer0','ospeer1','ospeer2']
     namespaces=['osshare-up','osshare-a','osshare-b']
@@ -22,7 +22,7 @@ def main():
     assert not set(names+peers)&{x['ifname'] for x in existing}
     before=[run('nmcli','-g','GENERAL.CONNECTION,IP4.ADDRESS','device','show',name) for name in ('eth0','wlan0')]
     test_profiles=[]
-    with tempfile.TemporaryDirectory(prefix='ostojaos-share-test-') as temp:
+    with tempfile.TemporaryDirectory(prefix='panasms-share-test-') as temp:
         n.STATE_DIR=Path(temp)/'state'
         s.ROOT=Path(temp)/'sharing'
         a=n.Adapter()
@@ -36,8 +36,8 @@ def main():
                 run('ip','link','set',name,'up')
                 run('nmcli','device','set',name,'managed','yes')
             run('ip','netns','exec',namespaces[0],'ip','addr','add','198.18.250.2/24','dev',peers[0])
-            run('nmcli','connection','add','type','ethernet','ifname',names[0],'con-name','ostojaos-share-test-source','ipv4.method','manual','ipv4.addresses','198.18.250.1/24','ipv4.never-default','yes','ipv6.method','disabled','connection.autoconnect','no')
-            test_profiles.append(run('nmcli','-g','connection.uuid','connection','show','ostojaos-share-test-source'))
+            run('nmcli','connection','add','type','ethernet','ifname',names[0],'con-name','panasms-share-test-source','ipv4.method','manual','ipv4.addresses','198.18.250.1/24','ipv4.never-default','yes','ipv6.method','disabled','connection.autoconnect','no')
+            test_profiles.append(run('nmcli','-g','connection.uuid','connection','show','panasms-share-test-source'))
             run('nmcli','connection','up','uuid',test_profiles[0])
             # NetworkManager identifies veth separately; exercise Ethernet logic on the identical port API.
             real_device=a.device

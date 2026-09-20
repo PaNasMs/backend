@@ -6,14 +6,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/store"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/store"
 	"testing"
 	"time"
 )
 
 func TestBrowserHarness(t *testing.T) {
-	dir := os.Getenv("OSTOJAOS_SMOKE_DIR")
+	dir := os.Getenv("PANASMS_SMOKE_DIR")
 	if dir == "" {
 		t.Skip("manual browser integration harness")
 	}

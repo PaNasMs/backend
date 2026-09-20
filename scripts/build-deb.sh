@@ -9,35 +9,35 @@ arch=$(dpkg --print-architecture)
 [ "$(go env GOARCH)" = "$(go env GOHOSTARCH)" ] || { echo 'Use native build or an explicitly configured sysroot' >&2; exit 1; }
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
-mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/ostojaos" "$stage/usr/share/ostojaos/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
-go build -buildvcs=false -trimpath -o "$stage/usr/lib/ostojaos/ostojaos-core" ./cmd/ostojaos-core
-go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/ostojaos/ostojaos-agent" ./cmd/ostojaos-agent
-install -d "$stage/usr/share/doc/ostojaos-prototype"
-install -m 0644 LICENSE "$stage/usr/share/doc/ostojaos-prototype/LICENSE"
-install -m 0644 NOTICE "$stage/usr/share/doc/ostojaos-prototype/copyright"
-cp -R "$assets/." "$stage/usr/share/ostojaos/ui/"
-install -d "$stage/usr/lib/ostojaos/management" "$stage/etc/ostojaos/module-keys"
-install -m 0644 packaging/ostojaos-local.pem packaging/ostojaos-ci.pem "$stage/etc/ostojaos/module-keys/"
-install -m 0644 management/*.py "$stage/usr/lib/ostojaos/management/"
-install -m 0644 packaging/profile-keys.py "$stage/usr/lib/ostojaos/profile-keys.py"
-install -m 0755 packaging/start-agent "$stage/usr/lib/ostojaos/start-agent"
-install -m 0755 packaging/ostojaos-uninstall "$stage/usr/sbin/ostojaos-uninstall"
-install -m 0755 packaging/ostojaos-inspect-hardware "$stage/usr/sbin/ostojaos-inspect-hardware"
-install -m 0755 packaging/ostojaos-configure "$stage/usr/sbin/ostojaos-configure"
-install -m 0644 packaging/pam "$stage/etc/pam.d/ostojaos"
+mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/panasms" "$stage/usr/share/panasms/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
+go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
+go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-agent" ./cmd/panasms-agent
+install -d "$stage/usr/share/doc/panasms-prototype"
+install -m 0644 LICENSE "$stage/usr/share/doc/panasms-prototype/LICENSE"
+install -m 0644 NOTICE "$stage/usr/share/doc/panasms-prototype/copyright"
+cp -R "$assets/." "$stage/usr/share/panasms/ui/"
+install -d "$stage/usr/lib/panasms/management" "$stage/etc/panasms/module-keys"
+install -m 0644 packaging/panasms-local.pem packaging/panasms-ci.pem "$stage/etc/panasms/module-keys/"
+install -m 0644 management/*.py "$stage/usr/lib/panasms/management/"
+install -m 0644 packaging/profile-keys.py "$stage/usr/lib/panasms/profile-keys.py"
+install -m 0755 packaging/start-agent "$stage/usr/lib/panasms/start-agent"
+install -m 0755 packaging/panasms-uninstall "$stage/usr/sbin/panasms-uninstall"
+install -m 0755 packaging/panasms-inspect-hardware "$stage/usr/sbin/panasms-inspect-hardware"
+install -m 0755 packaging/panasms-configure "$stage/usr/sbin/panasms-configure"
+install -m 0644 packaging/pam "$stage/etc/pam.d/panasms"
 install -d "$stage/usr/lib/udev/rules.d"
-install -m 0644 packaging/99-ostojaos-filesystems.rules "$stage/usr/lib/udev/rules.d/"
+install -m 0644 packaging/99-panasms-filesystems.rules "$stage/usr/lib/udev/rules.d/"
 install -m 0644 packaging/*.service packaging/*.timer "$stage/usr/lib/systemd/system/"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
-printf '/etc/pam.d/ostojaos\n' > "$stage/DEBIAN/conffiles"
+printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/control" <<CONTROL
-Package: ostojaos-prototype
+Package: panasms-prototype
 Version: 0.2.1
 Section: admin
 Priority: optional
 Architecture: $arch
-Maintainer: OstojaOS local development
+Maintainer: PaNasMs local development
 Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, smartmontools, psmisc, hdparm, rsync
-Description: OstojaOS management panel, PAM login and Linux system operations
+Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" "dist/ostojaos-prototype_0.2.1_${arch}.deb"
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.1_${arch}.deb"

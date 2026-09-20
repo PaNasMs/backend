@@ -11,23 +11,23 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/cooling"
-	"ostojaos.local/backend/internal/management"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/management"
 	"strconv"
 	"syscall"
 	"time"
 )
 
 func main() {
-	socket := flag.String("socket", "/run/ostojaos-agent/agent.sock", "Unix socket")
+	socket := flag.String("socket", "/run/panasms-agent/agent.sock", "Unix socket")
 	peer := flag.Int("peer-uid", -1, "required core UID")
 	peerGID := flag.Int("peer-gid", -1, "required core GID")
 	flag.Parse()
 	if *peer < 0 || *peerGID < 0 {
 		log.Fatal("peer-uid required")
 	}
-	allowed, policyErr := auth.AccessPolicy(os.Getenv("OSTOJAOS_AUTH_MODE"), os.Getenv("OSTOJAOS_ALLOWED_USERS"))
+	allowed, policyErr := auth.AccessPolicy(os.Getenv("PANASMS_AUTH_MODE"), os.Getenv("PANASMS_ALLOWED_USERS"))
 	if policyErr != nil {
 		log.Fatal(policyErr)
 	}
@@ -47,7 +47,7 @@ func main() {
 	if err = os.Chmod(*socket, 0660); err != nil {
 		log.Fatal(err)
 	}
-	manager, err := management.Open("/var/lib/ostojaos-agent/jobs.db")
+	manager, err := management.Open("/var/lib/panasms-agent/jobs.db")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -14,10 +14,10 @@ def run(*args): return subprocess.check_output(args,text=True).strip()
 
 def main():
     before={name:run('nmcli','-g','GENERAL.CONNECTION,IP4.ADDRESS','device','show',name) for name in ('eth0','wlan0')}
-    with tempfile.TemporaryDirectory(prefix='ostojaos-ap-test-') as temp:
+    with tempfile.TemporaryDirectory(prefix='panasms-ap-test-') as temp:
         n.STATE_DIR=Path(temp)/'state';s.ROOT=Path(temp)/'sharing'
         a=n.Adapter()
-        params={'name':'AP integration','source':'eth0','outputs':['wlan0'],'mode':'nat','autostart':False,'wifi':{'wlan0':{'ssid':'OstojaOS-test','band':'bg','password':secrets.token_urlsafe(18)}}}
+        params={'name':'AP integration','source':'eth0','outputs':['wlan0'],'mode':'nat','autostart':False,'wifi':{'wlan0':{'ssid':'PaNasMs-test','band':'bg','password':secrets.token_urlsafe(18)}}}
         try:
             with n.locked():
                 s.execute(a,'network.share.save',params,'pasha')

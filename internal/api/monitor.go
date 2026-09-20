@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"ostojaos.local/backend/internal/cooling"
-	"ostojaos.local/backend/internal/management"
-	"ostojaos.local/backend/internal/system"
+	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/management"
+	"panasms.local/backend/internal/system"
 	"strings"
 	"time"
 )

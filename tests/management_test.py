@@ -17,7 +17,7 @@ class StorageSafety(unittest.TestCase):
             root = Path(tmp)
             serial = "test-disk"
             self.assertIsNone(storage.smart_schedule(serial, root))
-            unit = "ostojaos-smart-" + storage.hashlib.sha256(serial.encode()).hexdigest()[:16]
+            unit = "panasms-smart-" + storage.hashlib.sha256(serial.encode()).hexdigest()[:16]
             (root / (unit + ".timer")).write_text("[Timer]\nOnCalendar=Sun *-*-* 03:00:00\n")
             (root / (unit + ".service")).write_text(
                 "[Service]\nExecStart=/usr/sbin/smartctl -t long /dev/disk/by-id/ata-test\n"
@@ -275,7 +275,7 @@ class StorageSafety(unittest.TestCase):
             storage.device("/dev/missing", self.inv)
 
     def test_service_core_protected(self):
-        for unit in ("ostojaos-core.service", "ssh.service", "../../root.service", "dbus.service"):
+        for unit in ("panasms-core.service", "ssh.service", "../../root.service", "dbus.service"):
             with self.assertRaises(Rejected):
                 host.service(unit)
 

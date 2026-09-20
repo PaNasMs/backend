@@ -10,7 +10,7 @@ import storage
 from common import Rejected
 
 assert os.geteuid() == 0
-with tempfile.TemporaryDirectory(prefix="ostojaos_busy_", dir="/mnt") as directory:
+with tempfile.TemporaryDirectory(prefix="panasms_busy_", dir="/mnt") as directory:
     nested = directory + "/nested"
     child = None
     subprocess.run(["mount", "-t", "tmpfs", "none", directory], check=True)

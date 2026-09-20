@@ -11,7 +11,7 @@ import (
 	"regexp"
 )
 
-var Root = "/var/lib/ostojaos-modules"
+var Root = "/var/lib/panasms-modules"
 var ID = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 
 type Manifest struct {
@@ -37,7 +37,7 @@ func Client(id string) (*http.Client, error) {
 		return nil, errors.New("module disabled")
 	}
 	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/ostojaos-modules/"+id+".sock")
+		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/panasms-modules/"+id+".sock")
 	}}}, nil
 }
 

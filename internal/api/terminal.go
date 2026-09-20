@@ -5,8 +5,8 @@ import (
 	"github.com/coder/websocket"
 	"net/http"
 	"net/url"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/modules"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modules"
 	"time"
 )
 

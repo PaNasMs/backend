@@ -1,5 +1,5 @@
 [Unit]
-Description=Apply OstojaOS HDD standby settings after boot and hotplug
+Description=Apply PaNasMs HDD standby settings after boot and hotplug
 
 [Timer]
 OnBootSec=30

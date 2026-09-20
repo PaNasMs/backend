@@ -3,10 +3,10 @@ import stat
 import zipfile
 from common import *
 
-ROOT = Path("/var/lib/ostojaos-modules")
+ROOT = Path("/var/lib/panasms-modules")
 REGISTRY = ROOT / "registry.json"
-UPLOADS = Path("/var/lib/ostojaos-agent/module-uploads")
-KEYS = Path("/etc/ostojaos/module-keys")
+UPLOADS = Path("/var/lib/panasms-agent/module-uploads")
+KEYS = Path("/etc/panasms/module-keys")
 UNITS = Path("/etc/systemd/system")
 CORE = "0.2.1"
 ACTIONS = {"module.install", "module.enable", "module.disable", "module.remove"}
@@ -64,7 +64,7 @@ def manifest(m):
     version(m.get("version"))
     require(
         m.get("api") == 1 and satisfies(CORE, m.get("core")),
-        'Module is incompatible with OstojaOS core ' + CORE,
+        'Module is incompatible with PaNasMs core ' + CORE,
     )
     require(
         m.get("architecture") in ("all", command(["dpkg", "--print-architecture"]).strip()),
@@ -313,7 +313,7 @@ def package_plan(manifests):
 
 
 def unit(mid):
-    return "ostojaos-module-" + mid + ".service"
+    return "panasms-module-" + mid + ".service"
 
 
 def dependents(mid, installed):
@@ -330,7 +330,7 @@ def require_idle(mid, installed):
     conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.sock.settimeout(3)
     try:
-        conn.sock.connect("/run/ostojaos-modules/" + mid + ".sock")
+        conn.sock.connect("/run/panasms-modules/" + mid + ".sock")
         conn.request("GET", "/health")
         response = json.loads(conn.getresponse().read())
         require(
@@ -409,17 +409,17 @@ def write_unit(m):
         return
     mid = m["id"]
     content = f"""[Unit]
-Description=OstojaOS module {mid}
+Description=PaNasMs module {mid}
 After=local-fs.target
 [Service]
 User=root
-Group=ostojaos
-EnvironmentFile=/etc/ostojaos/ostojaos.env
-Environment=PYTHONPATH=/usr/lib/ostojaos/management
+Group=panasms
+EnvironmentFile=/etc/panasms/panasms.env
+Environment=PYTHONPATH=/usr/lib/panasms/management
 ExecStart={ROOT / mid / 'bin/server'}
 Restart=on-failure
 RestartSec=3
-RuntimeDirectory=ostojaos-modules
+RuntimeDirectory=panasms-modules
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 KillMode=control-group
@@ -445,7 +445,7 @@ def activate(m):
             conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             conn.sock.settimeout(1)
             try:
-                conn.sock.connect("/run/ostojaos-modules/" + m["id"] + ".sock")
+                conn.sock.connect("/run/panasms-modules/" + m["id"] + ".sock")
                 conn.request("GET", "/health")
                 require(conn.getresponse().status == 200, 'Module service failed to start')
                 return
@@ -615,7 +615,7 @@ def load_operations(kind, name):
         import importlib.util
 
         path = ROOT / mid / "backend/operations.py"
-        spec = importlib.util.spec_from_file_location("ostojaos_module_" + mid, path)
+        spec = importlib.util.spec_from_file_location("panasms_module_" + mid, path)
         module = importlib.util.module_from_spec(spec)
         sys.path.insert(0, str(path.parent))
         spec.loader.exec_module(module)

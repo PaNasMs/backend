@@ -11,8 +11,8 @@ from common import Rejected, require, command, json_command, atomic
 
 ACTIONS = {'network.share.save', 'network.share.start', 'network.share.stop', 'network.share.delete', 'network.share.wifi', 'network.share.remove-port'}
 import network as n
-ROOT = Path('/var/lib/ostojaos-agent/network-sharing')
-HELPER = '/usr/lib/ostojaos/management/network_sharing.py'
+ROOT = Path('/var/lib/panasms-agent/network-sharing')
+HELPER = '/usr/lib/panasms/management/network_sharing.py'
 
 
 def load():
@@ -344,7 +344,7 @@ def build(a, conf, params, old, state):
          'bridge': 'osbr' + uuid.uuid4().hex[:8], 'previous': original(a, [conf['source'], *conf['outputs']])}
     if old:
         g['previous'].update({k: v for k, v in old['previous'].items() if k in [conf['source'], *conf['outputs']]})
-    conn = {'id': 'OstojaOS ' + g['name'], 'type': 'bridge', 'interface-name': g['bridge']}
+    conn = {'id': 'PaNasMs ' + g['name'], 'type': 'bridge', 'interface-name': g['bridge']}
     fields = {'connection': conn, 'bridge': {'stp': d.Boolean(True)}, 'ipv4': {'method': 'shared'}, 'ipv6': {'method': 'disabled'}}
     if g['mode'] == 'bridge':
         saved = profiles(a)
@@ -360,7 +360,7 @@ def build(a, conf, params, old, state):
     for name in ([g['source']] if g['mode'] == 'bridge' else []) + g['outputs']:
         _, props = a.device(name)
         kind = '802-11-wireless' if int(props['DeviceType']) == 2 else '802-3-ethernet'
-        fields = {'connection': {'id': 'OstojaOS ' + g['name'] + ' ' + name, 'type': kind, 'interface-name': name, 'master': g['bridge'], 'slave-type': 'bridge'}, kind: {}}
+        fields = {'connection': {'id': 'PaNasMs ' + g['name'] + ' ' + name, 'type': kind, 'interface-name': name, 'master': g['bridge'], 'slave-type': 'bridge'}, kind: {}}
         if re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', str(props.get('HwAddress', ''))):
             fields[kind]['mac-address'] = d.ByteArray(bytes.fromhex(str(props['HwAddress']).replace(':', '')))
         if kind == '802-11-wireless':
@@ -456,7 +456,7 @@ def execute(a, action, params, user):
              'adaptersBefore': n.wifi.snapshot(a)}
     remember(state)
     try:
-        command(['systemd-run', '--quiet', '--collect', '--unit=ostojaos-share-rollback-' + state['id'], '--on-active=150s', '--timer-property=AccuracySec=1s', '--property=Restart=on-failure', '--property=RestartSec=3s', '/usr/bin/python3', '-B', HELPER, '--rollback', state['id']], timeout=15)
+        command(['systemd-run', '--quiet', '--collect', '--unit=panasms-share-rollback-' + state['id'], '--on-active=150s', '--timer-property=AccuracySec=1s', '--property=Restart=on-failure', '--property=RestartSec=3s', '/usr/bin/python3', '-B', HELPER, '--rollback', state['id']], timeout=15)
         if action in ('network.share.save', 'network.share.wifi'):
             g = build(a, conf, effective, old, state)
             if action == 'network.share.wifi': g['enabled'] = old['enabled']
@@ -507,7 +507,7 @@ def rollback(a, state):
 
 
 def disarm(state):
-    command(['systemctl', 'stop', 'ostojaos-share-rollback-' + state['id'] + '.timer'], accepted=(0, 5), timeout=15)
+    command(['systemctl', 'stop', 'panasms-share-rollback-' + state['id'] + '.timer'], accepted=(0, 5), timeout=15)
 
 
 def confirm(a, state):

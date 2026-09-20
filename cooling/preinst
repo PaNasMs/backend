@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
-for legacy in /etc/pinas /var/lib/pinas /var/lib/pinas-agent /var/lib/pinas-modules /etc/pinas-cooling /usr/lib/pinas /usr/lib/pinas-cooling; do
+for legacy in /etc/pinas /var/lib/pinas /var/lib/pinas-agent /var/lib/pinas-modules /etc/pinas-cooling /usr/lib/pinas /usr/lib/pinas-cooling /etc/ostojaos /var/lib/ostojaos /var/lib/ostojaos-agent /var/lib/ostojaos-modules /etc/ostojaos-cooling /usr/lib/ostojaos /usr/lib/ostojaos-cooling; do
  if [ -e "$legacy" ] || [ -L "$legacy" ]; then
-  echo "Existing PiNAS installation found at $legacy. Migrate its configuration and data before installing OstojaOS; nothing has been changed." >&2
+  echo "Existing legacy NAS installation found at $legacy. Migrate its configuration and data before installing PaNasMs; nothing has been changed." >&2
   exit 1
  fi
 done

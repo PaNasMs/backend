@@ -14,7 +14,7 @@ func TestInvalidLayouts(t *testing.T) {
 }
 
 func TestHostMountsReplacePrivateNamespaceMounts(t *testing.T) {
-	child := map[string]any{"maj:min": "179:2", "mountpoints": []string{"/", "/var/lib/ostojaos", "/var/tmp"}}
+	child := map[string]any{"maj:min": "179:2", "mountpoints": []string{"/", "/var/lib/panasms", "/var/tmp"}}
 	disk := map[string]any{"maj:min": "179:0", "children": []any{child}}
 	applyHostMounts([]map[string]any{disk}, []map[string]any{{"maj:min": "179:2", "target": "/"}, {"maj:min": "8:1", "target": "/data"}})
 	points := child["mountpoints"].([]string)

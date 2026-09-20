@@ -315,7 +315,7 @@ def control_reshape(md, target, action):
                 "systemd-run",
                 "--scope",
                 "--quiet",
-                "--unit=ostojaos-raid-resume-" + str(time.time_ns()),
+                "--unit=panasms-raid-resume-" + str(time.time_ns()),
                 "/usr/sbin/mdadm",
                 "--grow",
                 target,
@@ -870,9 +870,9 @@ def execute_unlocked(action, p, user=None):
         state = growth_state(md)
         count = int(state["raid_disks"]) + 1
         extra = device(p["replacement"], inv)
-        unit = "ostojaos-raid-grow-" + str(time.time_ns())
+        unit = "panasms-raid-grow-" + str(time.time_ns())
         try:
-            if os.environ.get("OSTOJAOS_OPERATION") == "1":
+            if os.environ.get("PANASMS_OPERATION") == "1":
                 print(
                     json.dumps({"stage": 'Starting array expansion; reshape will continue in the background'}),
                     file=sys.stderr,
@@ -1054,7 +1054,7 @@ def execute_unlocked(action, p, user=None):
         if action in ("smart.schedule", "smart.unschedule"):
             serial = inv[target]["serial"]
             identifier = hashlib.sha256(serial.encode()).hexdigest()[:16]
-            base = "ostojaos-smart-" + identifier
+            base = "panasms-smart-" + identifier
             unit = base + "-" + p["test"]
             legacy = smart_schedule(serial)
             if legacy and legacy["test"] == p["test"]:
@@ -1091,13 +1091,13 @@ def execute_unlocked(action, p, user=None):
                 }
                 atomic(
                     "/etc/systemd/system/" + unit + ".service",
-                    f"[Unit]\nDescription=OstojaOS SMART self-test\n# OstojaOS schedule: {json.dumps(schedule)}\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /usr/lib/ostojaos/management/smart_schedule.py {links[0]} {p['test']} {weeks} {start.isoformat()}\n",
+                    f"[Unit]\nDescription=PaNasMs SMART self-test\n# PaNasMs schedule: {json.dumps(schedule)}\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /usr/lib/panasms/management/smart_schedule.py {links[0]} {p['test']} {weeks} {start.isoformat()}\n",
                     0o644,
                 )
                 day = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[p["weekday"]]
                 atomic(
                     "/etc/systemd/system/" + unit + ".timer",
-                    f'[Unit]\nDescription=OstojaOS scheduled SMART test\n[Timer]\nOnCalendar={day} *-*-* {p["hour"]:02d}:00:00\nPersistent=false\n[Install]\nWantedBy=timers.target\n',
+                    f'[Unit]\nDescription=PaNasMs scheduled SMART test\n[Timer]\nOnCalendar={day} *-*-* {p["hour"]:02d}:00:00\nPersistent=false\n[Install]\nWantedBy=timers.target\n',
                     0o644,
                 )
                 command(["systemctl", "daemon-reload"])
@@ -1117,7 +1117,7 @@ def execute_unlocked(action, p, user=None):
 def smart_schedule(serial, root=Path("/etc/systemd/system")):
     if not serial:
         return None
-    unit = "ostojaos-smart-" + hashlib.sha256(serial.encode()).hexdigest()[:16]
+    unit = "panasms-smart-" + hashlib.sha256(serial.encode()).hexdigest()[:16]
     timer = root / (unit + ".timer")
     service = root / (unit + ".service")
     if not timer.exists() or not service.exists():
@@ -1140,12 +1140,12 @@ def smart_schedules(serial, root=Path("/etc/systemd/system")):
     result = {legacy["test"]: {**legacy, "weeks": 1}} if legacy else {}
     if not serial:
         return []
-    base = "ostojaos-smart-" + hashlib.sha256(serial.encode()).hexdigest()[:16]
+    base = "panasms-smart-" + hashlib.sha256(serial.encode()).hexdigest()[:16]
     for test in ("short", "long"):
         service = root / (base + "-" + test + ".service")
         timer = root / (base + "-" + test + ".timer")
         if service.exists() and timer.exists():
-            match = re.search(r"^# OstojaOS schedule: (.+)$", service.read_text(), re.M)
+            match = re.search(r"^# PaNasMs schedule: (.+)$", service.read_text(), re.M)
             if match:
                 result[test] = json.loads(match[1])
     return list(result.values())

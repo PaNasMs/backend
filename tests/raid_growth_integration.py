@@ -34,10 +34,10 @@ baseline = [
     "/dev/mmcblk0",
 ]
 before = command(baseline)
-with tempfile.TemporaryDirectory(prefix="ostojaos-grow-test-", dir="/var/tmp") as tmp:
+with tempfile.TemporaryDirectory(prefix="panasms-grow-test-", dir="/var/tmp") as tmp:
     loops = []
-    array = "/dev/md/ostojaos_grow_" + str(os.getpid())
-    mount = Path("/mnt/ostojaos_grow_" + str(os.getpid()))
+    array = "/dev/md/panasms_grow_" + str(os.getpid())
+    mount = Path("/mnt/panasms_grow_" + str(os.getpid()))
     mount.mkdir()
     try:
         for i in range(5):

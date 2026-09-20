@@ -5,8 +5,8 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/profile"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/profile"
 	"strings"
 )
 

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"ostojaos.local/backend/internal/store"
-	"ostojaos.local/backend/internal/system"
+	"panasms.local/backend/internal/store"
+	"panasms.local/backend/internal/system"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,7 +39,7 @@ func TestCSRF(t *testing.T) {
 	for _, origin := range []string{"", "http://evil.test"} {
 		r := httptest.NewRequest("POST", "http://nas/api/v1/login", strings.NewReader(`{"username":"a","password":"b"}`))
 		r.Header.Set("Origin", origin)
-		r.Header.Set("X-OstojaOS-Request", "1")
+		r.Header.Set("X-PaNasMs-Request", "1")
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 403 {
@@ -51,7 +51,7 @@ func TestAgentUnavailableFailsClosed(t *testing.T) {
 	s := testServer(t)
 	r := httptest.NewRequest("POST", "http://nas/api/v1/login", strings.NewReader(`{"username":"a","password":"b"}`))
 	r.Header.Set("Origin", "http://nas")
-	r.Header.Set("X-OstojaOS-Request", "1")
+	r.Header.Set("X-PaNasMs-Request", "1")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != 503 || len(w.Result().Cookies()) != 0 {
@@ -107,7 +107,7 @@ func TestUnknownAPIAndMalformedBody(t *testing.T) {
 	for _, body := range []string{`{"username":"a","password":"b","extra":true}`, `{"username":"a","password":"b"} {}`} {
 		r = httptest.NewRequest("POST", "http://nas/api/v1/login", strings.NewReader(body))
 		r.Header.Set("Origin", "http://nas")
-		r.Header.Set("X-OstojaOS-Request", "1")
+		r.Header.Set("X-PaNasMs-Request", "1")
 		w = httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 400 {

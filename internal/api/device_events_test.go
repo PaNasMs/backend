@@ -1,7 +1,7 @@
 package api
 
 import (
-	"ostojaos.local/backend/internal/management"
+	"panasms.local/backend/internal/management"
 	"testing"
 	"time"
 )

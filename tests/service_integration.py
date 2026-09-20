@@ -12,7 +12,7 @@ unit = "nas-fixture-" + str(os.getpid()) + ".service"
 path = Path("/etc/systemd/system") / unit
 try:
     path.write_text(
-        "[Unit]\nDescription=Disposable OstojaOS management test\n[Service]\nExecStart=/usr/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n"
+        "[Unit]\nDescription=Disposable PaNasMs management test\n[Service]\nExecStart=/usr/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n"
     )
     command(["systemctl", "daemon-reload"])
     for action in ["service.start", "service.restart", "service.enable", "service.disable", "service.stop"]:

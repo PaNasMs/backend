@@ -7,7 +7,7 @@ import zipfile
 from common import *
 import module_manager as manager
 
-URL = 'https://ostojaos.github.io/module-registry/'
+URL = 'https://panasms.github.io/module-registry/'
 MAX_ARCHIVE = 128 * 1024 * 1024
 ACTIONS = {'module.catalog-install'}
 
@@ -16,14 +16,14 @@ class Redirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parsed = urllib.parse.urlsplit(newurl)
         require(parsed.scheme == 'https' and parsed.hostname in
-                ('github.com', 'release-assets.githubusercontent.com', 'ostojaos.github.io'),
+                ('github.com', 'release-assets.githubusercontent.com', 'panasms.github.io'),
                 'Unexpected module download redirect')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def download(url, limit, timeout=10):
     try:
-        request = urllib.request.Request(url, headers={'User-Agent': 'OstojaOS/0.2'})
+        request = urllib.request.Request(url, headers={'User-Agent': 'PaNasMs/0.2'})
         with urllib.request.build_opener(Redirects).open(request, timeout=timeout) as response:
             raw = response.read(limit + 1)
         require(len(raw) <= limit, 'Module download exceeds size limit')
@@ -33,7 +33,7 @@ def download(url, limit, timeout=10):
 
 
 def verify(raw, envelope):
-    require(envelope.get('algorithm') == 'Ed25519' and envelope.get('signer') in ('ostojaos-local', 'ostojaos-ci'),
+    require(envelope.get('algorithm') == 'Ed25519' and envelope.get('signer') in ('panasms-local', 'panasms-ci'),
             'Untrusted module catalog signer')
     try:
         signature = base64.b64decode(envelope['signature'], validate=True)
@@ -56,7 +56,7 @@ def catalog():
     raw = download(URL + 'catalog.json', 2 * 1024 * 1024)
     verify(raw, json.loads(download(URL + 'catalog.sig', 4096)))
     data = json.loads(raw)
-    require(data.get('schemaVersion') == 1 and data.get('id') == 'ostojaos-official',
+    require(data.get('schemaVersion') == 1 and data.get('id') == 'panasms-official',
             'Unsupported module catalog format')
     releases = {}
     for item in data['modules']:
@@ -67,8 +67,8 @@ def catalog():
             m = entry['manifest']
             require(m['id'] == mid, 'Module catalog identity mismatch')
             manager.version(m['version'])
-            expected = re.escape(f"/{mid}-v{m['version']}/{mid}-{m['version']}-{m['architecture']}.ostojaos")
-            require(re.fullmatch(r'https://github.com/OstojaOS/[a-z][a-z0-9-]*/releases/download' + expected, entry['url']),
+            expected = re.escape(f"/{mid}-v{m['version']}/{mid}-{m['version']}-{m['architecture']}.panasms")
+            require(re.fullmatch(r'https://github.com/PaNasMs/[a-z][a-z0-9-]*/releases/download' + expected, entry['url']),
                     'Untrusted module download URL')
             require(type(entry['size']) is int and 0 < entry['size'] <= MAX_ARCHIVE
                     and re.fullmatch('[a-f0-9]{64}', entry['sha256']), 'Invalid module download metadata')

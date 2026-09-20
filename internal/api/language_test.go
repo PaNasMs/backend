@@ -32,8 +32,8 @@ func TestLanguagePreferenceValidationAndLegacyClient(t *testing.T) {
 	} {
 		r := httptest.NewRequest("PUT", "http://nas/api/v1/preferences", strings.NewReader(test.body))
 		r.Header.Set("Origin", "http://nas")
-		r.Header.Set("X-OstojaOS-Request", "1")
-		r.AddCookie(&http.Cookie{Name: "ostojaos_session", Value: token})
+		r.Header.Set("X-PaNasMs-Request", "1")
+		r.AddCookie(&http.Cookie{Name: "panasms_session", Value: token})
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != test.status {

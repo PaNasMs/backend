@@ -12,8 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"ostojaos.local/backend/internal/auth"
-	"ostojaos.local/backend/internal/modulehost"
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modulehost"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const stateRoot = "/var/lib/ostojaos-cloud-sync"
+const stateRoot = "/var/lib/panasms-cloud-sync"
 
 var busy atomic.Int32
 var workerMu sync.Mutex
@@ -46,10 +46,10 @@ func process(ctx context.Context, account *user.User, mode string) (*exec.Cmd, e
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "/usr/bin/systemd-run", "--quiet", "--collect", "--wait", "--pipe",
-		"--unit=ostojaos-cloud-sync-user-"+account.Uid,
+		"--unit=panasms-cloud-sync-user-"+account.Uid,
 		"--uid="+account.Uid, "--gid="+account.Gid,
-		"--property=BindsTo=ostojaos-module-cloud-sync.service",
-		"--property=After=ostojaos-module-cloud-sync.service",
+		"--property=BindsTo=panasms-module-cloud-sync.service",
+		"--property=After=panasms-module-cloud-sync.service",
 		"--property=KillMode=control-group", "--property=UMask=0077", "--property=NoNewPrivileges=yes",
 		"--setenv=HOME="+dir, "--setenv=XDG_CACHE_HOME="+dir+"/cache", "--setenv=LANG=C.UTF-8",
 		"/usr/bin/python3", "-B", script, mode, dir)
@@ -151,7 +151,7 @@ func main() {
 				return
 			}
 			if r.URL.Path == "/authorize-helper" && r.Method == "GET" {
-				w.Header().Set("Content-Disposition", `attachment; filename="ostojaos-cloud-authorize.py"`)
+				w.Header().Set("Content-Disposition", `attachment; filename="panasms-cloud-authorize.py"`)
 				http.ServeFile(w, r, filepath.Join(filepath.Dir(script), "authorize.py"))
 				return
 			}

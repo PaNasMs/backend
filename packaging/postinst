@@ -2,25 +2,25 @@
 set -eu
 case "${1:-}" in
  configure)
-  if ! getent passwd ostojaos >/dev/null; then
-   adduser --system --group --home /nonexistent --no-create-home --gecos 'OstojaOS prototype service' ostojaos
-   install -d -m 0750 /var/lib/ostojaos-installer
-   touch /var/lib/ostojaos-installer/created-user
+  if ! getent passwd panasms >/dev/null; then
+   adduser --system --group --home /nonexistent --no-create-home --gecos 'PaNasMs prototype service' panasms
+   install -d -m 0750 /var/lib/panasms-installer
+   touch /var/lib/panasms-installer/created-user
   else
-   entry=$(getent passwd ostojaos)
-   case "$entry" in *':OstojaOS prototype service:/nonexistent:/usr/sbin/nologin') ;; *) echo 'Existing ostojaos account is not owned by this installer' >&2; exit 1;; esac
+   entry=$(getent passwd panasms)
+   case "$entry" in *':PaNasMs prototype service:/nonexistent:/usr/sbin/nologin') ;; *) echo 'Existing panasms account is not owned by this installer' >&2; exit 1;; esac
   fi
-  install -d -o root -g ostojaos -m 0755 /var/lib/ostojaos-modules
-  install -d -o root -g ostojaos -m 0750 /etc/ostojaos
-  install -d -o ostojaos -g ostojaos -m 0700 /var/lib/ostojaos
-  install -d -o root -g root -m 0750 /var/lib/ostojaos-installer
-  if [ ! -e /etc/ostojaos/ostojaos.env ]; then
-   printf 'OSTOJAOS_AUTH_MODE=sudo\n' > /etc/ostojaos/ostojaos.env
-   chmod 0640 /etc/ostojaos/ostojaos.env
-   chown root:ostojaos /etc/ostojaos/ostojaos.env
+  install -d -o root -g panasms -m 0755 /var/lib/panasms-modules
+  install -d -o root -g panasms -m 0750 /etc/panasms
+  install -d -o panasms -g panasms -m 0700 /var/lib/panasms
+  install -d -o root -g root -m 0750 /var/lib/panasms-installer
+  if [ ! -e /etc/panasms/panasms.env ]; then
+   printf 'PANASMS_AUTH_MODE=sudo\n' > /etc/panasms/panasms.env
+   chmod 0640 /etc/panasms/panasms.env
+   chown root:panasms /etc/panasms/panasms.env
   fi
-  printf '%s\n' /etc/ostojaos/ostojaos.env /etc/ostojaos/tls.key /etc/ostojaos/tls.crt /var/lib/ostojaos/state.db /var/lib/ostojaos/state.db-wal /var/lib/ostojaos/state.db-shm > /var/lib/ostojaos-installer/generated-files
+  printf '%s\n' /etc/panasms/panasms.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm > /var/lib/panasms-installer/generated-files
   systemctl daemon-reload
-  echo 'Installed, not started. Run sudo ostojaos-configure to enable HTTP on port 80.'
+  echo 'Installed, not started. Run sudo panasms-configure to enable HTTP on port 80.'
  ;;
 esac

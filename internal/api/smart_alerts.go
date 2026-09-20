@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"ostojaos.local/backend/internal/cooling"
-	"ostojaos.local/backend/internal/store"
-	"ostojaos.local/backend/internal/system"
+	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/store"
+	"panasms.local/backend/internal/system"
 	"sort"
 	"strings"
 )

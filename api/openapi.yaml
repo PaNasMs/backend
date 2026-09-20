@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: OstojaOS prototype API
+  title: PaNasMs prototype API
   version: 0.2.0
 paths:
   /api/v1/health:
@@ -42,7 +42,7 @@ paths:
             schema:
               $ref: '#/components/schemas/Login'
       parameters:
-      - name: X-OstojaOS-Request
+      - name: X-PaNasMs-Request
         in: header
         required: true
         schema:
@@ -252,7 +252,7 @@ paths:
             schema:
               $ref: '#/components/schemas/Preferences'
       parameters:
-      - name: X-OstojaOS-Request
+      - name: X-PaNasMs-Request
         in: header
         required: true
         schema:
@@ -273,7 +273,7 @@ paths:
       security:
       - session: []
       parameters:
-      - name: X-OstojaOS-Request
+      - name: X-PaNasMs-Request
         in: header
         required: true
         schema:
@@ -971,4 +971,4 @@ components:
     session:
       type: apiKey
       in: cookie
-      name: ostojaos_session
+      name: panasms_session

@@ -18,12 +18,12 @@ def run(*args):
 def main():
     name = 'osnet-test0'
     peer = 'osnet-test1'
-    profile = 'ostojaos-network-integration'
+    profile = 'panasms-network-integration'
     assert name not in [r['ifname'] for r in json.loads(run('ip', '-j', 'link'))]
     assert profile not in run('nmcli', '-t', '-f', 'NAME', 'connection', 'show').splitlines()
     before = run('nmcli', '-g', 'IP4.ADDRESS,IP4.GATEWAY,IP4.DNS', 'device', 'show', 'eth0')
     created = False
-    with tempfile.TemporaryDirectory(prefix='ostojaos-network-state-') as state:
+    with tempfile.TemporaryDirectory(prefix='panasms-network-state-') as state:
         n.STATE_DIR = Path(state)
         try:
             run('ip', 'link', 'add', name, 'type', 'veth', 'peer', 'name', peer)

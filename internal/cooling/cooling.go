@@ -21,7 +21,7 @@ type config struct {
 
 var mu sync.Mutex
 
-const configPath = "/etc/ostojaos-cooling/config.json"
+const configPath = "/etc/panasms-cooling/config.json"
 
 func Validate(s Settings) error {
 	if s.Profile != "quiet" && s.Profile != "balanced" && s.Profile != "performance" {
@@ -47,7 +47,7 @@ func Read() (any, error) {
 	if cfg.CPUProfile == "" {
 		cfg.CPUProfile = "balanced"
 	}
-	raw, err = os.ReadFile("/run/ostojaos-cooling/status.json")
+	raw, err = os.ReadFile("/run/panasms-cooling/status.json")
 	if err != nil {
 		return nil, err
 	}

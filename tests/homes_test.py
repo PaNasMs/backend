@@ -30,7 +30,7 @@ class HomesTest(unittest.TestCase):
             for pid in ('900001', '900002'):
                 folder = proc / pid; folder.mkdir()
                 (folder / 'comm').write_text('python3\n')
-                (folder / 'cgroup').write_text('0::/system.slice/ostojaos-cloud-sync-user-1000.service\n')
+                (folder / 'cgroup').write_text('0::/system.slice/panasms-cloud-sync-user-1000.service\n')
                 (folder / 'cmdline').write_text('must not be included in diagnostics')
             with patch.object(homes, 'PROC', proc), patch.object(homes, 'command') as command:
                 rows = homes.blockers('/home/test', [SimpleNamespace(pw_uid=os.getuid(), pw_name='test')])

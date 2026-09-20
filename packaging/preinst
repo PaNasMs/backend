@@ -1,20 +1,20 @@
 #!/bin/sh
 set -eu
-for legacy in /etc/pinas /var/lib/pinas /var/lib/pinas-agent /var/lib/pinas-modules /etc/pinas-cooling /usr/lib/pinas /usr/lib/pinas-cooling; do
+for legacy in /etc/pinas /var/lib/pinas /var/lib/pinas-agent /var/lib/pinas-modules /etc/pinas-cooling /usr/lib/pinas /usr/lib/pinas-cooling /etc/ostojaos /var/lib/ostojaos /var/lib/ostojaos-agent /var/lib/ostojaos-modules /etc/ostojaos-cooling /usr/lib/ostojaos /usr/lib/ostojaos-cooling; do
  if [ -e "$legacy" ] || [ -L "$legacy" ]; then
-  echo "Existing PiNAS installation found at $legacy. Migrate its configuration and data before installing OstojaOS; nothing has been changed." >&2
+  echo "Existing legacy NAS installation found at $legacy. Migrate its configuration and data before installing PaNasMs; nothing has been changed." >&2
   exit 1
  fi
 done
-if [ "${1:-}" = install ] && [ ! -f /var/lib/ostojaos-installer/generated-files ]; then
- for path in /etc/ostojaos /var/lib/ostojaos /etc/pam.d/ostojaos; do
+if [ "${1:-}" = install ] && [ ! -f /var/lib/panasms-installer/generated-files ]; then
+ for path in /etc/panasms /var/lib/panasms /etc/pam.d/panasms; do
   if [ -e "$path" ] || [ -L "$path" ]; then
-   echo "Unmanaged path already exists: $path. Inspect before installing OstojaOS." >&2
+   echo "Unmanaged path already exists: $path. Inspect before installing PaNasMs." >&2
    exit 1
   fi
  done
- if getent passwd ostojaos >/dev/null; then
-  echo 'Unmanaged ostojaos account already exists; installation stopped.' >&2
+ if getent passwd panasms >/dev/null; then
+  echo 'Unmanaged panasms account already exists; installation stopped.' >&2
   exit 1
  fi
 fi

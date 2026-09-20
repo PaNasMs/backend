@@ -7,7 +7,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
-	"ostojaos.local/backend/internal/auth"
+	"panasms.local/backend/internal/auth"
 	"testing"
 )
 

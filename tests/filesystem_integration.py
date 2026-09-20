@@ -11,8 +11,8 @@ import host
 from common import command
 
 assert os.geteuid() == 0
-with tempfile.TemporaryDirectory(prefix="ostojaos-fs-test-", dir="/var/tmp") as scratch:
-    mount = "/mnt/ostojaos_fs_" + str(os.getpid())
+with tempfile.TemporaryDirectory(prefix="panasms-fs-test-", dir="/var/tmp") as scratch:
+    mount = "/mnt/panasms_fs_" + str(os.getpid())
     Path(mount).mkdir()
     try:
         for fs in ("btrfs", "xfs"):

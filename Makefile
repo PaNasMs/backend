@@ -7,5 +7,5 @@ check-race:
 	go test -buildvcs=false -tags pam -race ./...
 build:
 	mkdir -p bin
-	go build -buildvcs=false -trimpath -o bin/ostojaos-core ./cmd/ostojaos-core
-	go build -buildvcs=false -trimpath -tags pam -o bin/ostojaos-agent ./cmd/ostojaos-agent
+	go build -buildvcs=false -trimpath -o bin/panasms-core ./cmd/panasms-core
+	go build -buildvcs=false -trimpath -tags pam -o bin/panasms-agent ./cmd/panasms-agent

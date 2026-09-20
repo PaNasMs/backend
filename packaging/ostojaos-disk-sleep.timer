@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply OstojaOS HDD standby settings after boot and hotplug
+
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=60
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,46 @@
+#!/usr/bin/python3
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def inspect(root=Path('/sys')):
+    errors = []
+
+    def read(path):
+        try:
+            return path.read_text().strip().strip('\0')
+        except OSError as e:
+            errors.append({'path': str(path), 'error': str(e)})
+            return None
+
+    fans = []
+    temperatures = []
+    for hw in sorted((root/'class/hwmon').glob('hwmon*')):
+        name = read(hw/'name')
+        attributes = {p.name: read(p) for p in sorted(hw.iterdir())
+                      if (p.name.startswith('pwm') or (p.name.startswith('fan') and p.name.endswith('_input')))}
+        if attributes:
+            fans.append({'name': name, 'path': str(hw.resolve()),
+                         'device': str((hw/'device').resolve()), 'attributes': attributes})
+        for p in sorted(hw.glob('temp*_input')):
+            temperatures.append({'name': name, 'path': str(p.resolve()), 'millidegreesC': read(p)})
+    cooling = [{'path': str(p.resolve()), **{key: read(p/key) for key in ['type', 'cur_state', 'max_state']}}
+               for p in sorted((root/'class/thermal').glob('cooling_device*'))]
+    pwm = [{'path': str(p.resolve()), 'channels': read(p/'npwm')}
+           for p in sorted((root/'class/pwm').glob('pwmchip*'))]
+    sata = []
+    for p in sorted((root/'bus/pci/devices').glob('*')):
+        device_class = read(p/'class')
+        if device_class and device_class.startswith('0x0106'):
+            sata.append({'path': str(p.resolve()), 'vendor': read(p/'vendor'), 'device': read(p/'device'),
+                         'driver': (p/'driver').resolve().name if (p/'driver').exists() else None})
+    return {'version': 1, 'observedAt': datetime.now(timezone.utc).isoformat(),
+            'fanControllers': fans, 'thermalCoolingDevices': cooling, 'pwmControllers': pwm,
+            'temperatureSensors': temperatures, 'sataControllers': sata, 'errors': errors,
+            'coolingControl': 'unchanged', 'fanAssignment': 'requires physical verification',
+            'note': 'Read-only detection. PWM presence does not prove a connected fan. No PWM export, GPIO, I2C probes or driver changes are performed.'}
+
+
+if __name__ == '__main__':
+    print(json.dumps(inspect(), ensure_ascii=False, indent=2))

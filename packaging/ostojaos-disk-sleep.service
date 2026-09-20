@@ -1,0 +1,11 @@
+[Unit]
+Description=OstojaOS HDD standby settings
+After=local-fs.target
+ConditionPathExists=/etc/ostojaos/disk-sleep.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/ostojaos/management/disk_sleep.py
+RuntimeDirectory=ostojaos-disk-sleep
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=120

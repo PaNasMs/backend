@@ -1,0 +1,974 @@
+openapi: 3.1.0
+info:
+  title: OstojaOS prototype API
+  version: 0.2.0
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/login:
+    post:
+      operationId: postLogin
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Identity'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+      parameters:
+      - name: X-OstojaOS-Request
+        in: header
+        required: true
+        schema:
+          type: string
+          const: '1'
+  /api/v1/session:
+    get:
+      operationId: getSession
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Identity'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+  /api/v1/users:
+    get:
+      operationId: getUsers
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Accounts'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+  /api/v1/storage:
+    get:
+      operationId: getStorage
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Storage'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+  /api/v1/metrics:
+    get:
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metrics'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+  /api/v1/wallpaper:
+    get:
+      operationId: getWallpaper
+      security:
+      - session: []
+      responses:
+        '200':
+          description: Current wallpaper revision, empty when unset
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: string
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: putWallpaper
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/png:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Current wallpaper revision, empty when unset
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: string
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: deleteWallpaper
+      security:
+      - session: []
+      responses:
+        '200':
+          description: Current wallpaper revision, empty when unset
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version:
+                    type: string
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/wallpaper/image:
+    get:
+      operationId: getWallpaperImage
+      security:
+      - session: []
+      responses:
+        '200':
+          description: Current user's wallpaper
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: No wallpaper
+  /api/v1/preferences:
+    get:
+      operationId: getPreferences
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preferences'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+    put:
+      operationId: putPreferences
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preferences'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Preferences'
+      parameters:
+      - name: X-OstojaOS-Request
+        in: header
+        required: true
+        schema:
+          type: string
+          const: '1'
+  /api/v1/logout:
+    post:
+      operationId: postLogout
+      responses:
+        '204':
+          description: Success
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      security:
+      - session: []
+      parameters:
+      - name: X-OstojaOS-Request
+        in: header
+        required: true
+        schema:
+          type: string
+          const: '1'
+  /api/v1/cooling:
+    get:
+      operationId: getCooling
+      security:
+      - session: []
+      responses: &id001
+        '200':
+          description: Cooling settings and last observed controller state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoolingState'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setCooling
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoolingSettings'
+      responses: *id001
+  /api/v1/profile:
+    get:
+      operationId: getProfile
+      security:
+      - session: []
+      responses:
+        '200':
+          description: Own Linux profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+        default: &id002
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: updateProfile
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdate'
+      responses:
+        '204':
+          description: Updated; password change revokes panel sessions
+        default: *id002
+  /api/v1/manage:
+    get:
+      summary: Read a management view using the authenticated administrator identity
+      parameters:
+      - {in: query, name: view, required: true, schema: {type: string, enum: [homes, homes-check, jobs, storage-options, raid-candidates, smart, services, journal, updates, files, nfs, power, network]}}
+      - {in: query, name: target, schema: {type: string}}
+      responses:
+        '200': {description: Typed view result or explicit error; never shell output}
+        '403': {description: Administrator required}
+    post:
+      summary: Preview, enqueue or cancel an operation, or clear finished job history
+      parameters:
+      - {in: query, name: view, required: true, schema: {type: string, enum: [plan, run, cancel, clear-history]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                id: {type: string, description: Client idempotency identifier}
+                action: {type: string, description: Allowlisted domain action; arbitrary commands are rejected}
+                params: {type: object, additionalProperties: true}
+                fingerprint: {type: string, description: Fresh preview state digest}
+                confirmation: {type: string, description: Exact target acknowledgement from preview}
+      responses:
+        '200': {description: Preview with target/details/fingerprint/confirmation, or existing idempotent job}
+        '202': {description: Persistent job accepted}
+        '409': {description: Conflict or task can no longer be cancelled}
+  /api/v1/metrics/history:
+    get:
+      parameters:
+      - {in: query, name: hours, schema: {type: integer, minimum: 1, maximum: 168, default: 24}}
+      responses:
+        '200':
+          description: One recorded sample per minute; gaps are retained
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Metrics'}}
+  /api/v1/notifications:
+    get:
+      responses:
+        '200': {description: Persistent deduplicated active and resolved alerts}
+    delete:
+      summary: Clear resolved alert and event history; active warnings remain
+      responses:
+        '204': {description: History cleared}
+        '403': {description: Administrator required}
+  /api/v1/terminal:
+    get:
+      responses:
+        '101': {description: Admin user PTY WebSocket; input/resize JSON in, binary terminal bytes out}
+  /api/v1/files/content:
+    get:
+      parameters:
+      - {in: query, name: target, required: true, schema: {type: string}}
+      - {in: query, name: thumbnail, required: false, schema: {type: string, enum: ['1']}, description: Return a bounded JPEG image thumbnail instead of the original file}
+      responses:
+        '200': {description: File attachment or image/jpeg thumbnail under caller Linux UID/GID; no-store}
+        '403': {description: Access denied or thumbnail unavailable}
+        '503': {description: Thumbnail generation timed out or service unavailable}
+    put:
+      parameters:
+      - {in: query, name: target, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '204': {description: Entire upload atomically published; existing files are never overwritten}
+        '409': {description: File exists, permission denied or transfer failed}
+
+components:
+  schemas:
+    Identity:
+      type: object
+      required:
+      - username
+      - name
+      - uid
+      - role
+      properties:
+        username:
+          type: string
+        name:
+          type: string
+        uid:
+          type: integer
+        role:
+          type: string
+    User:
+      type: object
+      required:
+      - username
+      - name
+      - uid
+      - gid
+      - home
+      - shell
+      - category
+      - groups
+      properties:
+        username:
+          type: string
+        name:
+          type: string
+        uid:
+          type: integer
+        gid:
+          type: integer
+        home:
+          type: string
+        shell:
+          type: string
+        category:
+          type: string
+        groups:
+          type: array
+          items:
+            type: string
+    Group:
+      type: object
+      required:
+      - name
+      - gid
+      - members
+      properties:
+        name:
+          type: string
+        gid:
+          type: integer
+        members:
+          type: array
+          items:
+            type: string
+    Accounts:
+      type: object
+      required:
+      - users
+      - groups
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/Group'
+    Metrics:
+      type: object
+      required:
+      - systemTotal
+      - systemAvailable
+      - disks
+      - network
+      - hostname
+      - cpu
+      - memoryTotal
+      - memoryUsed
+      - uptime
+      - cpuTemperature
+      - observedAt
+      - cpuFanRpm
+      properties:
+        systemTotal: {type: integer}
+        systemAvailable: {type: integer}
+        disks:
+          type: object
+          additionalProperties:
+            type: object
+            required: [read, write]
+            properties:
+              read: {type: number}
+              write: {type: number}
+        network:
+          type: object
+          additionalProperties:
+            type: object
+            required: [read, write]
+            properties:
+              read: {type: number}
+              write: {type: number}
+
+        hostname:
+          type: string
+        cpu:
+          type:
+          - number
+          - 'null'
+        memoryTotal:
+          type: number
+        memoryUsed:
+          type: number
+        uptime:
+          type: number
+        cpuTemperature:
+          type:
+          - number
+          - 'null'
+        observedAt:
+          type: string
+        cpuFanPercent:
+          description: Fan PWM duty as a percentage; null when unavailable.
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 100
+        cpuFanRpm:
+          type:
+          - integer
+          - 'null'
+    Array:
+      type: object
+      required:
+      - name
+      - level
+      - state
+      - degraded
+      - members
+      - sync
+      - progress
+      - device
+      - uuid
+      - size
+      properties:
+        missing:
+          type: integer
+        memberStates:
+          type: object
+          additionalProperties:
+            type: string
+        reshapePending:
+          type: boolean
+        syncPercent:
+          type: number
+        syncSpeed:
+          type: number
+        syncRemaining:
+          type: number
+        name:
+          type: string
+        level:
+          type: string
+        state:
+          type: string
+        degraded:
+          type: string
+        members:
+          type: array
+          items:
+            type: string
+        sync:
+          type: string
+        progress:
+          type: string
+        device:
+          type: string
+        uuid:
+          type: string
+        size:
+          type: number
+    Preferences:
+      type: object
+      required:
+      - theme
+      - layouts
+      properties:
+        language:
+          type: string
+          enum: [en, ru, uk]
+          default: en
+          description: Personal interface language; English is the default and fallback.
+        taskbar:
+          type: array
+          items:
+            type: string
+          maxItems: 8
+          uniqueItems: true
+        desktopLayouts:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              required: [id, kind, x, y]
+              properties:
+                id: {type: string}
+                kind: {type: string}
+                x: {type: integer}
+                y: {type: integer}
+
+        smartCrcBaselines:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740991
+        theme:
+          type: string
+          enum:
+          - dark
+          - light
+        layouts:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    Login:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    Health:
+      type: object
+      required:
+      - status
+      - version
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+    Device:
+      type: object
+      required:
+      - name
+      - kname
+      - path
+      - type
+      - size
+      properties:
+        name:
+          type: string
+        kname:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+        size:
+          type: number
+        model: &id003
+          type:
+          - string
+          - 'null'
+        serial: *id003
+        tran: *id003
+        fstype: *id003
+        uuid: *id003
+        pkname: *id003
+        rota:
+          type: boolean
+        mountpoints:
+          type: array
+          items: *id003
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Device'
+        start:
+          type: number
+        label:
+          type:
+          - string
+          - 'null'
+    Mount:
+      type: object
+      required:
+      - source
+      - target
+      - fstype
+      - options
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        fstype:
+          type: string
+        options:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mount'
+        size:
+          type:
+          - number
+          - 'null'
+        used:
+          type:
+          - number
+          - 'null'
+        avail:
+          type:
+          - number
+          - 'null'
+    Storage:
+      type: object
+      required:
+      - devices
+      - mounts
+      - arrays
+      - observedAt
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Device'
+        mounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mount'
+        arrays:
+          type: array
+          items:
+            $ref: '#/components/schemas/Array'
+        observedAt:
+          type: string
+    CoolingSettings:
+      type: object
+      required:
+      - profile
+      - sampleSeconds
+      - cpuProfile
+      additionalProperties: false
+      properties:
+        profile:
+          type: string
+          enum:
+          - quiet
+          - balanced
+          - performance
+        sampleSeconds:
+          type: integer
+          minimum: 30
+          maximum: 600
+        cpuProfile:
+          type: string
+          enum:
+          - quiet
+          - balanced
+          - performance
+    CoolingState:
+      type: object
+      required:
+      - config
+      - status
+      - available
+      properties:
+        config:
+          $ref: '#/components/schemas/CoolingSettings'
+        available:
+          type: boolean
+        status:
+          type: object
+          required:
+          - dutyPercent
+          - reason
+          - disks
+          - observedAt
+          - profile
+          properties:
+            profile:
+              type: string
+            dutyPercent:
+              type: integer
+            reason:
+              type: string
+            observedAt:
+              type: number
+            disks:
+              type: array
+              items:
+                type: object
+                required:
+                - path
+                - state
+                - temperature
+                properties:
+                  path:
+                    type: string
+                  state:
+                    type: string
+                    enum:
+                    - active
+                    - sleeping
+                    - unknown
+                    - unavailable
+                  temperature:
+                    type:
+                    - number
+                    - 'null'
+                  device:
+                    type: string
+                  health:
+                    type: string
+                    enum:
+                    - passed
+                    - warning
+                    - failed
+                    - unknown
+                  stale:
+                    type: boolean
+                  observedAt:
+                    type:
+                    - number
+                    - 'null'
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                  attributes:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - id
+                      - name
+                      properties:
+                        id:
+                          type: integer
+                        name:
+                          type: string
+                        raw:
+                          type: object
+                          properties:
+                            value:
+                              type: number
+                            string:
+                              type: string
+            cpu:
+              type: object
+              required:
+              - available
+              properties:
+                available:
+                  type: boolean
+                profile:
+                  type: string
+                thresholds:
+                  type: array
+                  items:
+                    type: integer
+    Profile:
+      type: object
+      required:
+      - username
+      - name
+      - uid
+      - home
+      - groups
+      - keys
+      properties:
+        username:
+          type: string
+        name:
+          type: string
+        uid:
+          type: string
+        home:
+          type: string
+        groups:
+          type: array
+          items:
+            type: string
+        keys:
+          type: array
+          items:
+            type: object
+            required:
+            - id
+            - type
+            - fingerprint
+            - comment
+            properties:
+              id:
+                type: string
+              type:
+                type: string
+              fingerprint:
+                type: string
+              comment:
+                type: string
+    ProfileUpdate:
+      type: object
+      required:
+      - action
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum:
+          - name
+          - password
+          - add
+          - delete
+        name:
+          type: string
+          maxLength: 80
+        currentPassword:
+          type: string
+          writeOnly: true
+        newPassword:
+          type: string
+          writeOnly: true
+        key:
+          type: string
+        id:
+          type: string
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: ostojaos_session

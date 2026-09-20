@@ -1,0 +1,27 @@
+[Unit]
+Description=OstojaOS restricted system authentication agent
+After=local-fs.target
+
+[Service]
+User=root
+Group=ostojaos
+EnvironmentFile=/etc/ostojaos/ostojaos.env
+ExecStartPre=-/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/python3 /usr/lib/ostojaos/management/homes.py --recover
+ExecStartPre=/usr/bin/python3 /usr/lib/ostojaos/management/module_manager.py --recover
+ExecStart=/usr/lib/ostojaos/start-agent
+Restart=on-failure
+RestartSec=3
+StateDirectory=ostojaos-agent
+StateDirectoryMode=0700
+RuntimeDirectory=ostojaos-agent
+RuntimeDirectoryMode=0750
+UMask=0007
+ProtectSystem=strict
+ProtectHome=no
+PrivateTmp=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/ostojaos-modules /run/ostojaos-agent /etc -/home /var/log -/var/lib/samba
+
+[Install]
+WantedBy=multi-user.target

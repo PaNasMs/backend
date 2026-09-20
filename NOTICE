@@ -1,0 +1,24 @@
+Required Notice: OstojaOS original software is licensed under the PolyForm Noncommercial License 1.0.0.
+
+License: PolyForm-Noncommercial-1.0.0
+License text: LICENSE
+Official terms: https://polyformproject.org/licenses/noncommercial/1.0.0
+
+This license applies to original OstojaOS software in frontend/, backend/ and
+modules/, including the original translations, tests and build tooling.
+Copyright remains with the respective authors. This notice does not assign
+ownership or grant rights that a contributor does not hold.
+
+Third-party software, libraries, icons, fonts, images and other assets retain
+their own licenses and copyright notices. Bundling or interacting with a
+third-party component does not relicense it under PolyForm Noncommercial.
+Separately identified third-party or derived code is excluded from this grant.
+
+In the development workspace, historical CasaOS patches, vendor materials,
+reference documents, and chassis/CAD files are outside this software grant.
+Their presence does not grant additional rights to them.
+
+Commercial use outside the purposes permitted by this license requires a
+separate license from the relevant rights holders. No commercial license is
+granted by this notice. The LICENSE text controls the permitted purposes,
+including its express permissions for specified types of organizations.

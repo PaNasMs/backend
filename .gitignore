@@ -1,0 +1,10 @@
+/bin/
+/dist/
+/coverage/
+.env
+.env.*
+!.env.example
+/codex-session
+.SynologyWorkingDirectory/
+__pycache__/
+*.pyc

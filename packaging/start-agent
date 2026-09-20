@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+exec /usr/lib/ostojaos/ostojaos-agent -peer-uid "$(id -u ostojaos)" -peer-gid "$(id -g ostojaos)"

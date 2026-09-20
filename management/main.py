@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+import json
+import sys
+import pwd
+import grp
+import os
+from common import *
+import storage
+import accounts
+import host
+import module_manager
+import module_catalog
+import network
+
+
+def dispatch(mode, user, request):
+    account = pwd.getpwnam(user)
+    require(
+        account.pw_uid > 0 and grp.getgrnam("sudo").gr_gid in os.getgrouplist(user, account.pw_gid),
+        'Administrator permissions have changed',
+    )
+    if mode == "query":
+        view = request.get("view")
+        target = request.get("target", "")
+        if view == "network":
+            return network.query()
+        if view == "homes-check":
+            return accounts.homes.preflight(target)
+        if view == "homes":
+            return accounts.homes.query()
+        if view == "modules":
+            return module_manager.list_modules()
+        if view == "module-catalog":
+            return module_catalog.list_available()
+        extensions = module_manager.load_operations("queries", view)
+        if extensions:
+            return extensions[0].query(user, target)
+        require(view != "files", 'File manager is not installed or is disabled')
+        if view in ("storage-options", "raid-candidates", "smart"):
+            return storage.query(view, target)
+        return host.query(view, target)
+    action = request.get("action")
+    params = request.get("params")
+    require(isinstance(params, dict), 'Parameters must be an object')
+    extensions = module_manager.load_operations("actions", action)
+    module = next(
+        (m for m in (storage, accounts, host, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
+        None,
+    )
+    require(module, 'Unknown operation')
+    plan = module.plan(action, params, user) if module != storage else module.plan(action, params)
+    if mode == "plan":
+        return plan
+    require(mode == "execute", 'Unknown mode')
+    require(
+        request.get("fingerprint") == plan["fingerprint"],
+        'State has changed. Review a new operation plan.',
+    )
+    require(
+        request.get("confirmation") == plan["confirmation"], 'The exact operation target was not confirmed'
+    )
+    os.environ["OSTOJAOS_OPERATION"] = "1"
+    return (
+        module.execute(action, params, user)
+        if module != accounts
+        else module.execute(action, params)
+    )
+
+
+if __name__ == "__main__":
+    try:
+        require(len(sys.argv) == 3, 'Mode or user not specified')
+        raw = sys.stdin.read(1048577)
+        require(len(raw) <= 1048576, 'Request too large')
+        result = dispatch(sys.argv[1], sys.argv[2], json.loads(raw))
+    except Rejected as e:
+        result = {"error": str(e)}
+    except subprocess.TimeoutExpired:
+        result = {
+            "error": 'Operation timed out. Check the actual state before retrying.'
+        }
+    except Exception:
+        result = {
+            "error": 'Could not process the operation. Check parameters, object availability and the system journal.'
+        }
+    print(json.dumps(result, ensure_ascii=False))

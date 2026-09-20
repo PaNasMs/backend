@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore unconfirmed OstojaOS Wi-Fi changes after reboot
+After=NetworkManager.service
+Before=ostojaos-agent.service ostojaos-core.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /usr/lib/ostojaos/management/wifi.py --recover
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

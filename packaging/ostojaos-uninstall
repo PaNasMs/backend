@@ -1,0 +1,72 @@
+#!/usr/bin/python3
+import argparse
+import grp
+import json
+import os
+import pwd
+import subprocess
+import sys
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description='Remove only the OstojaOS prototype; user storage is preserved.')
+mode = sys.argv[1] if len(sys.argv) == 2 else '--plan'
+if mode not in ('--plan', '--remove', '--purge'):
+    parser.error('use --plan, --remove or --purge')
+owned = ['/etc/ostojaos/ostojaos.env', '/etc/ostojaos/tls.key', '/etc/ostojaos/tls.crt',
+         '/var/lib/ostojaos-agent/jobs.db', '/var/lib/ostojaos-agent/jobs.db-wal', '/var/lib/ostojaos-agent/jobs.db-shm',
+         '/var/lib/ostojaos/state.db', '/var/lib/ostojaos/state.db-wal', '/var/lib/ostojaos/state.db-shm']
+print('OstojaOS services, binaries, UI and PAM service configuration will be removed.')
+print('Module services are stopped; purge also removes uploaded archives, module code and registry. User files remain.')
+print('Purge additionally removes:', ', '.join(owned))
+print('The independent ostojaos-cooling package/service is retained to keep the disks cooled.')
+print('Linux user data, RAID, filesystems, mounts, other packages and system journal are preserved.')
+if mode == '--plan':
+    subprocess.run(['dpkg-query', '-L', 'ostojaos-prototype'], check=False)
+    sys.exit(0)
+if os.geteuid() != 0:
+    sys.exit('Run as root.')
+for parent in ['/etc/ostojaos', '/var/lib/ostojaos', '/var/lib/ostojaos-installer', '/var/lib/ostojaos-agent']:
+    if Path(parent).is_symlink():
+        sys.exit('Refusing operation through symlink: ' + parent)
+marker = Path('/var/lib/ostojaos-installer/created-user').is_file()
+try:
+    account = pwd.getpwnam('ostojaos')
+except KeyError:
+    account = None
+if account and (account.pw_gecos != 'OstojaOS prototype service' or account.pw_dir != '/nonexistent'):
+    sys.exit('Service account identity differs from installer record; inspect manually.')
+subprocess.run(['apt-get', '-y', 'purge' if mode == '--purge' else 'remove', 'ostojaos-prototype'], check=True)
+if mode == '--remove':
+    sys.exit(0)
+remaining = [p for p in ['/etc/ostojaos', '/var/lib/ostojaos', '/var/lib/ostojaos-agent'] if Path(p).exists()]
+if remaining:
+    print('Unmanaged files remain; inspect these directories:', *remaining, sep='\n')
+    sys.exit(2)
+if account and marker:
+    mounted = json.loads(subprocess.check_output(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE']))['filesystems']
+    allowed_fs = {'ext2', 'ext3', 'ext4', 'btrfs', 'xfs', 'zfs', 'f2fs', 'tmpfs', 'overlay'}
+    candidates = [m['target'] for m in mounted if m['fstype'] in allowed_fs and not m['target'].startswith(('/proc', '/sys', '/dev'))]
+    leftovers = []
+    for target in sorted(set(candidates)):
+        result = subprocess.run(['find', target, '-xdev', '-uid', str(account.pw_uid), '-print', '-quit'], capture_output=True, text=True)
+        if result.returncode:
+            sys.exit('Could not verify ownership; service account retained. Check mounts and retry account cleanup manually.')
+        if result.stdout.strip():
+            leftovers.append(result.stdout.strip())
+    if leftovers:
+        print('Service account retained; it still owns:', *leftovers, sep='\n')
+        sys.exit(2)
+    subprocess.run(['userdel', 'ostojaos'], check=True)
+    try:
+        grp.getgrnam('ostojaos')
+    except KeyError:
+        pass
+    else:
+        subprocess.run(['groupdel', 'ostojaos'], check=True)
+for name in ['created-user', 'generated-files', 'hardware.json']:
+    Path('/var/lib/ostojaos-installer', name).unlink(missing_ok=True)
+try:
+    Path('/var/lib/ostojaos-installer').rmdir()
+except FileNotFoundError:
+    pass
+print('OstojaOS purge complete. System journal entries remain under the OS retention policy.')

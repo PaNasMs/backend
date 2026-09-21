@@ -161,6 +161,13 @@ class FolderPermissionsTest(unittest.TestCase):
 
 
 class AdministratorPermissionsTest(unittest.TestCase):
+    def temporary_data(self):
+        # CI checkouts under /__w are deliberately outside the permitted data roots.
+        parent = Path(__file__).resolve().parents[1]
+        if not str(parent).startswith('/home/'):
+            parent = Path('/home') if os.geteuid() == 0 else Path.home()
+        return tempfile.TemporaryDirectory(dir=parent)
+
     def test_non_admin_cannot_read_plan_or_apply_permissions(self):
         from types import SimpleNamespace
         with patch.object(files, "identity", return_value=SimpleNamespace(pw_uid=1000, pw_gid=1000)), patch.object(files.grp, "getgrnam", return_value=SimpleNamespace(gr_gid=27)), patch.object(files.os, "getgrouplist", return_value=[1000]):
@@ -170,7 +177,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
 
     def test_current_folder_only_and_stale_revision(self):
         import subprocess
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
+        with self.temporary_data() as tmp:
             parent = Path(tmp)
             child = parent / "unchanged"
             child.mkdir(mode=0o700)
@@ -188,7 +195,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
                     files.execute("file.permissions", params, "admin")
 
     def test_batch_files_and_folders_preserve_unchanged_bits_and_preflight(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
+        with self.temporary_data() as tmp:
             folder = Path(tmp) / "folder"
             folder.mkdir(mode=0o750)
             file = Path(tmp) / "file"
@@ -214,7 +221,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
                     files.permission_selection("admin", [str(link)])
 
     def test_rejects_system_paths_symlinks_and_network_filesystems(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
+        with self.temporary_data() as tmp:
             link = Path(tmp) / "link"
             link.symlink_to(tmp, target_is_directory=True)
             with patch.object(files, "permission_admin"):

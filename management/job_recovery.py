@@ -24,6 +24,11 @@ def inspect(request):
             checks.append({'label': 'Account', 'value': 'Absent'})
         if action == 'user.password':
             message = 'A password change cannot be verified from stored credentials. Sign in or set a new password through Users.'
+    elif action.startswith('share.'):
+        import sharing
+        route = '/sharing'
+        checks.append({'label':'Shared folders','value':sharing.read()['shares']})
+        if sharing.JOURNAL.exists() or sharing.drift(sharing.read()): recovery_action = 'share.recover'
     elif action.startswith('homes.'):
         import homes
         route = '/settings/users'

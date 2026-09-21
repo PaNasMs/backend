@@ -65,6 +65,9 @@ func profileHandler(allowed map[string]bool) http.HandlerFunc {
 				return
 			}
 			err = profile.Password(r.Context(), id.Username, body.Current, body.Next)
+			if err == nil {
+				err = profile.SyncSMB(r.Context(), id.Username, body.Next)
+			}
 		case "add", "delete":
 			_, err = profile.Keys(r.Context(), id.Username, map[string]string{"action": body.Action, "key": body.Key, "id": body.ID})
 		default:
@@ -72,6 +75,9 @@ func profileHandler(allowed map[string]bool) http.HandlerFunc {
 			return
 		}
 		if err != nil {
+			if body.Action == "password" && strings.HasPrefix(err.Error(), "Linux password accepted,") {
+				w.Header().Set("X-PaNasMs-Password-Changed", "1")
+			}
 			http.Error(w, err.Error(), 400)
 			return
 		}

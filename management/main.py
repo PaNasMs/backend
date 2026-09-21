@@ -8,6 +8,7 @@ from common import *
 import storage
 import accounts
 import host
+import sharing
 import module_manager
 import module_catalog
 import network
@@ -39,6 +40,7 @@ def dispatch(mode, user, request):
         if view == 'accounts': return accounts.query()
         if view == 'account-details': return accounts.query(target)
         if view == 'account-sessions': return accounts.account_sessions.sessions(target)
+        if view == "sharing": return sharing.query()
         if view == "network":
             return network.query()
         if view == "homes-check":
@@ -63,7 +65,7 @@ def dispatch(mode, user, request):
     require(isinstance(params, dict), 'Parameters must be an object')
     extensions = module_manager.load_operations("actions", action)
     module = next(
-        (m for m in (storage, accounts, host, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
+        (m for m in (storage, accounts, host, sharing, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
         None,
     )
     require(module, 'Unknown operation')

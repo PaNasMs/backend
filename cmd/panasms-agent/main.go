@@ -113,6 +113,14 @@ func main() {
 			http.Error(w, "authentication failed", 401)
 			return
 		}
+		password := body.Password
+		if body.NewPassword != "" {
+			password = body.NewPassword
+		}
+		if err := profile.SyncSMB(r.Context(), body.Username, password); err != nil {
+			id.SMBSyncWarning = true
+			log.Printf("SMB synchronization failed user=%s", body.Username)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(id)
 	})

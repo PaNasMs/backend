@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PaNasMs prototype API
-  version: 0.2.3
+  version: 0.2.4
 paths:
   /api/v1/health:
     get:
@@ -536,6 +536,9 @@ components:
           type: integer
         role:
           type: string
+        smbSyncWarning:
+          type: boolean
+          description: Linux login succeeded but Samba password synchronization needs attention.
     User:
       type: object
       required:

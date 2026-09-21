@@ -157,7 +157,7 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.3"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.4"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Group(func(r chi.Router) {
@@ -440,6 +440,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.Audit(id.Username, id.Username, "login", "succeeded")
+	s.Store.Alert("smb-password:"+id.Username, "SMB password synchronization failed for "+id.Username+". Sign in again to retry or ask an administrator to check Shared folders / SMB accounts.", id.SMBSyncWarning)
 	s.cookie(w, token, 28800)
 	jsonResponse(w, 200, id)
 }
@@ -576,6 +577,10 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.Header.Get("X-PaNasMs-Password-Changed") == "1" {
+		s.Store.RevokeUser(id.Username)
+		s.cookie(w, "", -1)
+	}
 	if resp.StatusCode != 200 && resp.StatusCode != 204 {
 		message := "Could not update profile. Check your input."
 		if resp.StatusCode == 403 {

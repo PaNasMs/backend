@@ -44,6 +44,8 @@ for folder in ('/usr/lib/panasms/management','/usr/lib/panasms'):
     try:Path(folder).rmdir()
     except OSError:pass
 Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)
+Path('/etc/panasms/sharing.json').unlink(missing_ok=True)
+Path('/var/lib/panasms-agent/sharing-transaction.json').unlink(missing_ok=True)
 root=Path('/var/lib/panasms-agent/backups')
 if root.exists() and not root.is_symlink():
     for p in root.iterdir():

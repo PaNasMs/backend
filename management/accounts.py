@@ -346,10 +346,17 @@ def execute(action, p):
             args += ["--gid", p["primaryGroup"]]
         command([*args, "--", target])
         current = pwd.getpwnam(target)
-        account_policy.save(current, {}, revoke=before != set(os.getgrouplist(target, current.pw_gid)))
+        changed_groups = before != set(os.getgrouplist(target, current.pw_gid))
+        account_policy.save(current, {}, revoke=changed_groups)
+        if changed_groups:
+            import sharing
+            sharing.disconnect(target)
     elif action == 'user.security':
         u = account(target)
         account_policy.save(u, {'disabled':bool(p.get('disabled')), 'panel':bool(p.get('panel')), 'ssh':bool(p.get('ssh')), 'expiry':p.get('expiry','')}, revoke=True)
+        if p.get('disabled'):
+            import sharing
+            sharing.disable(target)
         expiry = 1 if p.get('disabled') else account_policy.expiry(p.get('expiry',''))
         command(['chage','--expiredate',str(expiry),'--mindays',str(p['minDays']),'--maxdays',str(p['maxDays']),'--warndays',str(p['warnDays']),'--inactive',str(p['inactiveDays']),target])
         if p.get('forcePasswordChange'): command(['chage','--lastday','0',target])
@@ -359,6 +366,8 @@ def execute(action, p):
         account_ssh.apply()
         if p.get('disabled') or not p.get('ssh'): account_sessions.terminate(target)
     elif action == 'user.identity':
+        import sharing
+        sharing.disable(target)
         previous = account_policy.entry(account(target))
         command(['usermod','--uid',str(p['uid']),'--',target],timeout=86400)
         account_policy.save(pwd.getpwnam(target), previous, revoke=True)
@@ -370,6 +379,8 @@ def execute(action, p):
         command(["chpasswd"], data=target + ":" + p["password"] + "\n")
         account_policy.save(pwd.getpwnam(target), {}, revoke=True)
         if p.get("forcePasswordChange"): command(["chage","--lastday","0",target])
+        import sharing
+        sharing.sync_password(target, p["password"])
     elif action == "user.home":
         command(["usermod", "--home", p["home"], "--move-home", "--", target], timeout=86400)
         os.chmod(p["home"], 0o700)
@@ -396,6 +407,8 @@ def execute(action, p):
             require(status == 0, 'Some home files could not be deleted; the account was preserved')
             point.rmdir()
         account_policy.save(u, {"disabled":True,"panel":False,"ssh":False}, revoke=True)
+        import sharing
+        sharing.remove_account(target)
         command(["userdel", "--", target])
         account_ssh.apply()
     elif action == "group.create":
@@ -403,6 +416,8 @@ def execute(action, p):
     elif action == "group.edit":
         before = set(grp.getgrnam(target).gr_mem)
         command(["gpasswd", "--members", ",".join(p.get("members", [])), target])
+        import sharing
+        for username in before ^ set(p.get('members', [])): sharing.disconnect(username)
         if target == 'sudo':
             for username in before ^ set(p.get('members', [])):
                 account_policy.save(pwd.getpwnam(username), {}, revoke=True)

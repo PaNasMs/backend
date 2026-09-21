@@ -12,13 +12,14 @@ import (
 )
 
 type Identity struct {
-	Username  string `json:"username"`
-	Name      string `json:"name"`
-	UID       int    `json:"uid"`
-	Role      string `json:"role"`
-	Epoch     string `json:"epoch"`
-	Principal string `json:"principal"`
-	Created   string `json:"created"`
+	SMBSyncWarning bool   `json:"smbSyncWarning,omitempty"`
+	Username       string `json:"username"`
+	Name           string `json:"name"`
+	UID            int    `json:"uid"`
+	Role           string `json:"role"`
+	Epoch          string `json:"epoch"`
+	Principal      string `json:"principal"`
+	Created        string `json:"created"`
 }
 
 func Lookup(username string, allowed map[string]bool) (Identity, error) {

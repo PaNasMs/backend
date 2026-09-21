@@ -1,6 +1,6 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.3
+The Linux server for **Pavlo's NAS Management System**. The current 0.2.4
 prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
 system-management adapters. The deployed target is Raspberry Pi OS ARM64.
 
@@ -26,7 +26,7 @@ live in the Go store packages; there is no sqlc generation step.
 
 Linux users/groups, profiles and SSH keys; home relocation; disks and mdadm RAID;
 partitions, filesystems, LUKS and mounts; SMART checks and schedules; disk standby;
-CPU/disk cooling; external NFS/SMB mounts; NetworkManager Ethernet/Wi-Fi, access
+CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager Ethernet/Wi-Fi, access
 points and connection sharing; system services, journal, updates and power
 operations; module installation and the signed online catalog.
 
@@ -136,8 +136,8 @@ SSH sessions are discovered and terminated through `systemd-logind`.
 
 SSH restrictions use `/etc/ssh/sshd_config.d/60-panasms-users.conf`, validate effective
 OpenSSH configuration and reload the service. Disabling an account also expires it
-in Linux and terminates SSH sessions. Existing Samba credentials and SMB sessions
-are not managed by this section. Removing PaNasMs preserves Linux account state
+in Linux and terminates SSH sessions. Managed Samba access is also revoked; Linux group changes disconnect affected
+SMB sessions so access is evaluated again. Removing PaNasMs preserves Linux account state
 and this SSH policy rather than silently reopening access.
 
 ## Installation and operation
@@ -173,3 +173,51 @@ installer or a substitute for future upgrade migrations.
 Internal planning/deployment documents are not public. Public documentation is
 maintained in English. Original code: [PolyForm Noncommercial 1.0.0](LICENSE);
 third-party scope: [NOTICE](NOTICE).
+
+## Shared folders (system module)
+
+`management/sharing.py` owns local publications; it is part of core, not an
+installable package. External SMB/NFS mounts remain a separate storage feature.
+The `/sharing` page offers folder, SMB-account and connection tabs. A folder can
+be published through SMB, NFS, both, or neither; removing a publication never
+removes files. Existing legacy NFS exports remain visible and editable.
+
+- SMB access is explicitly enabled per Linux user. Shares select users/groups
+  for read or write access; Linux permissions remain the upper bound. Folder
+  owner/group/mode editing is nonrecursive and separate from publication.
+- Successful PAM password login, own-password change and administrator reset
+  synchronize the SMB password. Plaintext only crosses stdin in memory; it is
+  never stored in settings/jobs/logs. A sync failure has a visible account status
+  and login notification; a partial own-password failure still revokes sessions.
+- `panasms-sharing.timer` checks Linux account state every 30 seconds (up to five
+  seconds timer slack). External locks, expiry, UID changes and password changes
+  revoke stale SMB access. A successful panel password login provisions the new
+  password. SMB-disabled users need no Samba credentials.
+- NFS uses explicit client IP/subnet allowlists, numeric UID/GID and root_squash.
+  It is intended for trusted networks, without Kerberos. Remote root is not an
+  administrator of a published folder. Per-user SMB restrictions do not replace
+  NFS's underlying Unix permissions.
+- Joint SMB/NFS shares disable Samba oplocks and use strict locking; real SMB3
+  and NFS4 byte-range lock conflict tests cover the deployed Linux kernel.
+  SMB-only shares keep normal Samba caching defaults.
+- Managed fragments are `/etc/samba/panasms-shares.conf` and
+  `/etc/exports.d/panasms-shares.exports`; state is root-only
+  `/etc/panasms/sharing.json`. A persisted transaction journal restores prior
+  fragments/state on failure or agent startup. External fragment edits block
+  further edits until explicitly restored. Changes to unrelated administrator
+  configuration are not overwritten.
+- New installation replaces only the verified distribution-default Samba config,
+  saving its original. A customized existing Samba server requires manual review
+  and the managed include. Guest access and automatic home/printer publication
+  are not enabled. Removal stops managed publication and preserves user files;
+  an unchanged installer-owned global config is restored from its backup.
+
+Publication currently requires an existing folder on a mounted local data volume;
+root filesystem and remote-mount re-export are rejected. Spaces/configuration
+metacharacters in export paths are not supported. Create folders using Files
+before publishing them. SMB volume UUID checks and NFS mountpoint guards prevent
+publishing a fallback directory when a backing mount disappears. NFS and SMB
+publications also block destructive volume operations in the storage manager.
+
+References: [Samba configuration](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html)
+and [smbpasswd](https://www.samba.org/samba/docs/current/man-html/smbpasswd.8.html).

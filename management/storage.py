@@ -186,8 +186,10 @@ def mount_targets():
 def nfs_exports():
     path = Path("/var/lib/nfs/etab")
     raw = path.read_text() if path.exists() else ""
+    import sharing
+    managed = [s["path"] for s in sharing.read()["shares"] if s["smb"] or s["nfs"]]
     return sorted(
-        {
+        set(managed) | {
             re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[0])
             for line in raw.splitlines()
             if line.split()

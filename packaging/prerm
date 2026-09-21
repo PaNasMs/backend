@@ -16,7 +16,11 @@ if p.exists():
 CHECK
  systemctl stop 'panasms-fs-check@*.service' || true
  systemctl stop panasms-core.service panasms-agent.service
+ systemctl stop panasms-sharing.timer panasms-sharing.service || true
  if [ "$1" = remove ]; then
+  systemctl disable panasms-sharing.timer || true
+  python3 /usr/lib/panasms/management/sharing.py --remove
+  python3 /usr/lib/panasms/sharing-install.py --remove
   systemctl stop panasms-network-sharing.service || true
   if [ -f /var/lib/panasms-agent/network-sharing/groups.json ]; then
    python3 /usr/lib/panasms/management/network_sharing.py --remove

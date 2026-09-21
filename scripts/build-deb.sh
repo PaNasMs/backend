@@ -20,6 +20,7 @@ cp -R "$assets/." "$stage/usr/share/panasms/ui/"
 install -d "$stage/usr/lib/panasms/management" "$stage/etc/panasms/module-keys"
 install -m 0644 packaging/panasms-local.pem packaging/panasms-ci.pem "$stage/etc/panasms/module-keys/"
 install -m 0644 management/*.py "$stage/usr/lib/panasms/management/"
+install -m 0644 packaging/sharing-install.py "$stage/usr/lib/panasms/sharing-install.py"
 install -m 0644 packaging/profile-keys.py "$stage/usr/lib/panasms/profile-keys.py"
 install -m 0755 packaging/start-agent "$stage/usr/lib/panasms/start-agent"
 install -m 0755 packaging/panasms-uninstall "$stage/usr/sbin/panasms-uninstall"
@@ -33,12 +34,12 @@ for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$scri
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-prototype
-Version: 0.2.3
+Version: 0.2.4
 Section: admin
 Priority: optional
 Architecture: $arch
 Maintainer: PaNasMs local development
-Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, smartmontools, psmisc, hdparm, rsync
+Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.3_${arch}.deb"
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.4_${arch}.deb"

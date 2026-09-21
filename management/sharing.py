@@ -272,8 +272,19 @@ def sync_password(user,password):
         except Exception:
             record['status'] = 'error'
             atomic(STATE,json.dumps(state))
-            raise Rejected('Linux password accepted, but SMB password synchronization failed. See Shared folders → Accounts and retry by signing in again.')
+            raise Rejected('Linux password accepted, but SMB password synchronization failed. See Users → Security and retry by signing in again.')
         atomic(STATE,json.dumps(state))
+
+
+def account_status(username):
+    record = read()['accounts'].get(username, {})
+    user = pwd.getpwnam(username)
+    if record.get('uid') != user.pw_uid:
+        return {'enabled': False, 'status': 'disabled'}
+    status = record.get('status', 'pending')
+    if record.get('enabled') and status == 'ready' and record.get('passwordRevision') != password_revision(username):
+        status = 'pending'
+    return {'enabled': bool(record.get('enabled')), 'status': status}
 
 
 def query():
@@ -309,6 +320,6 @@ if __name__ == '__main__':
             with locked(): recover()
         print(json.dumps({}))
     except Exception:
-        message = 'SMB password synchronization failed; see Shared folders → Accounts' if sys.argv[1:] == ['--sync'] else 'Sharing operation failed; check Samba/NFS service logs and the recovery status in Shared folders'
+        message = 'SMB password synchronization failed; see Users → Security' if sys.argv[1:] == ['--sync'] else 'Sharing operation failed; check Samba/NFS service logs and the recovery status in Shared folders'
         print(json.dumps({'error':message}))
         sys.exit(1)

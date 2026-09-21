@@ -440,7 +440,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.Audit(id.Username, id.Username, "login", "succeeded")
-	s.Store.Alert("smb-password:"+id.Username, "SMB password synchronization failed for "+id.Username+". Sign in again to retry or ask an administrator to check Shared folders / SMB accounts.", id.SMBSyncWarning)
+	s.Store.Alert("smb-password:"+id.Username, "SMB password synchronization failed for "+id.Username+". Sign in again to retry or ask an administrator to check Users / Security.", id.SMBSyncWarning)
 	s.cookie(w, token, 28800)
 	jsonResponse(w, 200, id)
 }

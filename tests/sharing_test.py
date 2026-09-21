@@ -79,6 +79,15 @@ class SharingTest(unittest.TestCase):
             sharing.reconcile()
         disable.assert_called_once_with(u.pw_name)
         self.assertEqual(sharing.read()['accounts'][u.pw_name]['status'],'disabled')
+    def test_user_status_does_not_expose_password_revision(self):
+        u=sharing.pwd.getpwuid(sharing.os.getuid())
+        sharing.STATE.write_text(sharing.json.dumps({'shares':[],'accounts':{u.pw_name:{'uid':u.pw_uid,'enabled':True,'status':'ready','passwordRevision':'old'}}}))
+        with patch.object(sharing,'password_revision',return_value='new'):
+            self.assertEqual(sharing.account_status(u.pw_name),{'enabled':True,'status':'pending'})
+    def test_user_status_ignores_reused_username(self):
+        u=sharing.pwd.getpwuid(sharing.os.getuid())
+        sharing.STATE.write_text(sharing.json.dumps({'shares':[],'accounts':{u.pw_name:{'uid':u.pw_uid+1,'enabled':True,'status':'ready'}}}))
+        self.assertEqual(sharing.account_status(u.pw_name),{'enabled':False,'status':'disabled'})
     def test_reused_account_does_not_receive_password(self):
         u=sharing.pwd.getpwuid(sharing.os.getuid())
         sharing.STATE.write_text(sharing.json.dumps({'shares':[],'accounts':{u.pw_name:{'uid':u.pw_uid+1,'enabled':True}}}))

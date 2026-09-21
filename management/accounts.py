@@ -156,6 +156,8 @@ def query(target=None):
         require(user is not None, 'User not found')
         user['keys'] = []
         if user['category'] != 'service':
+            import sharing
+            user['smb'] = sharing.account_status(target)
             try: user['keys'] = key_operation(target, {'action':'list'})
             except Rejected as error: user['keysError'] = str(error)
         return user

@@ -40,7 +40,7 @@ func SyncSMB(ctx context.Context, user, password string) error {
 	cmd := exec.CommandContext(ctx, "/usr/bin/python3", "/usr/lib/panasms/management/sharing.py", "--sync")
 	cmd.Stdin = bytes.NewReader(raw)
 	if err := cmd.Run(); err != nil {
-		return errors.New("Linux password accepted, but SMB synchronization failed. See Shared folders / Accounts; sign in again to retry.")
+		return errors.New("Linux password accepted, but SMB synchronization failed. See Users / Security; sign in again to retry.")
 	}
 	return nil
 }

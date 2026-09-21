@@ -178,7 +178,8 @@ third-party scope: [NOTICE](NOTICE).
 
 `management/sharing.py` owns local publications; it is part of core, not an
 installable package. External SMB/NFS mounts remain a separate storage feature.
-The `/sharing` page offers folder, SMB-account and connection tabs. A folder can
+The `/sharing` page offers folder and connection tabs. SMB access and password
+synchronization status belong to each user’s Security tab in Users. A folder can
 be published through SMB, NFS, both, or neither; removing a publication never
 removes files. Existing legacy NFS exports remain visible and editable.
 

@@ -35,6 +35,14 @@ use server-side validation and the management plan/run workflow. UI visibility
 is not an authorization boundary. Dedicated firewall and LVM management remain
 outside the current interface.
 
+Realtek USB Ethernet adapters that initially expose a driver CD-ROM as
+`0bda:8152` are switched to Ethernet mode by a packaged udev rule using
+`usb-modeswitch`. The rule requires a USB mass-storage interface and targets the
+exact USB bus/device address; ordinary RTL8152 network interfaces are left alone.
+It runs on attachment and is also applied to matching devices during installation.
+Removing the package removes the rule. The switch message is documented in the
+[USB_ModeSwitch device discussion](https://www.draisberghof.de/usb_modeswitch/bb/viewtopic.php?t=2972).
+
 ## Task cancellation and recovery
 
 The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional

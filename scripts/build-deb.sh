@@ -28,7 +28,7 @@ install -m 0755 packaging/panasms-inspect-hardware "$stage/usr/sbin/panasms-insp
 install -m 0755 packaging/panasms-configure "$stage/usr/sbin/panasms-configure"
 install -m 0644 packaging/pam "$stage/etc/pam.d/panasms"
 install -d "$stage/usr/lib/udev/rules.d"
-install -m 0644 packaging/99-panasms-filesystems.rules "$stage/usr/lib/udev/rules.d/"
+install -m 0644 packaging/*.rules "$stage/usr/lib/udev/rules.d/"
 install -m 0644 packaging/*.service packaging/*.timer "$stage/usr/lib/systemd/system/"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
@@ -39,7 +39,7 @@ Section: admin
 Priority: optional
 Architecture: $arch
 Maintainer: PaNasMs local development
-Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
+Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, usb-modeswitch, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
 dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.5_${arch}.deb"

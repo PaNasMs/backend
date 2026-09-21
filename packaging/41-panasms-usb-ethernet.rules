@@ -1,0 +1,3 @@
+# Some RTL8153 adapters boot as 0bda:8152 driver CDs. Real RTL8152 NICs use the same ID; only switch the storage interface.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="8152", IMPORT{builtin}="usb_id"
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0bda", ATTR{idProduct}=="8152", ENV{ID_USB_INTERFACES}=="*:080650:*", RUN+="/usr/sbin/usb_modeswitch -b $env{BUSNUM} -g $env{DEVNUM} -v 0x0bda -p 0x8152 -M 555342430860d9a9c0000000800006e0000000000000000000000000000000"

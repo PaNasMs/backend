@@ -22,6 +22,8 @@ case "${1:-}" in
   printf '%s\n' /etc/panasms/panasms.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm > /var/lib/panasms-installer/generated-files
   python3 /usr/lib/panasms/sharing-install.py
   systemctl daemon-reload
+  udevadm control --reload-rules
+  udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=0bda --attr-match=idProduct=8152
   systemctl enable --now panasms-sharing.timer
   echo 'Installed, not started. Run sudo panasms-configure to enable HTTP on port 80.'
  ;;

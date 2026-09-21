@@ -195,6 +195,7 @@ def check():
     if previous.get('channel')==channel:
         require(data['generatedAt']>=previous.get('generatedAt',''),'Update catalog is older than the previously verified catalog')
     data['checkedAt']=dt.datetime.now(dt.timezone.utc).isoformat();save('catalog.json',data)
+    phase('checking',version=(data.get('releases') or [{}])[0].get('version'))
     return data
 
 

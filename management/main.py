@@ -11,6 +11,7 @@ import host
 import web_access
 import sharing
 import module_manager
+import module_sources
 import module_catalog
 import network
 import job_control
@@ -56,6 +57,7 @@ def dispatch(mode, user, request):
             result = module_manager.list_modules()
             if not admin: result['installed'] = [m for m in result['installed'] if m['id'] == 'files']
             return result
+        if view == "module-sources": return {"sources": module_sources.sources()}
         if view == "module-catalog":
             return module_catalog.list_available()
         extensions = module_manager.load_operations("queries", view)
@@ -70,7 +72,7 @@ def dispatch(mode, user, request):
     require(isinstance(params, dict), 'Parameters must be an object')
     extensions = module_manager.load_operations("actions", action)
     module = next(
-        (m for m in (storage, accounts, host, web_access, sharing, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
+        (m for m in (storage, accounts, host, web_access, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
         None,
     )
     require(module, 'Unknown operation')

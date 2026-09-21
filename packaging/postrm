@@ -12,6 +12,7 @@ if [ "${1:-}" = purge ]; then
  python3 - <<'CLEAN'
 from pathlib import Path
 import re
+import json
 import shutil
 for folder in ('/var/lib/panasms-modules', '/var/lib/panasms-agent/module-uploads'):
     path=Path(folder)
@@ -43,6 +44,15 @@ for folder, names in (('/var/lib/panasms-agent/network-sharing', ('pending.json'
 for folder in ('/usr/lib/panasms/management','/usr/lib/panasms'):
     try:Path(folder).rmdir()
     except OSError:pass
+sources=Path('/etc/panasms/module-sources.json')
+keys=Path('/etc/panasms/module-keys')
+if sources.is_file() and not sources.is_symlink() and keys.is_dir() and not keys.is_symlink():
+    for source in json.loads(sources.read_text()):
+        for signer in source.get('signers', []):
+            if re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', signer) and not signer.startswith('panasms-'):
+                key=keys/(signer+'.pem')
+                if key.is_file() and not key.is_symlink() and key.stat().st_uid==0:key.unlink()
+sources.unlink(missing_ok=True)
 Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)
 Path('/etc/panasms/sharing.json').unlink(missing_ok=True)
 Path('/var/lib/panasms-agent/sharing-transaction.json').unlink(missing_ok=True)

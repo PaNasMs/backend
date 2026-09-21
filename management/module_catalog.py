@@ -5,6 +5,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 import job_control
+import module_sources
 from common import *
 import module_manager as manager
 
@@ -15,14 +16,15 @@ ACTIONS = {'module.catalog-install'}
 
 class Redirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        parsed = urllib.parse.urlsplit(newurl)
-        require(parsed.scheme == 'https' and parsed.hostname in
-                ('github.com', 'release-assets.githubusercontent.com', 'panasms.github.io'),
-                'Unexpected module download redirect')
+        try:
+            module_sources.url(newurl.split('?', 1)[0])
+        except (Rejected, ValueError):
+            raise Rejected('Unexpected module download redirect')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def download(url, limit, timeout=10):
+    module_sources.url(url.split('?', 1)[0])
     try:
         request = urllib.request.Request(url, headers={'User-Agent': 'PaNasMs/0.2'})
         with urllib.request.build_opener(Redirects).open(request, timeout=timeout) as response:
@@ -41,8 +43,9 @@ def download(url, limit, timeout=10):
         raise Rejected('Module catalog download failed. Check the internet connection and try again.') from error
 
 
-def verify(raw, envelope):
-    require(envelope.get('algorithm') == 'Ed25519' and envelope.get('signer') in ('panasms-local', 'panasms-ci'),
+def verify(raw, envelope, allowed=None, keys=None):
+    require(isinstance(envelope, dict), 'Invalid module catalog signature')
+    require(envelope.get('algorithm') == 'Ed25519' and envelope.get('signer') in (allowed if allowed is not None else ('panasms-local', 'panasms-ci')),
             'Untrusted module catalog signer')
     try:
         signature = base64.b64decode(envelope['signature'], validate=True)
@@ -55,17 +58,19 @@ def verify(raw, envelope):
         (root / 'signature').write_bytes(signature)
         try:
             command(['openssl', 'pkeyutl', '-verify', '-pubin', '-inkey',
-                     str(manager.KEYS / (envelope['signer'] + '.pem')), '-rawin', '-in',
+                     str((keys or manager.KEYS) / (envelope['signer'] + '.pem')), '-rawin', '-in',
                      str(root / 'data'), '-sigfile', str(root / 'signature')])
         except Rejected:
             raise Rejected('Invalid module catalog signature')
 
 
-def catalog():
-    raw = download(URL + 'catalog.json', 2 * 1024 * 1024)
-    verify(raw, json.loads(download(URL + 'catalog.sig', 4096)))
+def read_catalog(source):
+    base = source['url']
+    raw = download(base + 'catalog.json', 2 * 1024 * 1024)
+    verify(raw, json.loads(download(base + 'catalog.sig', 4096)), allowed=source['signers'])
     data = json.loads(raw)
-    require(data.get('schemaVersion') == 1 and data.get('id') == 'panasms-official',
+    require(isinstance(data, dict), 'Unsupported module catalog format')
+    require(data.get('schemaVersion') == 1 and data.get('id') == source['id'],
             'Unsupported module catalog format')
     releases = {}
     for item in data['modules']:
@@ -76,15 +81,37 @@ def catalog():
             m = entry['manifest']
             require(m['id'] == mid, 'Module catalog identity mismatch')
             manager.version(m['version'])
-            expected = re.escape(f"/{mid}-v{m['version']}/{mid}-{m['version']}-{m['architecture']}.panasms")
-            require(re.fullmatch(r'https://github.com/PaNasMs/[a-z][a-z0-9-]*/releases/download' + expected, entry['url']),
-                    'Untrusted module download URL')
+            require(m.get('signer') in source['signers'], 'Module publisher differs from repository publisher')
+            module_sources.url(entry['url'])
+            if source.get('official'):
+                expected = re.escape(f"/{mid}-v{m['version']}/{mid}-{m['version']}-{m['architecture']}.panasms")
+                require(re.fullmatch(r'https://github.com/PaNasMs/[a-z][a-z0-9-]*/releases/download' + expected, entry['url']),
+                        'Untrusted module download URL')
+            entry['repository'] = source['id']
             require(type(entry['size']) is int and 0 < entry['size'] <= MAX_ARCHIVE
                     and re.fullmatch('[a-f0-9]{64}', entry['sha256']), 'Invalid module download metadata')
             if entry['channel'] == 'stable':
                 releases[mid].append(entry)
         releases[mid].sort(key=lambda e: manager.version(e['manifest']['version']), reverse=True)
     return releases
+
+
+def catalog(errors=None):
+    result = {}
+    for source in module_sources.sources():
+        try:
+            releases = read_catalog(source)
+            for mid, entries in releases.items():
+                if mid in result:
+                    if errors is not None:
+                        errors.append({'repository': source['id'], 'error': 'Duplicate module ID: ' + mid})
+                    continue
+                result[mid] = entries
+        except (Rejected, ValueError, KeyError, TypeError) as error:
+            if errors is None:
+                raise
+            errors.append({'repository': source['id'], 'error': str(error)})
+    return result
 
 
 def compatible(entry):
@@ -98,23 +125,27 @@ def compatible(entry):
 def list_available():
     result = []
     installed = manager.registry()
-    for mid, releases in catalog().items():
+    errors = []
+    for mid, releases in catalog(errors).items():
         if not releases:
             continue
         entry = next((e for e in releases if not compatible(e)), releases[0])
         m = entry['manifest']
         reason = compatible(entry)
         current = installed.get(mid)
+        if current and current.get('signer') != m.get('signer'):
+            reason = 'Installed module belongs to another publisher'
         result.append({**m, 'requiredBy': [], 'enabled': False, 'reason': reason,
+                       'repository': entry['repository'],
                        'updateAvailable': bool(current and manager.version(m['version']) > manager.version(current['version']))})
-    return {'available': result}
+    return {'available': result, 'errors': errors}
 
 
 def selection(p):
     mid = manager.identifier(p.get('target'))
     requested = p.get('version')
     manager.version(requested)
-    releases, installed = catalog(), manager.registry()
+    releases, installed = catalog([]), manager.registry()
     chosen, visiting = {}, set()
 
     def visit(name, constraint, root=False):
@@ -128,7 +159,7 @@ def selection(p):
             return
         entry = next((e for e in releases.get(name, []) if not compatible(e)
                       and manager.satisfies(e['manifest']['version'], constraint)
-                      and (not current or manager.version(e['manifest']['version']) >= manager.version(current['version']))), None)
+                      and (not current or (e['manifest'].get('signer') == current.get('signer') and manager.version(e['manifest']['version']) >= manager.version(current['version'])))), None)
         require(entry, 'No compatible module release: ' + name)
         chosen[name] = entry
         visiting.add(name)

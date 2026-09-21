@@ -187,8 +187,8 @@ status database on both architectures. SSH server support remains optional and i
 available when OpenSSH server is installed; hardware-specific cooling is a separate package.
 
 Administrators can also change the HTTP port in Settings → General, alongside CPU
-cooling. Occupied and browser-blocked ports are rejected. The panel restarts; open
-the displayed new address. Failed startup restores the previous port. The choice
+cooling. Occupied and browser-blocked ports are rejected. The panel restarts; the browser checks the new address and redirects automatically when it responds.
+A manual link remains available if the browser cannot verify it. Failed startup restores the previous port. The choice
 is stored in `/etc/panasms/web.env` and survives package upgrades. The source
 installer accepts `--port PORT` too.
 
@@ -266,3 +266,32 @@ publications also block destructive volume operations in the storage manager.
 
 References: [Samba configuration](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html)
 and [smbpasswd](https://www.samba.org/samba/docs/current/man-html/smbpasswd.8.html).
+
+## Additional module repositories
+
+Administrators can manage catalog URLs from the repository icon in Modules.
+The official `https://panasms.github.io/module-registry/` source is added by default.
+Removing a source keeps installed modules; an empty list permits file installation.
+Configuration is stored in `/etc/panasms/module-sources.json`.
+
+A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique
+catalog id), `catalog.sig` (Ed25519 envelope), and `keys/<signer>.pem` (Ed25519
+public key). Use a unique publisher id; `panasms-*` is reserved. Its catalog and
+module archives must use that publisher's key. The add dialog displays the key's
+SHA-256 fingerprint before granting trust. Compare it with the publisher's
+independently supplied fingerprint. A key change requires explicit reconfiguration;
+a reused publisher id with a different key is rejected.
+
+Use the official registry schema as a template: each module has `id` and `releases`;
+each stable release provides its signed `manifest`, HTTPS archive `url`, byte `size`,
+`sha256`, and `channel: stable`. The archive uses the existing PaNasMs bundle format
+and SDK signing procedure. Archive size limits, hashes, signatures, compatibility
+and dependency checks apply equally to every source. Downloads may redirect over
+HTTPS (including GitHub release assets). Repository URLs do not accept credentials,
+query parameters, fragments or nonstandard ports.
+
+Sources have deterministic priority in configured order; a duplicate module id
+from a later source is reported and ignored. Updates cannot silently replace an
+installed module with another publisher's module. An unavailable source reports
+its own error while healthy sources remain visible. Removing the last source for
+a custom publisher removes its trusted key; running installed modules are retained.

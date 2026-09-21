@@ -139,7 +139,7 @@ func (s *Server) Handler() http.Handler {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'"+healthConnectSource(r.Host)+"; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.Header().Set("Cache-Control", "no-store")
 			}
@@ -157,7 +157,8 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.5"})
+		allowHealthProbe(w, r)
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.5", "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Group(func(r chi.Router) {

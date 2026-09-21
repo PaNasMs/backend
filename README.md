@@ -1,8 +1,11 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.5
+The Linux server for **Pavlo's NAS Management System**. The current 0.2.x
 prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
 system-management adapters. The deployed target is Raspberry Pi OS ARM64.
+
+[Project website](https://panasms.github.io/) ·
+[System update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
 
 ## Architecture
 
@@ -304,3 +307,13 @@ its own journal and code across package replacement. It updates the core package
 leaving Linux distribution upgrades and hardware cooling separate. The default is
 stable with notifications only. See the [update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
 for publication, trust, backup and recovery guarantees and limitations.
+
+## Actionable notifications
+
+Alert responses include a severity classification independently of whether the
+alert is active. Task notifications expose the original job details and recovery
+context. Known failures before mutation can be recorded as requiring no review;
+failed or interrupted operations with uncertain outcomes remain reviewable.
+Acknowledging an operation resolves its task alert, and resolved notifications
+can be dismissed per user. Clearing notification history does not acknowledge
+unreviewed work or reset an active hardware condition.

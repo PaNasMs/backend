@@ -142,7 +142,12 @@ def execute(action,p,user=None):
             return {'message':'Update preferences saved'}
         operation=action.rsplit('.',1)[1]
         worker=ROOT/'worker';worker.mkdir(exist_ok=True)
-        for name in ('system_updates.py','common.py'):shutil.copy2(Path(__file__).parent/name,worker/name)
+        for name in ('system_updates.py','common.py'):
+            shutil.copy2(Path(__file__).parent/name,worker/name)
+            with (worker/name).open('rb') as file:os.fsync(file.fileno())
+        fd=os.open(worker,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
         save('state.json',{'id':uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':(query()['candidate'] or {}).get('version'),'error':''})
         try:run(['systemctl','start','--no-block','panasms-update.service'],timeout=30)
         except Exception:
@@ -162,6 +167,8 @@ def phase(value, **extra):
 def finish(value,error=''):
     phase(value,error=error,finishedAt=dt.datetime.now(dt.timezone.utc).isoformat())
     rows=read('history.json',[]);rows.insert(0,read('state.json',{}));save('history.json',rows[:30])
+    if value=='rolled-back':
+        b=read('backup.json',{});b['complete']=False;save('backup.json',b)
 
 
 def fetch(url,limit):
@@ -326,7 +333,6 @@ def restore(boot=False):
     for suffix in ('','-wal','-shm'):Path('/var/lib/panasms-agent/jobs.db'+suffix).unlink(missing_ok=True)
     run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/'],timeout=180)
     if not boot:start(b['units']);healthy()
-    b['complete']=False;save('backup.json',b)
 
 
 def work():

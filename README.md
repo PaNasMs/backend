@@ -168,11 +168,21 @@ and this SSH policy rather than silently reopening access.
 
 ## Installation and operation
 
-On the target Debian-based machine, install the generated prototype package with
-`apt install ./<package>.deb` so OS dependencies are resolved, then run
+On the target Debian-based machine, run `sudo apt update`, then install the generated
+prototype package with `sudo apt install ./<package>.deb` so OS dependencies are
+resolved, then run
 `sudo panasms-configure`. It requires an existing non-root user in the Linux
 `sudo` group; it does not create an administrator. Review hardware support before
 installing/configuring the optional cooling package.
+
+The package declares required runtime tools in Debian `Depends`, including mdadm
+and initramfs-tools for RAID, partition/filesystem and SMART utilities,
+NetworkManager and wpasupplicant for Ethernet/Wi-Fi, Samba/NFS tools, and PAM/session
+support. They are installed even with `--no-install-recommends`; access to the
+configured distribution repositories is required. `dpkg -i` alone does not download
+dependencies. CI resolves the complete dependency tree using an empty installed-package
+status database on both architectures. SSH server support remains optional and is
+available when OpenSSH server is installed; hardware-specific cooling is a separate package.
 
 The packaged prototype serves HTTP on port 80. The core binary also accepts TLS
 certificate/key flags. Runtime configuration is in `/etc/panasms/panasms.env`;

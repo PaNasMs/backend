@@ -27,6 +27,22 @@ class PackagingTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(b"version", result.stderr)
 
+    def test_core_runtime_dependencies_are_mandatory(self):
+        script = (ROOT / "scripts/build-deb.sh").read_text()
+        depends = next(line for line in script.splitlines() if line.startswith("Depends: "))
+        packages = set(depends.removeprefix("Depends: ").split(", "))
+        required = {
+            "raid": {"mdadm", "initramfs-tools"},
+            "storage": {"fdisk", "mount", "util-linux", "parted", "smartmontools", "hdparm"},
+            "network": {"network-manager", "wpasupplicant", "python3-dbus", "iw", "dnsmasq-base", "nftables"},
+            "sharing": {"samba", "samba-common-bin", "smbclient", "cifs-utils", "nfs-common", "nfs-kernel-server", "acl"},
+            "accounts": {"passwd", "libpam-modules", "libpam-systemd", "rsync"},
+            "registry": {"ca-certificates", "openssl"},
+        }
+        for feature, dependencies in required.items():
+            with self.subTest(feature=feature):
+                self.assertFalse(dependencies - packages, dependencies - packages)
+
     def test_shell_syntax(self):
         for name in ["preinst", "postinst", "prerm", "postrm", "panasms-configure", "start-agent"]:
             subprocess.run(["sh", "-n", str(ROOT / "packaging" / name)], check=True)

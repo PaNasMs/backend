@@ -41,7 +41,7 @@ Section: admin
 Priority: optional
 Architecture: $arch
 Maintainer: PaNasMs local development
-Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, usb-modeswitch, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
+Depends: libc6, libpam0g, libpam-runtime, libpam-modules, libpam-systemd, systemd, adduser, openssl, ca-certificates, util-linux, mount, fdisk, initramfs-tools, udev, usb-modeswitch, python3, python3-dbus, network-manager, wpasupplicant, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
 dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_${version}_${arch}.deb"

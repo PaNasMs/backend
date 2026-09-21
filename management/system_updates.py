@@ -368,15 +368,17 @@ def work():
                 finish('failed',str(e))
 
 
-def recover():
+def recover(boot=True):
     with locked():
         s=read('state.json',{})
         if s.get('phase') in ('installing','verifying','rolling-back'):
             try:
-                os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore(boot=True)
+                os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore(boot=boot)
                 finish('rolled-back','Interrupted update restored during boot')
             except Exception as e:finish('recovery-required',str(e));raise
-        elif s.get('phase') in ACTIVE:finish('failed','Update interrupted before package installation; previous version retained')
+        elif s.get('phase') in ACTIVE:
+            if not boot:start(read('active-units.json',[]))
+            finish('failed','Update interrupted before package installation; previous version retained')
 
 
 def cleanup():
@@ -408,5 +410,5 @@ def tick():
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','tick']);a=p.parse_args()
-    {'work':work,'recover':recover,'tick':tick}[a.mode]()
+    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','recover-runtime','tick']);a=p.parse_args()
+    {'work':work,'recover':recover,'recover-runtime':lambda:recover(boot=False),'tick':tick}[a.mode]()

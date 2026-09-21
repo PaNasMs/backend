@@ -200,3 +200,26 @@ func TestLanguageDefaultPersistenceAndIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestNotificationSeverityRetainsErrorAfterReview(t *testing.T) {
+	s, e := Open(filepath.Join(t.TempDir(), "alerts.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	s.Alert("job:failed", "Operation file.mkdir: rejected", true)
+	s.Alert("job:failed", "Operation file.mkdir: rejected", false)
+	s.Inform("update:result:complete", "PaNasMs update: complete")
+	alerts, e := s.Alerts()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, a := range alerts {
+		if a.ID == "job:failed" && (a.Active || a.Severity != "error") {
+			t.Fatal(a)
+		}
+		if a.ID == "update:result:complete" && a.Severity != "success" {
+			t.Fatal(a)
+		}
+	}
+}

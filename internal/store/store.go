@@ -9,6 +9,7 @@ import (
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -146,13 +147,39 @@ func (s *Store) MetricsHistory(hours int) ([]json.RawMessage, error) {
 }
 
 type Alert struct {
-	ID      string `json:"id"`
-	Message string `json:"message"`
-	Active  bool   `json:"active"`
-	Created string `json:"created"`
-	Updated string `json:"updated"`
+	Severity string `json:"severity"`
+	ID       string `json:"id"`
+	Message  string `json:"message"`
+	Active   bool   `json:"active"`
+	Created  string `json:"created"`
+	Updated  string `json:"updated"`
 }
 
+func alertSeverity(id, message string) string {
+	switch {
+	case strings.HasPrefix(id, "job:"):
+		if strings.Contains(message, "Cancelled") {
+			return "warning"
+		}
+		return "error"
+	case strings.HasPrefix(id, "update:result:"):
+		if strings.Contains(message, "recovery-required") || strings.Contains(message, "failed") {
+			return "error"
+		}
+		if strings.Contains(message, "rolled-back") {
+			return "warning"
+		}
+		return "success"
+	case strings.HasPrefix(id, "device:") && strings.Contains(message, "check storage."):
+		return "warning"
+	case strings.HasPrefix(message, "SMART: disk failure:"):
+		return "error"
+	case strings.HasPrefix(id, "smart:"), strings.HasPrefix(id, "heat:"), id == "cpu-hot", id == "system-full", id == "cooling-stale":
+		return "warning"
+	default:
+		return "info"
+	}
+}
 func (s *Store) Alert(id, message string, active bool) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if active {
@@ -177,6 +204,7 @@ func (s *Store) Alerts() ([]Alert, error) {
 		if e = rows.Scan(&a.ID, &a.Message, &a.Active, &a.Created, &a.Updated); e != nil {
 			return nil, e
 		}
+		a.Severity = alertSeverity(a.ID, a.Message)
 		data = append(data, a)
 	}
 	return data, rows.Err()

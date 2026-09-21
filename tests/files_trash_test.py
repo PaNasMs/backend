@@ -170,7 +170,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
 
     def test_current_folder_only_and_stale_revision(self):
         import subprocess
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "tmp") as tmp:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
             parent = Path(tmp)
             child = parent / "unchanged"
             child.mkdir(mode=0o700)
@@ -188,7 +188,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
                     files.execute("file.permissions", params, "admin")
 
     def test_batch_files_and_folders_preserve_unchanged_bits_and_preflight(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "tmp") as tmp:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
             folder = Path(tmp) / "folder"
             folder.mkdir(mode=0o750)
             file = Path(tmp) / "file"
@@ -214,7 +214,7 @@ class AdministratorPermissionsTest(unittest.TestCase):
                     files.permission_selection("admin", [str(link)])
 
     def test_rejects_system_paths_symlinks_and_network_filesystems(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "tmp") as tmp:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
             link = Path(tmp) / "link"
             link.symlink_to(tmp, target_is_directory=True)
             with patch.object(files, "permission_admin"):

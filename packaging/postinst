@@ -19,7 +19,7 @@ case "${1:-}" in
    chmod 0640 /etc/panasms/panasms.env
    chown root:panasms /etc/panasms/panasms.env
   fi
-  printf '%s\n' /etc/panasms/panasms.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm > /var/lib/panasms-installer/generated-files
+  printf '%s\n' /etc/panasms/panasms.env /etc/panasms/web.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm > /var/lib/panasms-installer/generated-files
   python3 /usr/lib/panasms/sharing-install.py
   systemctl daemon-reload
   udevadm control --reload-rules

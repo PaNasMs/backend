@@ -6,7 +6,7 @@ if [ "${1:-}" = purge ]; then
  for dir in /etc/panasms /var/lib/panasms /var/lib/panasms-installer /var/lib/panasms-agent; do
   if [ -L "$dir" ]; then echo "Refusing purge through symlink: $dir" >&2; exit 1; fi
  done
- for file in /etc/panasms/panasms.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm /var/lib/panasms-agent/jobs.db /var/lib/panasms-agent/jobs.db-wal /var/lib/panasms-agent/jobs.db-shm; do
+ for file in /etc/panasms/panasms.env /etc/panasms/web.env /etc/panasms/tls.key /etc/panasms/tls.crt /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm /var/lib/panasms-agent/web-access.lock /var/lib/panasms-agent/web-access.json /var/lib/panasms-agent/jobs.db /var/lib/panasms-agent/jobs.db-wal /var/lib/panasms-agent/jobs.db-shm; do
   rm -f -- "$file"
  done
  python3 - <<'CLEAN'

@@ -8,6 +8,7 @@ from common import *
 import storage
 import accounts
 import host
+import web_access
 import sharing
 import module_manager
 import module_catalog
@@ -37,6 +38,7 @@ def dispatch(mode, user, request):
     if mode == "query":
         view = request.get("view")
         target = request.get("target", "")
+        if view == "web-access": return web_access.query()
         if view == 'accounts': return accounts.query()
         if view == 'account-details': return accounts.query(target)
         if view == 'account-sessions': return accounts.account_sessions.sessions(target)
@@ -68,7 +70,7 @@ def dispatch(mode, user, request):
     require(isinstance(params, dict), 'Parameters must be an object')
     extensions = module_manager.load_operations("actions", action)
     module = next(
-        (m for m in (storage, accounts, host, sharing, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
+        (m for m in (storage, accounts, host, web_access, sharing, network, module_manager, module_catalog, *extensions) if action in m.ACTIONS),
         None,
     )
     require(module, 'Unknown operation')

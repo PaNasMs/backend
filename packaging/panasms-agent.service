@@ -6,6 +6,7 @@ After=local-fs.target
 User=root
 Group=panasms
 EnvironmentFile=/etc/panasms/panasms.env
+ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/web_access.py --recover
 ExecStartPre=-/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/python3 /usr/lib/panasms/management/homes.py --recover
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/module_manager.py --recover
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing.py --recover

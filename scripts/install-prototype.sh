@@ -1,11 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-usage() { echo 'Usage: sudo scripts/install-prototype.sh [--build-user USER] [--disk-fan] --assets /path/to/frontend/dist'; }
-admin=${SUDO_USER:-} assets= disk_fan=0
+usage() { echo 'Usage: sudo scripts/install-prototype.sh [--build-user USER] [--disk-fan] [--port PORT] --assets /path/to/frontend/dist'; }
+admin=${SUDO_USER:-} assets= disk_fan=0 port=
 while (($#)); do
  case "$1" in
   --build-user) admin=${2:?missing user}; shift 2;;
   --assets) assets=${2:?missing assets}; shift 2;;
+  --port) port=${2:?missing port}; shift 2;;
   --disk-fan) disk_fan=1; shift;;
   -h|--help) usage; exit 0;;
   *) usage >&2; exit 2;;
@@ -34,8 +35,12 @@ case "$arch" in
  amd64) go_sha=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445;;
  *) echo "Unsupported architecture: $arch" >&2; exit 1;;
 esac
+if [[ -n $port ]]; then
+ [[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || { echo 'HTTP port must be between 1 and 65535.' >&2; exit 1; }
+ port=$((10#$port))
+fi
 if ! dpkg-query -W -f='${Status}' panasms-prototype 2>/dev/null | grep -q 'install ok installed'; then
- if [[ -n $(ss -H -ltn '( sport = :80 )') ]]; then echo 'Port 80 is already occupied.' >&2; exit 1; fi
+ if [[ -n $(ss -H -ltn "( sport = :${port:-80} )") ]]; then echo "Port ${port:-80} is already occupied." >&2; exit 1; fi
 fi
 printf 'Installing PaNasMs for %s on %s (%s). Existing storage is never formatted or recreated; Linux users are reused.\n' "$admin" "$(hostname)" "$arch"
 export DEBIAN_FRONTEND=noninteractive
@@ -72,9 +77,10 @@ if [[ $disk_fan == 1 ]]; then
 fi
 apt-get install -y --reinstall "$package"
 panasms-inspect-hardware > /var/lib/panasms-installer/hardware.json
-panasms-configure
+if [[ -n $port ]]; then panasms-configure --port "$port"; else panasms-configure; fi
+port=$(python3 -c 'import sys;sys.path.insert(0,"/usr/lib/panasms/management");import web_access;print(web_access.current_port())')
 for attempt in {1..30}; do
- if curl --fail --silent http://localhost:80/api/v1/health > "$scratch/health.json"; then break; fi
+ if curl --fail --silent "http://localhost:$port/api/v1/health" > "$scratch/health.json"; then break; fi
  sleep 1
 done
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"]=="ok"' "$scratch/health.json"

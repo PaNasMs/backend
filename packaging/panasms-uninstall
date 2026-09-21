@@ -12,7 +12,7 @@ parser = argparse.ArgumentParser(description='Remove only the PaNasMs prototype;
 mode = sys.argv[1] if len(sys.argv) == 2 else '--plan'
 if mode not in ('--plan', '--remove', '--purge'):
     parser.error('use --plan, --remove or --purge')
-owned = ['/etc/panasms/panasms.env', '/etc/panasms/tls.key', '/etc/panasms/tls.crt',
+owned = ['/etc/panasms/panasms.env', '/etc/panasms/web.env', '/var/lib/panasms-agent/web-access.json', '/etc/panasms/tls.key', '/etc/panasms/tls.crt',
          '/var/lib/panasms-agent/jobs.db', '/var/lib/panasms-agent/jobs.db-wal', '/var/lib/panasms-agent/jobs.db-shm',
          '/var/lib/panasms/state.db', '/var/lib/panasms/state.db-wal', '/var/lib/panasms/state.db-shm']
 print('PaNasMs services, binaries, UI and PAM service configuration will be removed.')

@@ -7,7 +7,9 @@ Requires=panasms-agent.service
 User=panasms
 Group=panasms
 EnvironmentFile=/etc/panasms/panasms.env
-ExecStart=/usr/lib/panasms/panasms-core -listen :80 -allow-http
+Environment=PANASMS_HTTP_PORT=80
+EnvironmentFile=-/etc/panasms/web.env
+ExecStart=/usr/lib/panasms/panasms-core -listen :${PANASMS_HTTP_PORT} -allow-http
 Restart=on-failure
 RestartSec=3
 StateDirectory=panasms

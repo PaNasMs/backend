@@ -1,10 +1,13 @@
 #!/bin/sh
 set -eu
 [ "$(id -u)" = 0 ] || { echo 'Run as root' >&2; exit 1; }
-[ "$#" = 0 ] || { echo 'Usage: panasms-configure' >&2; exit 1; }
+if [ "$#" != 0 ]; then
+ [ "$#" = 2 ] && [ "$1" = --port ] || { echo 'Usage: panasms-configure [--port PORT]' >&2; exit 1; }
+fi
 python3 -c 'import grp,pwd,os; gid=grp.getgrnam("sudo").gr_gid; assert any(u.pw_uid != 0 and gid in os.getgrouplist(u.pw_name,u.pw_gid) for u in pwd.getpwall()), "No existing sudo users found"'
+port=$(python3 /usr/lib/panasms/management/web_access.py --configure "$@")
 udevadm control --reload-rules
 systemctl enable panasms-network-sharing.service panasms-network-recovery.service panasms-agent.service panasms-core.service
 systemctl restart panasms-network-sharing.service
 systemctl restart panasms-agent.service panasms-core.service
-echo 'PaNasMs: http://panasms.local/ (port 80). Authentication policy is read from /etc/panasms/panasms.env.'
+printf 'PaNasMs: http://panasms.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$port"

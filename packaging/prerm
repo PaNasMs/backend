@@ -8,6 +8,9 @@ for path in ('/run/panasms-network/change.json', '/var/lib/panasms-agent/network
     state=Path(path)
     if state.exists() and json.loads(state.read_text()).get('status') in ('applying','pending'):
         raise SystemExit('Confirm or roll back pending network changes before package changes.')
+web=Path('/var/lib/panasms-agent/web-access.json')
+if web.exists() and json.loads(web.read_text()).get('phase') in ('scheduled','applying'):
+    raise SystemExit('Wait for the HTTP port change to finish before package changes.')
 p=Path('/var/lib/panasms-agent/jobs.db')
 if p.exists():
     with sqlite3.connect(str(p)) as db:

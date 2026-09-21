@@ -171,7 +171,9 @@ and this SSH policy rather than silently reopening access.
 On the target Debian-based machine, run `sudo apt update`, then install the generated
 prototype package with `sudo apt install ./<package>.deb` so OS dependencies are
 resolved, then run
-`sudo panasms-configure`. It requires an existing non-root user in the Linux
+`sudo panasms-configure` (HTTP port 80 on a fresh installation). Use
+`sudo panasms-configure --port 8080` to choose a different port. Running without
+`--port` preserves an existing choice. It requires an existing non-root user in the Linux
 `sudo` group; it does not create an administrator. Review hardware support before
 installing/configuring the optional cooling package.
 
@@ -184,7 +186,13 @@ dependencies. CI resolves the complete dependency tree using an empty installed-
 status database on both architectures. SSH server support remains optional and is
 available when OpenSSH server is installed; hardware-specific cooling is a separate package.
 
-The packaged prototype serves HTTP on port 80. The core binary also accepts TLS
+Administrators can also change the HTTP port in Settings → General, alongside CPU
+cooling. Occupied and browser-blocked ports are rejected. The panel restarts; open
+the displayed new address. Failed startup restores the previous port. The choice
+is stored in `/etc/panasms/web.env` and survives package upgrades. The source
+installer accepts `--port PORT` too.
+
+The packaged prototype serves HTTP on port 80 by default. The core binary also accepts TLS
 certificate/key flags. Runtime configuration is in `/etc/panasms/panasms.env`;
 core state is in `/var/lib/panasms`, and agent jobs/state in `/var/lib/panasms-agent`.
 Inspect `panasms-core`, `panasms-agent` and, if installed, `panasms-cooling` with

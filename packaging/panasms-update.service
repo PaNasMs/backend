@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /var/lib/panasms-updates/worker/system_updates.py work
-ExecStopPost=/usr/bin/python3 /var/lib/panasms-updates/worker/system_updates.py recover-runtime
+ExecStopPost=/usr/bin/env PANASMS_UPDATE_RUNTIME=1 /usr/bin/python3 /var/lib/panasms-updates/worker/system_updates.py recover
 TimeoutStartSec=1h
 TimeoutStopSec=20min
 UMask=0077

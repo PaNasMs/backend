@@ -417,5 +417,5 @@ def tick():
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','recover-runtime','tick']);a=p.parse_args()
-    {'work':work,'recover':recover,'recover-runtime':lambda:recover(boot=False),'tick':tick}[a.mode]()
+    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','tick']);a=p.parse_args()
+    {'work':work,'recover':lambda:recover(boot=os.environ.get('PANASMS_UPDATE_RUNTIME')!='1'),'tick':tick}[a.mode]()

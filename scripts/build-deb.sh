@@ -5,6 +5,8 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 assets=$(CDPATH= cd -- "$1" && pwd)
 [ -f "$assets/index.html" ] || { echo 'Build frontend first' >&2; exit 1; }
 cd "$repo"
+version=${PANASMS_PACKAGE_VERSION:-$(cat VERSION)}
+dpkg --validate-version "$version"
 arch=$(dpkg --print-architecture)
 [ "$(go env GOARCH)" = "$(go env GOHOSTARCH)" ] || { echo 'Use native build or an explicitly configured sysroot' >&2; exit 1; }
 stage=$(mktemp -d)
@@ -34,7 +36,7 @@ for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$scri
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-prototype
-Version: 0.2.5
+Version: $version
 Section: admin
 Priority: optional
 Architecture: $arch
@@ -42,4 +44,4 @@ Maintainer: PaNasMs local development
 Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, usb-modeswitch, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.5_${arch}.deb"
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_${version}_${arch}.deb"

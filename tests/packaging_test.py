@@ -10,6 +10,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingTest(unittest.TestCase):
+    def test_invalid_ci_versions_fail_before_building(self):
+        with tempfile.TemporaryDirectory() as folder:
+            assets = Path(folder)
+            (assets / "index.html").write_text("frontend")
+            for script, variable, arguments in [
+                ("build-deb.sh", "PANASMS_PACKAGE_VERSION", [str(assets)]),
+                ("build-cooling-deb.sh", "PANASMS_COOLING_VERSION", []),
+            ]:
+                with self.subTest(script=script):
+                    result = subprocess.run(
+                        ["sh", str(ROOT / "scripts" / script), *arguments],
+                        env=dict(os.environ, **{variable: "../../not-a-version"}),
+                        capture_output=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"version", result.stderr)
+
     def test_shell_syntax(self):
         for name in ["preinst", "postinst", "prerm", "postrm", "panasms-configure", "start-agent"]:
             subprocess.run(["sh", "-n", str(ROOT / "packaging" / name)], check=True)

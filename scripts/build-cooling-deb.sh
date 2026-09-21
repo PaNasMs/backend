@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
+version=${PANASMS_COOLING_VERSION:-0.2.0}
+dpkg --validate-version "$version"
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
 mkdir -p "$stage/DEBIAN" "$stage/usr/lib/panasms-cooling" "$stage/usr/lib/systemd/system" "$stage/usr/sbin" dist
@@ -12,10 +14,10 @@ install -m755 cooling/postinst "$stage/DEBIAN/postinst"
 install -m755 cooling/prerm "$stage/DEBIAN/prerm"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-cooling
-Version: 0.2.0
+Version: $version
 Architecture: all
 Maintainer: PaNasMs local development
 Depends: python3, python3-libgpiod, smartmontools, raspi-utils, systemd
 Description: Independent GPIO27 disk cooling for the verified PaNasMs hardware
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" dist/panasms-cooling_0.2.0_all.deb
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-cooling_${version}_all.deb"

@@ -113,10 +113,16 @@ sh scripts/build-deb.sh ../frontend/dist
 sh scripts/build-cooling-deb.sh
 ```
 
-Outputs are `dist/panasms-prototype_0.2.3_<architecture>.deb` and
+Outputs are `dist/panasms-prototype_0.2.5_<architecture>.deb` and
 `dist/panasms-cooling_0.2.0_all.deb`. The package script expects a native Go build;
 ARM64 is the tested deployment target. Go binaries can be built without frontend
 sources, but the prototype Debian package requires prebuilt SPA assets.
+
+The core package version defaults to [VERSION](VERSION). CI supplies a unique
+prerelease through `PANASMS_PACKAGE_VERSION`; `PANASMS_COOLING_VERSION` similarly
+overrides the optional cooling package version. Both are validated by `dpkg`.
+See the [automated build guide](https://github.com/PaNasMs/panasms/blob/main/documentation/builds.md)
+for native ARM64/AMD64 artifacts, source manifests and validation limits.
 
 ## Users, groups and personal access
 

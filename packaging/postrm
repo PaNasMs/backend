@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import json
 import shutil
-for folder in ('/var/lib/panasms-modules', '/var/lib/panasms-agent/module-uploads'):
+for folder in ('/var/lib/panasms-updates', '/var/lib/panasms-modules', '/var/lib/panasms-agent/module-uploads'):
     path=Path(folder)
     if path.is_dir() and not path.is_symlink() and path.stat().st_uid==0:
         shutil.rmtree(path)
@@ -53,6 +53,7 @@ if sources.is_file() and not sources.is_symlink() and keys.is_dir() and not keys
                 key=keys/(signer+'.pem')
                 if key.is_file() and not key.is_symlink() and key.stat().st_uid==0:key.unlink()
 sources.unlink(missing_ok=True)
+Path('/etc/panasms/updates.json').unlink(missing_ok=True)
 Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)
 Path('/etc/panasms/sharing.json').unlink(missing_ok=True)
 Path('/var/lib/panasms-agent/sharing-transaction.json').unlink(missing_ok=True)

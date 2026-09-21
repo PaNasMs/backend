@@ -2,8 +2,13 @@
 set -eu
 case "${1:-}" in remove|upgrade|deconfigure)
  python3 - <<'CHECK'
-import sqlite3, json
+import sqlite3, json, os
 from pathlib import Path
+update=Path('/var/lib/panasms-updates/state.json')
+if update.exists():
+    s=json.loads(update.read_text())
+    if s.get('phase') in ('queued','checking','downloading','preparing','backing-up','installing','verifying','rolling-back','recovery-required') and os.environ.get('PANASMS_UPDATE_TRANSACTION') != s.get('id'):
+        raise SystemExit('A PaNasMs update transaction is active.')
 for path in ('/run/panasms-network/change.json', '/var/lib/panasms-agent/network-wifi/pending.json', '/var/lib/panasms-agent/network-sharing/pending.json'):
     state=Path(path)
     if state.exists() and json.loads(state.read_text()).get('status') in ('applying','pending'):
@@ -21,6 +26,7 @@ CHECK
  systemctl stop panasms-core.service panasms-agent.service
  systemctl stop panasms-sharing.timer panasms-sharing.service || true
  if [ "$1" = remove ]; then
+  systemctl disable --now panasms-update-check.timer panasms-update-recover.service || true
   systemctl disable panasms-sharing.timer || true
   python3 /usr/lib/panasms/management/sharing.py --remove
   python3 /usr/lib/panasms/sharing-install.py --remove

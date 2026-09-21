@@ -1,0 +1,10 @@
+[Unit]
+Description=PaNasMs independent update transaction
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /var/lib/panasms-updates/worker/system_updates.py work
+TimeoutStartSec=1h
+UMask=0077

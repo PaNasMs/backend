@@ -9,6 +9,7 @@ import storage
 import accounts
 import host
 import web_access
+import system_updates
 import sharing
 import module_manager
 import module_sources
@@ -39,6 +40,7 @@ def dispatch(mode, user, request):
     if mode == "query":
         view = request.get("view")
         target = request.get("target", "")
+        if view == "system-updates": return system_updates.query()
         if view == "web-access": return web_access.query()
         if view == 'accounts': return accounts.query()
         if view == 'account-details': return accounts.query(target)
@@ -68,11 +70,12 @@ def dispatch(mode, user, request):
             return storage.query(view, target)
         return host.query(view, target)
     action = request.get("action")
+    require(not system_updates.changing() or action == "system.update.rollback", "A system update is in progress; wait for the panel to reconnect")
     params = request.get("params")
     require(isinstance(params, dict), 'Parameters must be an object')
     extensions = module_manager.load_operations("actions", action)
     module = next(
-        (m for m in (storage, accounts, host, web_access, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
+        (m for m in (storage, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
         None,
     )
     require(module, 'Unknown operation')

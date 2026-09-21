@@ -95,6 +95,7 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 		}
 	}
 	s.monitorDevices(ctx, jobs)
+	s.monitorUpdates(ctx)
 	if alerts, err := s.Store.Alerts(); err == nil {
 		data, _ := json.Marshal(alerts)
 		sum := sha256.Sum256(data)

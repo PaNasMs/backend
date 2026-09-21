@@ -1,0 +1,8 @@
+[Unit]
+Description=Check PaNasMs update policy
+After=network-online.target panasms-update-recover.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/lib/panasms/management/system_updates.py tick
+UMask=0077

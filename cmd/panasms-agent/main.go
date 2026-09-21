@@ -55,6 +55,14 @@ func main() {
 		log.Fatal(err)
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /update-feed", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := os.ReadFile("/var/lib/panasms-updates/public.json")
+		if err != nil {
+			raw = []byte("{}")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+	})
 	mux.HandleFunc("GET /job-feed", func(w http.ResponseWriter, r *http.Request) {
 		jobs, e := manager.Monitor(r.URL.Query()["alert"])
 		if e != nil {

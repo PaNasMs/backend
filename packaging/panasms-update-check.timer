@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule PaNasMs update checks
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -295,3 +295,12 @@ from a later source is reported and ignored. Updates cannot silently replace an
 installed module with another publisher's module. An unavailable source reports
 its own error while healthy sources remain visible. Removing the last source for
 a custom publisher removes its trusted key; running installed modules are retained.
+
+## System updates
+
+Settings → System updates controls signed stable/testing releases, checks, downloads,
+automatic installation windows and rollback. The independent systemd worker retains
+its own journal and code across package replacement. It updates the core package,
+leaving Linux distribution upgrades and hardware cooling separate. The default is
+stable with notifications only. See the [update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
+for publication, trust, backup and recovery guarantees and limitations.

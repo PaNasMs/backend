@@ -161,6 +161,10 @@ func (s *Store) Alert(id, message string, active bool) {
 		s.db.Exec("UPDATE alerts SET active=0,updated=? WHERE id=? AND active=1", now, id)
 	}
 }
+func (s *Store) Inform(id, message string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Exec("INSERT INTO alerts VALUES(?,?,0,?,?) ON CONFLICT(id) DO NOTHING", id, message, now, now)
+}
 func (s *Store) Alerts() ([]Alert, error) {
 	rows, e := s.db.Query("SELECT id,message,active,created,updated FROM alerts ORDER BY active DESC,updated DESC LIMIT 200")
 	if e != nil {

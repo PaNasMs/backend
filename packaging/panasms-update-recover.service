@@ -1,0 +1,14 @@
+[Unit]
+Description=Recover interrupted PaNasMs update
+After=local-fs.target
+Before=panasms-agent.service panasms-core.service
+ConditionPathExists=/var/lib/panasms-updates/worker/system_updates.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /var/lib/panasms-updates/worker/system_updates.py recover
+TimeoutStartSec=20min
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

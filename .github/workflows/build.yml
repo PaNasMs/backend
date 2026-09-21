@@ -1,0 +1,17 @@
+name: Build PaNasMs
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    uses: PaNasMs/panasms/.github/workflows/build.yml@d6fbd18f42af78bdadeb04418c8d3cd7e7b0bba8
+    with:
+      build_ref: d6fbd18f42af78bdadeb04418c8d3cd7e7b0bba8
+      backend_ref: ${{ github.sha }}

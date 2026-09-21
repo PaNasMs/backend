@@ -96,6 +96,11 @@ recovery actions use the same fresh plan/confirmation/run workflow as other jobs
 Use Linux, Go 1.26 or newer, Python 3, a C compiler and PAM development headers
 (`libpam0g-dev` on Debian). CGO is required for PAM and SQLite.
 
+The Python test suite also contains Files-module regression checks. Clone
+[module-files](https://github.com/PaNasMs/module-files) at `../modules/files`
+in the workspace layout and install Pillow (`python3-pil` on Debian) before
+running `make check`. The CI workflow prepares these test dependencies explicitly.
+
 ```sh
 make check
 make check-race

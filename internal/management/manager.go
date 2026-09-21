@@ -131,6 +131,7 @@ func Open(path string) (*Manager, error) {
  CREATE TABLE IF NOT EXISTS job_reviews(id TEXT PRIMARY KEY, checked TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS job_context(id TEXT PRIMARY KEY, context TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS job_recovery(id TEXT PRIMARY KEY, report TEXT NOT NULL, checked TEXT NOT NULL);
+ INSERT OR IGNORE INTO job_reviews SELECT id,updated FROM jobs WHERE status='failed' AND stage IN ('The exact operation target was not confirmed','State has changed. Review a new operation plan.');
  UPDATE jobs SET status='cancelled',stage='Cancelled before start',updated=datetime('now') WHERE status='queued';
  UPDATE jobs SET status='interrupted',stage='Process interrupted. Check the actual state before retrying.',updated=datetime('now') WHERE status='running';`)
 	if e != nil {
@@ -166,6 +167,7 @@ func (m *Manager) execute(w work) {
 	var response struct {
 		Error     string `json:"error"`
 		Cancelled bool   `json:"cancelled"`
+		NoChanges bool   `json:"noChanges"`
 	}
 	decodeError := json.Unmarshal(result, &response)
 	if err == nil && decodeError != nil {
@@ -183,6 +185,9 @@ func (m *Manager) execute(w work) {
 		stage = response.Error
 	}
 	m.db.Exec("UPDATE jobs SET status=?,stage=?,updated=?,result=? WHERE id=?", status, stage, time.Now().UTC().Format(time.RFC3339Nano), string(result), w.Job.ID)
+	if status == "failed" && err == nil && response.NoChanges {
+		m.db.Exec("INSERT OR IGNORE INTO job_reviews(id,checked) VALUES(?,?)", w.Job.ID, time.Now().UTC().Format(time.RFC3339Nano))
+	}
 }
 
 func (m *Manager) List() ([]Job, error) {
@@ -291,8 +296,15 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 			return
 		}
 		if r.Method == "GET" {
-			if r.URL.Query().Get("view") == "jobs" {
-				j, e := m.List()
+			if r.URL.Query().Get("view") == "jobs" || r.URL.Query().Get("view") == "job" {
+				single := r.URL.Query().Get("view") == "job"
+				var j []Job
+				var e error
+				if single {
+					j, e = m.list("id=?", r.URL.Query().Get("target"))
+				} else {
+					j, e = m.List()
+				}
 				if e != nil {
 					reply(w, 503, map[string]string{"error": "Task log unavailable"})
 					return
@@ -305,6 +317,14 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 						}
 					}
 					j = own
+				}
+				if single {
+					if len(j) == 0 {
+						reply(w, 404, map[string]string{"error": "Task not found"})
+						return
+					}
+					reply(w, 200, j[0])
+					return
 				}
 				reply(w, 200, j)
 				return

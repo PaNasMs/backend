@@ -225,6 +225,15 @@ func (s *Server) Handler() http.Handler {
 				fail(w, 503, "Could not read notifications")
 				return
 			}
+			if selected := r.URL.Query().Get("id"); selected != "" {
+				filtered := alerts[:0]
+				for _, a := range alerts {
+					if a.ID == selected {
+						filtered = append(filtered, a)
+					}
+				}
+				alerts = filtered
+			}
 			if e := s.Store.DismissResolvedAlerts(r.Context().Value(identityKey{}).(auth.Identity).Username, alerts); e != nil {
 				fail(w, 503, "Could not clear notification history")
 				return

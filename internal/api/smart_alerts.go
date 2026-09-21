@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/management"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
 	"sort"
@@ -71,6 +74,37 @@ func applyCRCAcknowledgements(alerts []store.Alert, baselines map[string]uint64,
 
 func (s *Server) notifications(ctx context.Context, user string) ([]store.Alert, error) {
 	alerts, err := s.Store.Alerts()
+	if err != nil {
+		return nil, err
+	}
+	req, requestError := http.NewRequestWithContext(ctx, "GET", "http://agent/job-feed", nil)
+	if requestError == nil {
+		values := req.URL.Query()
+		for _, a := range alerts {
+			if a.Active && strings.HasPrefix(a.ID, "job:") {
+				values.Add("alert", strings.TrimPrefix(a.ID, "job:"))
+			}
+		}
+		if len(values) > 0 {
+			req.URL.RawQuery = values.Encode()
+			if response, e := s.Agent.Do(req); e == nil {
+				var jobs []management.Job
+				if response.StatusCode == 200 && json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&jobs) == nil {
+					current := map[string]bool{}
+					for _, j := range jobs {
+						current["job:"+j.ID] = j.NeedsReview
+					}
+					for _, a := range alerts {
+						if a.Active && strings.HasPrefix(a.ID, "job:") && !current[a.ID] {
+							s.Store.Alert(a.ID, a.Message, false)
+						}
+					}
+					alerts, err = s.Store.Alerts()
+				}
+				response.Body.Close()
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -94,6 +94,9 @@ def inspect(request):
                 except (OSError, ValueError):
                     continue
         message = 'Compare source and destination before retrying. A partial copy may exist; do not delete either automatically. Presence or size alone does not prove a complete copy.'
+        if action == 'file.trash': message = 'Check Trash and the original folder. A missing source alone does not prove the item reached Trash.'
+        elif action == 'file.mkdir': message = 'Check whether the intended folder exists before creating it again.'
+        elif action == 'file.permissions': message = 'Review current ownership and permissions before applying another change.'
     else:
         route = '/storage/disks' if action.startswith(('raid.', 'disk.', 'smart.')) else '/storage/mounts'
         inventory = json_command(['lsblk', '--json', '--bytes', '--output', 'NAME,PATH,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS'], timeout=15)

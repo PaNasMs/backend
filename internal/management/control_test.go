@@ -100,3 +100,31 @@ func TestRecoveryInspectionAndBusyGuard(t *testing.T) {
 		t.Fatal("inspection raced active operation")
 	}
 }
+
+func TestValidationFailureDoesNotRequireRecovery(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	defer func() { close(m.queue); <-m.finished }()
+	m.run = func(context.Context, string, string, any) (json.RawMessage, error) {
+		return json.RawMessage(`{"error":"Rejected before changes","noChanges":true}`), nil
+	}
+	_, err = m.db.Exec("INSERT INTO jobs VALUES('validation','alice','file.mkdir','/srv/a','queued','stage','now','now','{}')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.execute(work{Job: Job{ID: "validation", User: "alice"}})
+	jobs, err := m.List()
+	if err != nil || len(jobs) != 1 || jobs[0].NeedsReview || jobs[0].Status != "failed" {
+		t.Fatalf("%+v %v", jobs, err)
+	}
+	if err = m.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ = m.List()
+	if len(jobs) != 0 {
+		t.Fatal("validation failure cannot be cleared")
+	}
+}

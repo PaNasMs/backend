@@ -19,7 +19,11 @@ import job_control
 import job_recovery
 
 
+mutation_started = False
+
 def dispatch(mode, user, request):
+    global mutation_started
+    mutation_started = False
     account = pwd.getpwnam(user)
     accounts.normal(account)
     admin = grp.getgrnam('sudo').gr_gid in os.getgrouplist(user, account.pw_gid)
@@ -96,6 +100,7 @@ def dispatch(mode, user, request):
     job_control.capability(False)
     job_control.checkpoint()
     os.environ["PANASMS_OPERATION"] = "1"
+    mutation_started = True
     return (
         module.execute(action, params, user)
         if module != accounts
@@ -121,4 +126,6 @@ if __name__ == "__main__":
         result = {
             "error": 'Could not process the operation. Check parameters, object availability and the system journal.'
         }
+    if isinstance(result, dict) and result.get("error") and not mutation_started:
+        result["noChanges"] = True
     print(json.dumps(result, ensure_ascii=False))

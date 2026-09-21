@@ -11,6 +11,51 @@ disk_read = m["disk_read"]
 
 
 class CoolingTest(unittest.TestCase):
+    def simulate_pwm(self, value, updated=0, cycles=4):
+        class Timer:
+            now = 0.0
+            waits = 0
+
+            def is_set(self):
+                return self.waits >= cycles
+
+            def wait(self, delay):
+                self.now += delay
+                self.waits += 1
+                return self.is_set()
+
+        timer = Timer()
+        edges = []
+
+        def write(on):
+            edges.append((timer.now, on))
+            timer.now += 0.001
+
+        m['pwm_loop'](write, lambda: (value, updated), timer, clock=lambda: timer.now)
+        return edges, timer
+
+    def test_pwm_compensates_gpio_overhead(self):
+        edges, _ = self.simulate_pwm(0.25)
+        for actual, expected in zip(edges, [(0, True), (0.00625, False),
+                                            (0.025, True), (0.03125, False)]):
+            self.assertAlmostEqual(actual[0], expected[0])
+            self.assertEqual(actual[1], expected[1])
+        self.assertEqual(len(edges), 4)
+
+    def test_pwm_stale_producer_forces_full_power(self):
+        edges, _ = self.simulate_pwm(0.25, updated=-6)
+        self.assertTrue(all(on for _, on in edges))
+
+    def test_pwm_off_and_full_power_have_no_pulses(self):
+        for value in (0, 1):
+            edges, timer = self.simulate_pwm(value)
+            self.assertTrue(all(on == bool(value) for _, on in edges))
+            self.assertAlmostEqual(timer.now, 0.1)
+
+    def test_pwm_shutdown_interrupts_high_phase(self):
+        edges, _ = self.simulate_pwm(0.25, cycles=1)
+        self.assertEqual(edges, [(0, True)])
+
     def test_fail_safe_and_sleep(self):
         self.assertEqual(duty("quiet", [], 50)[0], 1)
         self.assertEqual(duty("quiet", [{"state": "unknown"}], 50)[0], 1)

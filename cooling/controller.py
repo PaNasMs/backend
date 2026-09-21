@@ -95,6 +95,23 @@ def notify(message):
             s.sendall(message.encode())
 
 
+def pwm_loop(write, read, stopped, period=0.025, clock=time.monotonic):
+    # Absolute deadlines avoid accumulating GPIO call overhead in every cycle.
+    deadline = clock()
+    while not stopped.is_set():
+        value, updated = read()
+        if clock() - updated > 5:
+            value = 1.0
+        start = max(deadline, clock())
+        deadline = start + period
+        write(value > 0)
+        if 0 < value < 1:
+            if stopped.wait(max(0, start + period * value - clock())):
+                break
+            write(False)
+        stopped.wait(max(0, deadline - clock()))
+
+
 def main():
     import gpiod
     from gpiod.line import Direction, Value
@@ -129,64 +146,74 @@ def main():
             stopped.wait(config['sampleSeconds'])
 
     threading.Thread(target=sample, daemon=True).start()
-    duty_value = 1.0
-    last_update = 0
-    lower_since = None
-    previous_target = None
-    kick_until = time.monotonic()+2
-    cpu_applied=None
-    cpu_status={'available':False}
-    notify('READY=1')
-    try:
+    output = {'value': 1.0, 'updated': time.monotonic()}
+
+    def regulate():
+        nonlocal config
+        duty_value = 1.0
+        lower_since = None
+        previous_target = None
+        kick_until = time.monotonic()+2
+        cpu_applied = None
+        cpu_status = {'available': False}
         while not stopped.is_set():
             now = time.monotonic()
-            if now-last_update >= 1:
-                last_update = now
-                config_error = False
-                try:
-                    new = json.loads(CONFIG.read_text())
-                    if new['profile'] not in PROFILES or not 30 <= new['sampleSeconds'] <= 600 or new['disks'] != config['disks']:
-                        raise ValueError('invalid config')
-                    config = new
-                except (OSError, ValueError, KeyError, TypeError):
-                    config_error = True
-                cpu_profile=config.get('cpuProfile','balanced')
-                try:
-                    if cpu_profile != cpu_applied:
-                        cpu_status=apply_cpu_profile(cpu_profile)
-                        cpu_applied=cpu_profile
-                except (OSError,ValueError):
-                    cpu_status={'available':False,'profile':cpu_profile,'error':'Cannot apply kernel thermal thresholds'}
-                with lock:
-                    disks, sampled = shared['disks'], shared['sampled']
-                target, reason = duty(config['profile'], [d for d in disks if d['path'] in config['disks']], system_temperature())
-                if now-sampled > config['sampleSeconds']+60 or config_error:
-                    target, reason = 1.0, 'stale-or-invalid-data'
-                if target < duty_value:
-                    if previous_target != target:
-                        lower_since = now
-                    if lower_since is not None and now-lower_since >= 20:
-                        duty_value = target
-                else:
-                    if duty_value == 0 and target > 0:
-                        kick_until = now+2
+            config_error = False
+            try:
+                new = json.loads(CONFIG.read_text())
+                if new['profile'] not in PROFILES or not 30 <= new['sampleSeconds'] <= 600 or new['disks'] != config['disks']:
+                    raise ValueError('invalid config')
+                config = new
+            except (OSError, ValueError, KeyError, TypeError):
+                config_error = True
+            cpu_profile=config.get('cpuProfile','balanced')
+            try:
+                if cpu_profile != cpu_applied:
+                    cpu_status=apply_cpu_profile(cpu_profile)
+                    cpu_applied=cpu_profile
+            except (OSError,ValueError):
+                cpu_status={'available':False,'profile':cpu_profile,'error':'Cannot apply kernel thermal thresholds'}
+            with lock:
+                disks, sampled = shared['disks'], shared['sampled']
+            target, reason = duty(config['profile'], [d for d in disks if d['path'] in config['disks']], system_temperature())
+            if now-sampled > config['sampleSeconds']+60 or config_error:
+                target, reason = 1.0, 'stale-or-invalid-data'
+            if target < duty_value:
+                if previous_target != target:
+                    lower_since = now
+                if lower_since is not None and now-lower_since >= 20:
                     duty_value = target
-                    lower_since = None
-                previous_target = target
-                actual = 1.0 if now < kick_until else duty_value
-                status = {'profile':config['profile'], 'sampleSeconds':config['sampleSeconds'], 'dutyPercent':round(actual*100), 'reason':reason,
-                          'disks':disks, 'observedAt':time.time(), 'sampleAgeSeconds':round(now-sampled) if sampled else None,
-                          'controller':'GPIO27 / MOSFET / 40 Hz', 'rpm':None,'cpu':cpu_status}
-                tmp = STATUS.with_suffix('.tmp'); tmp.write_text(json.dumps(status)); os.chmod(tmp,0o644); tmp.replace(STATUS)
-                notify('WATCHDOG=1')
-            actual = 1.0 if now < kick_until else duty_value
-            request.set_value(27, Value.ACTIVE if actual else Value.INACTIVE)
-            if actual in (0.0, 1.0):
-                stopped.wait(0.025)
             else:
-                stopped.wait(0.025*actual)
-                request.set_value(27, Value.INACTIVE)
-                stopped.wait(0.025*(1-actual))
+                if duty_value == 0 and target > 0:
+                    kick_until = now+2
+                duty_value = target
+                lower_since = None
+            previous_target = target
+            actual = 1.0 if now < kick_until else duty_value
+            with lock:
+                output.update(value=actual, updated=now)
+            status = {'profile':config['profile'], 'sampleSeconds':config['sampleSeconds'], 'dutyPercent':round(actual*100), 'reason':reason,
+                      'disks':disks, 'observedAt':time.time(), 'sampleAgeSeconds':round(now-sampled) if sampled else None,
+                      'controller':'GPIO27 / MOSFET / 40 Hz / isolated timing', 'rpm':None,'cpu':cpu_status}
+            tmp = STATUS.with_suffix('.tmp'); tmp.write_text(json.dumps(status)); os.chmod(tmp,0o644); tmp.replace(STATUS)
+            notify('WATCHDOG=1')
+            stopped.wait(1)
+
+    def control_worker():
+        try:
+            regulate()
+        finally:
+            stopped.set()
+
+    def output_state():
+        with lock:
+            return output['value'], output['updated']
+
+    threading.Thread(target=control_worker, daemon=True).start()
+    notify('READY=1')
+    try:
+        pwm_loop(lambda on: request.set_value(27, Value.ACTIVE if on else Value.INACTIVE),
+                 output_state, stopped)
     finally:
         request.set_value(27, Value.ACTIVE)
         request.release()

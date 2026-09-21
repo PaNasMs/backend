@@ -148,7 +148,7 @@ def execute(action,p,user=None):
         fd=os.open(worker,os.O_RDONLY|os.O_DIRECTORY)
         try:os.fsync(fd)
         finally:os.close(fd)
-        save('state.json',{'id':uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':(query()['candidate'] or {}).get('version'),'error':''})
+        save('state.json',{'id':uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':read('backup.json',{}).get('version') if operation=='rollback' else (query()['candidate'] or {}).get('version'),'error':''})
         try:run(['systemctl','start','--no-block','panasms-update.service'],timeout=30)
         except Exception:
             save('state.json',{});raise

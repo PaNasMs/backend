@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PaNasMs prototype API
-  version: 0.2.0
+  version: 0.2.2
 paths:
   /api/v1/health:
     get:
@@ -350,9 +350,9 @@ paths:
         '200': {description: Typed view result or explicit error; never shell output}
         '403': {description: Administrator required}
     post:
-      summary: Preview, enqueue or cancel an operation, or clear finished job history
+      summary: Preview, enqueue, safely cancel, inspect or acknowledge a task, or clear reviewed history
       parameters:
-      - {in: query, name: view, required: true, schema: {type: string, enum: [plan, run, cancel, clear-history]}}
+      - {in: query, name: view, required: true, schema: {type: string, enum: [plan, run, cancel, recover, acknowledge, clear-history]}}
       requestBody:
         required: true
         content:
@@ -416,6 +416,38 @@ paths:
 
 components:
   schemas:
+    JobRecovery:
+      type: object
+      required: [message, checks, route]
+      properties:
+        message: {type: string}
+        checks:
+          type: array
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label: {type: string}
+              value: {}
+        route: {type: string}
+        recoveryAction: {type: [string, 'null'], description: An explicit action requiring a fresh preview and confirmation}
+    ManagementJob:
+      type: object
+      required: [id, user, action, target, status, stage, created, updated, result, canCancel, cancelRequested, needsReview]
+      properties:
+        id: {type: string}
+        user: {type: string}
+        action: {type: string}
+        target: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled, interrupted]}
+        stage: {type: string}
+        created: {type: string}
+        updated: {type: string}
+        result: {type: object, additionalProperties: true}
+        canCancel: {type: boolean, description: Cancellation is currently supported at a safe checkpoint}
+        cancelRequested: {type: boolean}
+        needsReview: {type: boolean, description: Unreviewed terminal tasks are retained when history is cleared}
+        recovery: {$ref: '#/components/schemas/JobRecovery'}
     Identity:
       type: object
       required:

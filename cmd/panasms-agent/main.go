@@ -53,7 +53,7 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /job-feed", func(w http.ResponseWriter, r *http.Request) {
-		jobs, e := manager.List()
+		jobs, e := manager.Monitor(r.URL.Query()["alert"])
 		if e != nil {
 			w.WriteHeader(503)
 			return

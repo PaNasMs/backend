@@ -11,12 +11,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/cooling"
 	"panasms.local/backend/internal/modules"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -137,7 +137,7 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.1"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.2"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Group(func(r chi.Router) {

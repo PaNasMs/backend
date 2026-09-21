@@ -11,6 +11,7 @@ ACTIONS = {
     "service.disable",
     "updates.refresh",
     "updates.install",
+    "updates.repair",
     "nfs.mount",
     "smb.mount",
     "smb.unmount",
@@ -138,6 +139,11 @@ def plan(action, p, user=None):
         target = service(target)
         state = command(["systemctl", "show", "--property=ActiveState,UnitFileState,LoadState", target])
         details = [target, action.split(".")[1]]
+    elif action == "updates.repair":
+        target = 'OS UPDATE'
+        state = command(['dpkg', '--audit'], timeout=20)
+        require(bool(state.strip()), 'No incomplete packages reported')
+        details = ['Finish configuring interrupted system packages', state[:8192]]
     elif action.startswith("updates."):
         target = 'OS UPDATE'
         state = query("updates", "")
@@ -184,7 +190,11 @@ def execute(action, p, user=None):
         command(["systemctl", verb, target])
         state = command(["systemctl", "show", "--property=ActiveState,UnitFileState", "--value", target])
         return {"message": state}
-    if action == "updates.refresh":
+    if action == "updates.repair":
+        command(['dpkg', '--configure', '-a', '--force-confold'], timeout=86400)
+        require(not command(['dpkg', '--audit'], timeout=20).strip(),
+                'Some packages still require repair; inspect the system journal')
+    elif action == "updates.refresh":
         command(["apt-get", "update"], timeout=1800)
     elif action == "updates.install":
         command(["apt-get", "-y", "-o", "Dpkg::Options::=--force-confold", "upgrade"], timeout=86400)

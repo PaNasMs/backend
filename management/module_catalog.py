@@ -4,6 +4,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import job_control
 from common import *
 import module_manager as manager
 
@@ -25,7 +26,15 @@ def download(url, limit, timeout=10):
     try:
         request = urllib.request.Request(url, headers={'User-Agent': 'PaNasMs/0.2'})
         with urllib.request.build_opener(Redirects).open(request, timeout=timeout) as response:
-            raw = response.read(limit + 1)
+            chunks = []
+            size = 0
+            while size <= limit:
+                job_control.checkpoint()
+                block = response.read(min(65536, limit + 1 - size))
+                if not block: break
+                chunks.append(block)
+                size += len(block)
+            raw = b''.join(chunks)
         require(len(raw) <= limit, 'Module download exceeds size limit')
         return raw
     except (urllib.error.URLError, TimeoutError, OSError) as error:
@@ -143,6 +152,8 @@ def plan(action, p, user):
 
 
 def execute(action, p, user):
+    job_control.capability(True)
+    job_control.checkpoint()
     chosen, _ = selection(p)
     require(sum(e['size'] for e in chosen.values()) <= MAX_ARCHIVE, 'Combined module download exceeds size limit')
     manager.UPLOADS.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -169,6 +180,9 @@ def execute(action, p, user):
                                     merged.writestr(name, source.read(name))
         params = {'upload': token}
         manager.plan('module.install', params, user)
+        job_control.capability(False)
+        job_control.checkpoint()
         return manager.execute('module.install', params, user)
     finally:
+        job_control.capability(False)
         bundle.unlink(missing_ok=True)

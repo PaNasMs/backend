@@ -55,6 +55,15 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	if e != nil {
 		return
 	}
+	values := req.URL.Query()
+	if alerts, err := s.Store.Alerts(); err == nil {
+		for _, alert := range alerts {
+			if alert.Active && strings.HasPrefix(alert.ID, "job:") {
+				values.Add("alert", strings.TrimPrefix(alert.ID, "job:"))
+			}
+		}
+	}
+	req.URL.RawQuery = values.Encode()
 	resp, e := s.Agent.Do(req)
 	if e != nil {
 		return
@@ -74,8 +83,8 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	digest := sha256.Sum256(raw)
 	s.jobsRevision.Store(hex.EncodeToString(digest[:]))
 	for _, j := range jobs {
-		if j.Status == "failed" || j.Status == "interrupted" {
-			s.Store.Alert("job:"+j.ID, "Operation "+j.Action+": "+j.Stage, true)
+		if j.Status == "failed" || j.Status == "interrupted" || j.Status == "cancelled" {
+			s.Store.Alert("job:"+j.ID, "Operation "+j.Action+": "+j.Stage, j.NeedsReview)
 		}
 	}
 	s.monitorDevices(ctx, jobs)

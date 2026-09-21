@@ -11,6 +11,8 @@ import host
 import module_manager
 import module_catalog
 import network
+import job_control
+import job_recovery
 
 
 def dispatch(mode, user, request):
@@ -19,6 +21,8 @@ def dispatch(mode, user, request):
         account.pw_uid > 0 and grp.getgrnam("sudo").gr_gid in os.getgrouplist(user, account.pw_gid),
         'Administrator permissions have changed',
     )
+    if mode == "recover":
+        return job_recovery.inspect(request)
     if mode == "query":
         view = request.get("view")
         target = request.get("target", "")
@@ -48,6 +52,9 @@ def dispatch(mode, user, request):
         None,
     )
     require(module, 'Unknown operation')
+    if mode == "execute":
+        job_control.capability(True)
+        job_control.checkpoint()
     plan = module.plan(action, params, user) if module != storage else module.plan(action, params)
     if mode == "plan":
         return plan
@@ -59,6 +66,8 @@ def dispatch(mode, user, request):
     require(
         request.get("confirmation") == plan["confirmation"], 'The exact operation target was not confirmed'
     )
+    job_control.capability(False)
+    job_control.checkpoint()
     os.environ["PANASMS_OPERATION"] = "1"
     return (
         module.execute(action, params, user)
@@ -73,6 +82,8 @@ if __name__ == "__main__":
         raw = sys.stdin.read(1048577)
         require(len(raw) <= 1048576, 'Request too large')
         result = dispatch(sys.argv[1], sys.argv[2], json.loads(raw))
+    except job_control.Cancelled:
+        result = {"cancelled": True}
     except Rejected as e:
         result = {"error": str(e)}
     except subprocess.TimeoutExpired:

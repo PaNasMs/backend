@@ -32,7 +32,7 @@ for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$scri
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-prototype
-Version: 0.2.1
+Version: 0.2.2
 Section: admin
 Priority: optional
 Architecture: $arch
@@ -40,4 +40,4 @@ Maintainer: PaNasMs local development
 Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.1_${arch}.deb"
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.2_${arch}.deb"

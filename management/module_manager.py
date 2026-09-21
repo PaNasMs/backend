@@ -1,6 +1,7 @@
 import fcntl
 import stat
 import zipfile
+import job_control
 from common import *
 
 ROOT = Path("/var/lib/panasms-modules")
@@ -8,8 +9,8 @@ REGISTRY = ROOT / "registry.json"
 UPLOADS = Path("/var/lib/panasms-agent/module-uploads")
 KEYS = Path("/etc/panasms/module-keys")
 UNITS = Path("/etc/systemd/system")
-CORE = "0.2.1"
-ACTIONS = {"module.install", "module.enable", "module.disable", "module.remove"}
+CORE = "0.2.2"
+ACTIONS = {"module.recover", "module.install", "module.enable", "module.disable", "module.remove"}
 
 
 def identifier(value):
@@ -353,6 +354,12 @@ def list_modules():
 
 
 def plan(action, p, user):
+    if action == 'module.recover':
+        journal = transaction_path() / 'journal.json'
+        require(journal.exists(), 'No module transaction needs recovery')
+        return {'target': 'modules', 'confirmation': 'modules',
+                'details': ['Recover the recorded module transaction; installed OS dependencies are retained'],
+                'fingerprint': fingerprint(action, p, journal.read_text())}
     installed = registry()
     if action == "module.install":
         path = upload_path(p.get("upload"), user)
@@ -510,6 +517,8 @@ def execute(action, p, user):
     with (ROOT / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         recover()
+        if action == 'module.recover':
+            return {'message': 'Module transaction recovered'}
         installed = registry()
         before = json.loads(json.dumps(installed))
         available, path = {}, None
@@ -549,12 +558,15 @@ def execute(action, p, user):
                 save_registry(before)
                 shutil.rmtree(staging)
                 raise
+            job_control.capability(True)
+            job_control.checkpoint()
             if path:
                 with zipfile.ZipFile(path) as archive:
                     for mid in order:
                         if mid not in available:
                             continue
                         for relative in available[mid]["files"]:
+                            job_control.checkpoint()
                             dest = staging / mid / relative
                             dest.parent.mkdir(parents=True, exist_ok=True)
                             for parent in (dest.parent, *dest.parent.parents):
@@ -562,6 +574,8 @@ def execute(action, p, user):
                                 parent.chmod(0o755)
                             dest.write_bytes(archive.read("modules/" + mid + "/" + relative))
                             dest.chmod(0o755 if relative == "bin/server" else 0o644)
+            job_control.capability(False)
+            job_control.checkpoint()
             for mid in order:
                 if before.get(mid, {}).get("service"):
                     command(["systemctl", "disable", "--now", unit(mid)])
@@ -589,6 +603,7 @@ def execute(action, p, user):
             state["committed"] = True
             write_transaction(state)
         except Exception:
+            job_control.capability(False)
             recover()
             raise
         recover()

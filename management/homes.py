@@ -1,3 +1,4 @@
+import job_control
 import pwd
 from common import *
 
@@ -207,11 +208,13 @@ def execute(p):
         idle(str(source), users)
         target.mkdir(mode=0o700)
         args = ['rsync', '-aHAXS', '--numeric-ids']
-        command([*args, str(source) + '/', str(target) + '/'], timeout=86400)
-        changes = command([*args, '--dry-run', '--checksum', '--itemize-changes', '--delete', str(source) + '/', str(target) + '/'], timeout=86400)
+        job_control.copying([*args, str(source) + '/', str(target) + '/'])
+        changes = job_control.copying([*args, '--dry-run', '--checksum', '--itemize-changes', '--delete', str(source) + '/', str(target) + '/'])
         require(not changes.strip(), 'Home copy verification failed; original data was preserved')
         command(['sync', '-f', str(target)])
         idle(str(source), users)
+        job_control.capability(False)
+        job_control.checkpoint()
         state['phase'] = 'switching'
         journal(state)
         for user in state['users']:

@@ -1,6 +1,6 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.1
+The Linux server for **Pavlo's NAS Management System**. The current 0.2.2
 prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
 system-management adapters. The deployed target is Raspberry Pi OS ARM64.
 
@@ -34,6 +34,33 @@ Network changes use confirmation and rollback. Storage and account operations
 use server-side validation and the management plan/run workflow. UI visibility
 is not an authorization boundary. Dedicated firewall and LVM management remain
 outside the current interface.
+
+## Task cancellation and recovery
+
+The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional
+`recovery` report. Cancellation is cooperative: queued work can be cancelled;
+running helpers accept a request only at safe checkpoints. Module download and
+staging, home-copy preparation, and Files 0.2.12 staged copies support this.
+Partition writes, formatting, package configuration and committed changes are
+not terminated midway. RAID maintenance has separate pause/resume controls.
+
+After agent restart, queued jobs become cancelled and running jobs become
+interrupted. Commands and credentials are never replayed automatically. The
+administrator can inspect actual domain state, run a pending home/module
+recovery or finish incomplete package configuration, then acknowledge the result.
+Clearing history retains unreviewed failures and interrupted operations, and
+preserves idempotency records. Inspection is blocked while other tasks run.
+
+Files copies are published from a sibling staging directory only after copying
+finishes. Cancellation removes that staging copy and preserves the source.
+Interrupted cross-filesystem moves can retain both copies and a journal; inspect
+them before deleting or retrying. This is not a filesystem snapshot or an undo
+mechanism for formatting, deletion, live source modifications or power loss.
+Destructive-operation recovery still requires domain-specific checks and backups.
+
+`POST /api/v1/manage?view=cancel|recover|acknowledge` accepts `{ "id": "..." }`.
+Recovery reads current state; it does not repeat the original operation. Explicit
+recovery actions use the same fresh plan/confirmation/run workflow as other jobs.
 
 ## Source map
 
@@ -71,7 +98,7 @@ sh scripts/build-deb.sh ../frontend/dist
 sh scripts/build-cooling-deb.sh
 ```
 
-Outputs are `dist/panasms-prototype_0.2.1_<architecture>.deb` and
+Outputs are `dist/panasms-prototype_0.2.2_<architecture>.deb` and
 `dist/panasms-cooling_0.2.0_all.deb`. The package script expects a native Go build;
 ARM64 is the tested deployment target. Go binaries can be built without frontend
 sources, but the prototype Debian package requires prebuilt SPA assets.

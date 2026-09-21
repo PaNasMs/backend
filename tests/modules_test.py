@@ -14,6 +14,13 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_service_can_drop_to_user_without_privilege_escalation(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(m,'UNITS',Path(folder)), patch.object(m,'atomic',side_effect=lambda path,text,mode: path.write_text(text)):
+            m.write_unit({'id':'files','service':'bin/server'})
+            text=(Path(folder)/'panasms-module-files.service').read_text()
+            self.assertIn('AmbientCapabilities=CAP_SETUID CAP_SETGID',text)
+            self.assertIn('NoNewPrivileges=yes',text)
+
     def test_dependency_order_and_missing(self):
         all = {
             "files": {"version": "1.0.0", "dependencies": {"indexer": ">=1.0.0,<2.0.0"}},

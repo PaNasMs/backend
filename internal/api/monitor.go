@@ -83,6 +83,13 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	digest := sha256.Sum256(raw)
 	s.jobsRevision.Store(hex.EncodeToString(digest[:]))
 	for _, j := range jobs {
+		if (strings.HasPrefix(j.Action, "user.") || strings.HasPrefix(j.Action, "group.")) && (j.Status == "succeeded" || j.Status == "failed" || j.Status == "interrupted" || j.Status == "cancelled") {
+			target := j.Target
+			if strings.HasPrefix(j.Action, "group.") {
+				target = j.User
+			}
+			s.Store.AuditJob(j.ID, target, j.User, j.Action, j.Status, j.Updated)
+		}
 		if j.Status == "failed" || j.Status == "interrupted" || j.Status == "cancelled" {
 			s.Store.Alert("job:"+j.ID, "Operation "+j.Action+": "+j.Stage, j.NeedsReview)
 		}

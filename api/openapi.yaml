@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PaNasMs prototype API
-  version: 0.2.2
+  version: 0.2.3
 paths:
   /api/v1/health:
     get:
@@ -48,6 +48,78 @@ paths:
         schema:
           type: string
           const: '1'
+  /api/v1/sessions:
+    get:
+      operationId: getSessions
+      description: Active panel sessions for the caller; administrators may select another user.
+      parameters:
+      - {name: user, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: Active sessions, with opaque public IDs and no session tokens.
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/PanelSession'}}
+    post:
+      operationId: endSession
+      description: End an owned session, or another user's session as administrator. Requires the standard request-origin headers.
+      parameters:
+      - {name: user, in: query, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [id], properties: {id: {type: string}}}
+      responses:
+        '204': {description: Session ended}
+        '403': {description: Another user's session is not accessible}
+        '409': {description: Session already ended}
+  /api/v1/security-history:
+    get:
+      operationId: getSecurityHistory
+      description: Latest 100 security events for the caller, or a selected user for administrators.
+      parameters:
+      - {name: user, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: Account history without credentials or key material.
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/AccountEvent'}}
+  /api/v1/avatar:
+    get:
+      operationId: getAvatar
+      responses:
+        '200':
+          description: Current user's avatar version, empty when absent.
+          content:
+            application/json:
+              schema: {type: object, properties: {version: {type: string}}}
+    put:
+      operationId: putAvatar
+      description: Upload JPEG/PNG, at most 2 MiB and 4 megapixels. Stored as a 128px square JPEG.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '200': {description: Avatar saved}
+        '400': {description: Invalid image}
+        '413': {description: Upload too large}
+    delete:
+      operationId: deleteAvatar
+      responses:
+        '200': {description: Own avatar removed}
+  /api/v1/avatar/image:
+    get:
+      operationId: getAvatarImage
+      responses:
+        '200':
+          description: Current user's avatar.
+          content:
+            image/jpeg: {schema: {type: string, format: binary}}
+        '404': {description: No avatar}
   /api/v1/session:
     get:
       operationId: getSession
@@ -509,6 +581,27 @@ components:
           type: array
           items:
             type: string
+    PanelSession:
+      type: object
+      required: [id, user, address, device, created, expires, current, kind]
+      properties:
+        id: {type: string}
+        user: {type: string}
+        address: {type: string}
+        device: {type: string}
+        created: {type: integer, description: Unix timestamp in seconds}
+        expires: {type: integer}
+        current: {type: boolean}
+        kind: {type: string, const: panel}
+    AccountEvent:
+      type: object
+      required: [user, actor, action, result, created]
+      properties:
+        user: {type: string}
+        actor: {type: string}
+        action: {type: string}
+        result: {type: string}
+        created: {type: string, format: date-time}
     Accounts:
       type: object
       required:
@@ -694,6 +787,9 @@ components:
           type: string
         password:
           type: string
+        newPassword:
+          type: string
+          description: Required only after a 409 password-change-required response.
     Error:
       type: object
       required:
@@ -942,7 +1038,9 @@ components:
       - home
       - groups
       - keys
+      - role
       properties:
+        role: {type: string, enum: [admin, user]}
         username:
           type: string
         name:

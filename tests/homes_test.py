@@ -21,8 +21,12 @@ class HomesTest(unittest.TestCase):
                 self.assertEqual(homes.affected(homes.base()), users[:2])
 
     def test_busy_user_error_identifies_process(self):
-        with self.assertRaisesRegex(homes.HomeBusy, r'test-user: .+'):
-            homes.idle('/nonexistent', [SimpleNamespace(pw_uid=os.getuid(), pw_name='test-user')])
+        with tempfile.TemporaryDirectory() as tmp:
+            proc=Path(tmp); folder=proc/'900001';folder.mkdir()
+            (folder/'comm').write_text('python3\n')
+            (folder/'cgroup').write_text('0::/user.slice/test\n')
+            with patch.object(homes,'PROC',proc), self.assertRaisesRegex(homes.HomeBusy, r'test-user: .+'):
+                homes.idle('/nonexistent', [SimpleNamespace(pw_uid=os.getuid(), pw_name='test-user')])
 
     def test_cloud_sync_is_named_and_processes_are_grouped(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,6 +9,12 @@ import main
 from common import Rejected
 
 class PowerTest(unittest.TestCase):
+    def setUp(self):
+        for target, value in [('normal', None)]:
+            mock = patch.object(main.accounts, target, return_value=value); mock.start(); self.addCleanup(mock.stop)
+        for target,value in [('entry',{'panel':True}),('shadow',{'expiryDay':-1})]:
+            mock=patch.object(main.accounts.account_policy,target,return_value=value);mock.start();self.addCleanup(mock.stop)
+
     def test_no_shutdown_during_plan(self):
         with patch.object(host, 'command') as command:
             for action in ('system.poweroff', 'system.reboot'):

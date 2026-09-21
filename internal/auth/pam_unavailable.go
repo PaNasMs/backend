@@ -11,3 +11,7 @@ func Authenticate(user, password string) error {
 func ChangePassword(user, current, next string) error {
 	return errors.New("PAM unavailable in this build")
 }
+
+var ErrPasswordExpired = errors.New("Password change required")
+
+func AccountAllowed(user string) error { return errors.New("PAM unavailable in this build") }

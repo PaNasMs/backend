@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"golang.org/x/sys/unix"
 	"io"
@@ -14,7 +15,9 @@ import (
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/cooling"
 	"panasms.local/backend/internal/management"
+	"panasms.local/backend/internal/profile"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -64,20 +67,49 @@ func main() {
 	mux.HandleFunc("/manage", manager.Handler(allowed))
 	mux.HandleFunc("POST /module-upload", moduleUpload(allowed))
 	mux.HandleFunc("/profile", profileHandler(allowed))
+	mux.HandleFunc("GET /account-check", func(w http.ResponseWriter, r *http.Request) {
+		id, err := auth.Lookup(r.URL.Query().Get("user"), allowed)
+		if err != nil || auth.AccountAllowed(id.Username) != nil {
+			http.Error(w, "account unavailable", 403)
+			return
+		}
+		json.NewEncoder(w).Encode(id)
+	})
 	mux.HandleFunc("POST /authenticate", func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 8192)
+		r.Body = http.MaxBytesReader(w, r.Body, 24000)
 		var body struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Username    string `json:"username"`
+			Password    string `json:"password"`
+			NewPassword string `json:"newPassword"`
 		}
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
-		if dec.Decode(&body) != nil || body.Username == "" || body.Password == "" {
+		if dec.Decode(&body) != nil || dec.Decode(new(any)) != io.EOF || body.Username == "" || body.Password == "" || len(body.Username) > 64 || len(body.Password) > 4096 || len(body.NewPassword) > 4096 || strings.ContainsAny(body.Password+body.NewPassword, "\x00\r\n") {
 			http.Error(w, "invalid request", 400)
 			return
 		}
 		id, err := auth.Lookup(body.Username, allowed)
-		if err != nil || auth.Authenticate(body.Username, body.Password) != nil {
+		if err != nil {
+			http.Error(w, "authentication failed", 401)
+			return
+		}
+		authErr := auth.Authenticate(body.Username, body.Password)
+		if errors.Is(authErr, auth.ErrPasswordExpired) || (authErr == nil && body.NewPassword != "") {
+			if body.NewPassword == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(409)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Password change required"})
+				return
+			}
+			if err = profile.Password(r.Context(), body.Username, body.Password, body.NewPassword); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
+			}
+			authErr = auth.Authenticate(body.Username, body.NewPassword)
+		}
+		if authErr != nil {
 			http.Error(w, "authentication failed", 401)
 			return
 		}
@@ -86,7 +118,7 @@ func main() {
 	})
 
 	mux.HandleFunc("/cooling", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := auth.Lookup(r.URL.Query().Get("user"), allowed); err != nil {
+		if id, err := auth.Lookup(r.URL.Query().Get("user"), allowed); err != nil || (r.Method != "GET" && id.Role != "admin") {
 			http.Error(w, "access denied", 403)
 			return
 		}

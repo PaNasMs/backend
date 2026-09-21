@@ -259,6 +259,24 @@ func (m *Manager) ClearHistory() error {
 	_, err := m.db.Exec("INSERT OR IGNORE INTO hidden_jobs SELECT id FROM jobs WHERE status='succeeded' OR (status='cancelled' AND stage='Cancelled before start') OR (status IN ('failed','interrupted','cancelled') AND id IN (SELECT id FROM job_reviews))")
 	return err
 }
+func (m *Manager) clearHistoryFor(user string, admin bool) error {
+	if admin {
+		return m.ClearHistory()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.db.Exec("INSERT OR IGNORE INTO hidden_jobs SELECT id FROM jobs WHERE username=? AND (status='succeeded' OR (status='cancelled' AND stage='Cancelled before start') OR (status IN ('failed','interrupted','cancelled') AND id IN (SELECT id FROM job_reviews)))", user)
+	return err
+}
+func userAction(action string, params map[string]any, user string) bool {
+	switch action {
+	case "file.mkdir", "file.copy", "file.move", "file.rename", "file.trash", "file.restore", "file.delete":
+		return true
+	case "user.session.end":
+		return params["target"] == user
+	}
+	return false
+}
 func reply(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -267,7 +285,8 @@ func reply(w http.ResponseWriter, status int, v any) {
 func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := r.URL.Query().Get("user")
-		if _, e := auth.Lookup(user, allowed); e != nil {
+		id, e := auth.Lookup(user, allowed)
+		if e != nil {
 			reply(w, 403, map[string]string{"error": "Access denied"})
 			return
 		}
@@ -277,6 +296,15 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 				if e != nil {
 					reply(w, 503, map[string]string{"error": "Task log unavailable"})
 					return
+				}
+				if id.Role != "admin" {
+					own := []Job{}
+					for _, item := range j {
+						if ownsJob(id, item.User, item.Created) {
+							own = append(own, item)
+						}
+					}
+					j = own
 				}
 				reply(w, 200, j)
 				return
@@ -305,12 +333,25 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 			return
 		}
 		if r.URL.Query().Get("view") == "clear-history" {
-			if e := m.ClearHistory(); e != nil {
+			if e := m.clearHistoryFor(user, id.Role == "admin"); e != nil {
 				reply(w, 503, map[string]string{"error": "Could not clear task history"})
 				return
 			}
 			reply(w, 200, map[string]bool{"ok": true})
 			return
+		}
+		if id.Role != "admin" {
+			view := r.URL.Query().Get("view")
+			if view == "cancel" || view == "recover" || view == "acknowledge" {
+				var owner, created string
+				if m.db.QueryRow("SELECT username,created FROM jobs WHERE id=?", req.ID).Scan(&owner, &created) != nil || !ownsJob(id, owner, created) {
+					reply(w, 403, map[string]string{"error": "Access denied"})
+					return
+				}
+			} else if !userAction(req.Action, req.Params, user) {
+				reply(w, 403, map[string]string{"error": "Administrator permissions required"})
+				return
+			}
 		}
 		if r.URL.Query().Get("view") == "cancel" {
 			if err := m.cancel(req.ID); err != nil {
@@ -403,4 +444,19 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 		m.queue <- work{j, req}
 		reply(w, 202, map[string]string{"id": j.ID})
 	}
+}
+
+func ownsJob(id auth.Identity, username, created string) bool {
+	if id.Username != username {
+		return false
+	}
+	if id.Created == "" {
+		return true
+	}
+	since, e := time.Parse(time.RFC3339Nano, id.Created)
+	if e != nil {
+		return false
+	}
+	when, e := time.Parse(time.RFC3339Nano, created)
+	return e == nil && !when.Before(since)
 }

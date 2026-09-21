@@ -12,6 +12,7 @@ trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
 mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/panasms" "$stage/usr/share/panasms/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
 go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
 go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-agent" ./cmd/panasms-agent
+go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-password" ./cmd/panasms-password
 install -d "$stage/usr/share/doc/panasms-prototype"
 install -m 0644 LICENSE "$stage/usr/share/doc/panasms-prototype/LICENSE"
 install -m 0644 NOTICE "$stage/usr/share/doc/panasms-prototype/copyright"
@@ -32,7 +33,7 @@ for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$scri
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-prototype
-Version: 0.2.2
+Version: 0.2.3
 Section: admin
 Priority: optional
 Architecture: $arch
@@ -40,4 +41,4 @@ Maintainer: PaNasMs local development
 Depends: libc6, libpam0g, libpam-runtime, systemd, adduser, openssl, util-linux, udev, python3, python3-dbus, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, cifs-utils, nfs-common, nfs-kernel-server, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
-dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.2_${arch}.deb"
+dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_0.2.3_${arch}.deb"

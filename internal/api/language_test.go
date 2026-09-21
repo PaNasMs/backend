@@ -1,9 +1,11 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/user"
+	"panasms.local/backend/internal/auth"
 	"strings"
 	"testing"
 )
@@ -15,8 +17,18 @@ func TestLanguagePreferenceValidationAndLegacyClient(t *testing.T) {
 	}
 	s := testServer(t)
 	s.Allowed[current.Username] = true
+	id, err := auth.Lookup(current.Username, s.Allowed)
+	if err != nil {
+		t.Skip("requires a normal sudo test runner", err)
+	}
+	s.Agent = &http.Client{Transport: accountTestTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	})}
 	token, err := s.Store.Session(current.Username)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Store.SessionDetails(token, id.UID, id.Epoch, "", "test"); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
@@ -44,3 +56,7 @@ func TestLanguagePreferenceValidationAndLegacyClient(t *testing.T) {
 		}
 	}
 }
+
+type accountTestTransport func(*http.Request) (*http.Response, error)
+
+func (f accountTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

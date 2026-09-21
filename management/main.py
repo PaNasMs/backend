@@ -17,15 +17,28 @@ import job_recovery
 
 def dispatch(mode, user, request):
     account = pwd.getpwnam(user)
-    require(
-        account.pw_uid > 0 and grp.getgrnam("sudo").gr_gid in os.getgrouplist(user, account.pw_gid),
-        'Administrator permissions have changed',
-    )
+    accounts.normal(account)
+    admin = grp.getgrnam('sudo').gr_gid in os.getgrouplist(user, account.pw_gid)
+    policy = accounts.account_policy.entry(account)
+    require(not policy.get('disabled') and policy.get('panel', admin), 'Panel access is disabled')
+    require(not accounts.account_policy.expired(accounts.account_policy.shadow(user)) and not accounts.account_policy.password_inactive(accounts.account_policy.shadow(user)), 'Linux account has expired')
+    own_files = {'file.mkdir','file.copy','file.move','file.rename','file.trash','file.restore','file.delete'}
+    if not admin:
+        if mode == 'query':
+            require(request.get('view') in ('files','modules','account-sessions','account-details','storage-options'), 'Administrator permissions required')
+            if request.get('view') in ('account-sessions','account-details'): request['target'] = user
+        else:
+            require(request.get('action') in own_files or (request.get('action') == 'user.session.end' and request.get('params',{}).get('target') == user), 'Administrator permissions required')
     if mode == "recover":
+        if not admin:
+            os.initgroups(user,account.pw_gid);os.setgid(account.pw_gid);os.setuid(account.pw_uid)
         return job_recovery.inspect(request)
     if mode == "query":
         view = request.get("view")
         target = request.get("target", "")
+        if view == 'accounts': return accounts.query()
+        if view == 'account-details': return accounts.query(target)
+        if view == 'account-sessions': return accounts.account_sessions.sessions(target)
         if view == "network":
             return network.query()
         if view == "homes-check":
@@ -33,7 +46,9 @@ def dispatch(mode, user, request):
         if view == "homes":
             return accounts.homes.query()
         if view == "modules":
-            return module_manager.list_modules()
+            result = module_manager.list_modules()
+            if not admin: result['installed'] = [m for m in result['installed'] if m['id'] == 'files']
+            return result
         if view == "module-catalog":
             return module_catalog.list_available()
         extensions = module_manager.load_operations("queries", view)

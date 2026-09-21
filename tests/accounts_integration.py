@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix="panasms-accounts-test-", dir="/var/tmp"
     for p in [
         "usr",
         "etc/pam.d",
+        "etc/panasms",
         "etc/default",
         "var/lib/panasms-agent",
         "srv/data",
@@ -65,14 +66,20 @@ with tempfile.TemporaryDirectory(prefix="panasms-accounts-test-", dir="/var/tmp"
         (root / "etc/login.defs").write_text(
             "UID_MIN 15000\nUID_MAX 15999\nGID_MIN 15000\nGID_MAX 15999\nENCRYPT_METHOD SHA512\n"
         )
-        for name in ["common-password", "chpasswd"]:
+        shutil.copy("/etc/shells", root / "etc/shells")
+        for name in ["common-password", "common-auth", "common-account", "passwd", "chpasswd"]:
             shutil.copy("/etc/pam.d/" + name, root / "etc/pam.d" / name)
+        (root / "etc/pam.d/panasms").write_text("@include common-auth\n@include common-account\n")
+        helper = Path(__file__).resolve().parents[1] / "dist/panasms-password-test"
+        if helper.exists(): shutil.copy(helper,root / "code/password-helper")
         for p in (Path(__file__).resolve().parents[1] / "management").glob("*.py"):
             shutil.copy(p, root / "code" / p.name)
         (root / "code/test.py").write_text(
             """import accounts,pwd,grp
 from common import Rejected
 from pathlib import Path
+from unittest.mock import patch
+accounts.account_ssh.apply=lambda:None
 
 def perform(action,p):
     accounts.plan(action,p,'admin');accounts.execute(action,p);print('PASS',action,flush=True)
@@ -82,6 +89,22 @@ u=pwd.getpwnam('testuser');assert u.pw_shell=='/usr/sbin/nologin';assert Path(u.
 perform('user.edit',{'target':'testuser','name':'Changed','groups':['family']})
 assert pwd.getpwnam('testuser').pw_gecos=='Changed'
 perform('user.password',{'target':'testuser','password':'different-isolated-test'})
+import json,subprocess
+helper=Path('/code/password-helper')
+if helper.exists():
+    def change(current,next):
+        proc=subprocess.run([str(helper)],input=json.dumps({'user':'testuser','current':current,'next':next}),text=True,capture_output=True,check=True)
+        return json.loads(proc.stdout)
+    assert change('incorrect','new-isolated-password').get('error'), 'wrong current password accepted'
+    result=change('different-isolated-test','changed-isolated-password')
+    assert not result.get('error'),result
+    subprocess.run(['chage','--mindays','10','testuser'],check=True)
+    assert change('changed-isolated-password','too-soon-password').get('error'), 'PAM minimum age was bypassed'
+    subprocess.run(['chage','--mindays','0','--lastday','0','testuser'],check=True)
+    result=change('changed-isolated-password','after-expiry-password')
+    assert not result.get('error'),result
+    assert not accounts.account_policy.shadow('testuser')['forcePasswordChange']
+    print('PASS PAM current password, default change, minimum age, forced change',flush=True)
 (Path(u.pw_dir)/'marker').write_text('preserve')
 import os
 os.chown(Path(u.pw_dir)/'marker',u.pw_uid,u.pw_gid)

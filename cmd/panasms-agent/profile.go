@@ -64,7 +64,7 @@ func profileHandler(allowed map[string]bool) http.HandlerFunc {
 				http.Error(w, "invalid password", 400)
 				return
 			}
-			err = auth.ChangePassword(id.Username, body.Current, body.Next)
+			err = profile.Password(r.Context(), id.Username, body.Current, body.Next)
 		case "add", "delete":
 			_, err = profile.Keys(r.Context(), id.Username, map[string]string{"action": body.Action, "key": body.Key, "id": body.ID})
 		default:
@@ -72,7 +72,7 @@ func profileHandler(allowed map[string]bool) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			http.Error(w, "profile update failed", 400)
+			http.Error(w, err.Error(), 400)
 			return
 		}
 		log.Printf("profile action=%s user=%s", body.Action, id.Username)

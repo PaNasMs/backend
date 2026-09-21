@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"io"
@@ -110,7 +111,26 @@ func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
 	if e != nil {
 		return auth.Identity{}, e
 	}
-	return auth.Lookup(username, s.Allowed)
+	id, err := auth.Lookup(username, s.Allowed)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+	if !s.Store.SessionMatches(cookie.Value, id.UID, id.Epoch) {
+		return auth.Identity{}, fmt.Errorf("session revoked")
+	}
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "http://agent/account-check?user="+url.QueryEscape(username), nil)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+	response, err := s.Agent.Do(req)
+	if err != nil {
+		return auth.Identity{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return auth.Identity{}, fmt.Errorf("account unavailable")
+	}
+	return id, nil
 }
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
@@ -137,7 +157,7 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.2"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.3"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Group(func(r chi.Router) {
@@ -146,6 +166,10 @@ func (s *Server) Handler() http.Handler {
 				id, e := s.Identity(r)
 				if e != nil {
 					fail(w, 401, "Sign-in required")
+					return
+				}
+				if !userRoute(id, r) {
+					fail(w, 403, "Administrator permissions required")
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, id)))
@@ -162,13 +186,14 @@ func (s *Server) Handler() http.Handler {
 			w.WriteHeader(204)
 		})
 		r.Get("/api/v1/users", func(w http.ResponseWriter, r *http.Request) {
-			v, e := system.AccountsRead(r.Context())
-			if e != nil {
-				fail(w, 503, "Could not read Linux users")
-				return
-			}
-			jsonResponse(w, 200, v)
+			values := r.URL.Query()
+			values.Set("view", "accounts")
+			r.URL.RawQuery = values.Encode()
+			s.manage(w, r)
 		})
+		r.Get("/api/v1/sessions", s.sessions)
+		r.Post("/api/v1/sessions", s.sessions)
+		r.Get("/api/v1/security-history", s.securityHistory)
 		r.Get("/api/v1/storage", func(w http.ResponseWriter, r *http.Request) {
 			v, e := system.StorageRead(r.Context())
 			if e != nil {
@@ -178,6 +203,10 @@ func (s *Server) Handler() http.Handler {
 			jsonResponse(w, 200, v)
 		})
 		r.Get("/api/v1/notifications", func(w http.ResponseWriter, r *http.Request) {
+			if r.Context().Value(identityKey{}).(auth.Identity).Role != "admin" {
+				jsonResponse(w, 200, []any{})
+				return
+			}
 			v, e := s.notifications(r.Context(), r.Context().Value(identityKey{}).(auth.Identity).Username)
 			if e != nil {
 				fail(w, 503, "Notifications unavailable")
@@ -286,6 +315,10 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/api/v1/terminal", s.terminal)
 		r.Get("/api/v1/manage", s.manage)
 		r.Post("/api/v1/manage", s.manage)
+		r.Get("/api/v1/avatar", s.avatar)
+		r.Get("/api/v1/avatar/image", s.avatar)
+		r.Put("/api/v1/avatar", s.avatar)
+		r.Delete("/api/v1/avatar", s.avatar)
 		r.Get("/api/v1/profile", s.profile)
 		r.Post("/api/v1/profile", s.profile)
 		r.Get("/api/v1/cooling", s.cooling)
@@ -348,13 +381,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		NewPassword string `json:"newPassword"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if len(body.Username) > 64 || len(body.Password) > 4096 || body.Password == "" || strings.ContainsRune(body.Password, 0) || strings.ContainsRune(body.Username, 0) {
+	if len(body.NewPassword) > 4096 || strings.ContainsAny(body.NewPassword, "\x00\r\n") || len(body.Username) > 64 || len(body.Password) > 4096 || body.Password == "" || strings.ContainsRune(body.Password, 0) || strings.ContainsRune(body.Username, 0) {
 		fail(w, 400, "Check your username and password")
 		return
 	}
@@ -372,6 +406,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		if resp.StatusCode == 409 || resp.StatusCode == 400 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.StatusCode)
+			io.Copy(w, io.LimitReader(resp.Body, 8192))
+			return
+		}
+		s.Store.Audit(body.Username, body.Username, "login", "failed")
 		fail(w, 401, "Incorrect password or access not allowed")
 		return
 	}
@@ -380,11 +421,25 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "Sign-in service error")
 		return
 	}
+	if err := s.Store.BindAccount(id.Username, id.UID, id.Principal); err != nil {
+		fail(w, 503, "Account storage unavailable")
+		return
+	}
+	if body.NewPassword != "" {
+		s.Store.RevokeUser(id.Username)
+	}
 	token, e := s.Store.Session(id.Username)
 	if e != nil {
 		fail(w, 500, "Could not create session")
 		return
 	}
+	address, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if s.Store.SessionDetails(token, id.UID, id.Epoch, address, r.UserAgent()) != nil {
+		s.Store.Revoke(token)
+		fail(w, 500, "Could not create session")
+		return
+	}
+	s.Store.Audit(id.Username, id.Username, "login", "succeeded")
 	s.cookie(w, token, 28800)
 	jsonResponse(w, 200, id)
 }
@@ -526,8 +581,15 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode == 403 {
 			message = "Incorrect current password"
 		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == 400 && len(raw) > 0 {
+			message = strings.TrimSpace(string(raw))
+		}
 		fail(w, resp.StatusCode, message)
 		return
+	}
+	if r.Method == "POST" {
+		s.Store.Audit(id.Username, id.Username, "profile."+body["action"], "succeeded")
 	}
 	if body["action"] == "password" {
 		if s.Store.RevokeUser(id.Username) != nil {
@@ -546,10 +608,6 @@ func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) manage(w http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(identityKey{}).(auth.Identity)
-	if id.Role != "admin" {
-		fail(w, 403, "Administrator permissions required")
-		return
-	}
 	values := r.URL.Query()
 	values.Set("user", id.Username)
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

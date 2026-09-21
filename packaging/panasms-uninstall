@@ -19,6 +19,7 @@ print('PaNasMs services, binaries, UI and PAM service configuration will be remo
 print('Module services are stopped; purge also removes uploaded archives, module code and registry. User files remain.')
 print('Purge additionally removes:', ', '.join(owned))
 print('The independent panasms-cooling package/service is retained to keep the disks cooled.')
+print('Linux account expiry, login shells and /etc/ssh/sshd_config.d/60-panasms-users.conf are retained as OS access policy.')
 print('Linux user data, RAID, filesystems, mounts, other packages and system journal are preserved.')
 if mode == '--plan':
     subprocess.run(['dpkg-query', '-L', 'panasms-prototype'], check=False)

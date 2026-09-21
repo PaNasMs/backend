@@ -1,6 +1,6 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.2
+The Linux server for **Pavlo's NAS Management System**. The current 0.2.3
 prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
 system-management adapters. The deployed target is Raspberry Pi OS ARM64.
 
@@ -98,10 +98,47 @@ sh scripts/build-deb.sh ../frontend/dist
 sh scripts/build-cooling-deb.sh
 ```
 
-Outputs are `dist/panasms-prototype_0.2.2_<architecture>.deb` and
+Outputs are `dist/panasms-prototype_0.2.3_<architecture>.deb` and
 `dist/panasms-cooling_0.2.0_all.deb`. The package script expects a native Go build;
 ARM64 is the tested deployment target. Go binaries can be built without frontend
 sources, but the prototype Debian package requires prebuilt SPA assets.
+
+## Users, groups and personal access
+
+The Users section reads local Linux users and groups on every request. Membership
+in `sudo` (primary or supplementary) grants administration. Root, service UIDs,
+non-local and ambiguous duplicate-UID accounts are visible but protected.
+Ordinary accounts require explicit panel access in `/etc/panasms/accounts.json`;
+existing sudo users retain bootstrap access. The optional deployment allowlist
+remains an additional restriction.
+
+Administrators manage account names, primary/supplementary groups, homes, UID,
+expiry, password aging, forced password changes, SSH keys and panel/SSH sessions.
+New accounts have a private home and panel access; SSH is disabled by default.
+Deletion defaults to removing only the home; shared-folder files are preserved.
+Busy homes return named process/service blockers. Self-lockout and removal of the
+last available administrator are blocked. UID changes update home ownership via
+`usermod`; ownership on other volumes requires a separate administrator decision.
+
+Passwords follow the host PAM configuration, without an extra application strength
+policy. Own-password changes use the `passwd` PAM stack with the caller's real UID
+and effective root identity, as the system password utility does. Administrator
+resets use `chpasswd`. Expired passwords must be changed before a session is issued.
+Panel sessions are rechecked against live Linux access, UID and revocation epoch;
+password resets and access/membership changes revoke affected sessions.
+
+Ordinary users access their profile, avatar, language, desktop preferences, read-only
+system widgets and Files under their own Linux permissions. They cannot administer
+storage, network, modules, users, service settings or other users' sessions/tasks.
+Terminal and Cloud Sync remain administrator-only. Security history records panel
+sign-ins, profile changes, session termination and completed account/group jobs.
+SSH sessions are discovered and terminated through `systemd-logind`.
+
+SSH restrictions use `/etc/ssh/sshd_config.d/60-panasms-users.conf`, validate effective
+OpenSSH configuration and reload the service. Disabling an account also expires it
+in Linux and terminates SSH sessions. Existing Samba credentials and SMB sessions
+are not managed by this section. Removing PaNasMs preserves Linux account state
+and this SSH policy rather than silently reopening access.
 
 ## Installation and operation
 

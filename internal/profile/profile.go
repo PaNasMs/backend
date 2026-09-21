@@ -23,6 +23,7 @@ type Profile struct {
 	Name     string   `json:"name"`
 	UID      string   `json:"uid"`
 	Home     string   `json:"home"`
+	Role     string   `json:"role"`
 	Groups   []string `json:"groups"`
 	Keys     []Key    `json:"keys"`
 }
@@ -57,7 +58,13 @@ func Read(ctx context.Context, username string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	return Profile{username, strings.Split(u.Name, ",")[0], u.Uid, u.HomeDir, strings.Fields(string(groups)), keys}, nil
+	role := "user"
+	for _, g := range strings.Fields(string(groups)) {
+		if g == "sudo" {
+			role = "admin"
+		}
+	}
+	return Profile{Username: username, Name: strings.Split(u.Name, ",")[0], UID: u.Uid, Home: u.HomeDir, Groups: strings.Fields(string(groups)), Keys: keys, Role: role}, nil
 }
 func ValidName(name string) bool {
 	if len([]rune(name)) > 80 {

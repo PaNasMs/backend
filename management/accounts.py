@@ -3,6 +3,7 @@ import pwd
 import re
 import secrets
 import homes
+import folder_locations
 import account_policy
 import account_sessions
 import account_ssh
@@ -89,6 +90,7 @@ def home(value, username, existing=False):
         )
     else:
         require(not p.exists(), 'Destination folder already exists')
+        folder_locations.destination(p)
     return p
 
 

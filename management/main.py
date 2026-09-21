@@ -42,6 +42,8 @@ def dispatch(mode, user, request):
         if view == 'account-sessions': return accounts.account_sessions.sessions(target)
         if view == "sharing": return sharing.query()
         if view == "share-folders": return sharing.folders(target)
+        if view == "home-folders": return accounts.folder_locations.folders(target)
+        if view == "mount-folders": return accounts.folder_locations.mount_folders(target)
         if view == "network":
             return network.query()
         if view == "homes-check":

@@ -1,5 +1,6 @@
 import job_control
 import pwd
+import folder_locations
 from common import *
 
 JOURNAL = Path('/var/lib/panasms-agent/home-move.json')
@@ -115,6 +116,7 @@ def inspect(destination):
     no_links(source)
     no_links(target)
     require(source.is_dir() and target.parent.is_dir() and not target.exists(), 'The source and destination parent must exist; the destination must be a new folder')
+    folder_locations.destination(target)
     mounts = json_command(['findmnt', '--json', '--list', '--output', 'TARGET'])['filesystems']
     require(not any(m['target'] == str(source) or m['target'].startswith(str(source) + '/') for m in mounts), 'The home folder contains mounts; unmount them before moving')
     fs = json_command(['findmnt', '--json', '--target', str(target.parent), '--output', 'TARGET,FSTYPE,OPTIONS'])['filesystems'][0]

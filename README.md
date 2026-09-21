@@ -43,6 +43,13 @@ It runs on attachment and is also applied to matching devices during installatio
 Removing the package removes the rule. The switch message is documented in the
 [USB_ModeSwitch device discussion](https://www.draisberghof.de/usb_modeswitch/bb/viewtopic.php?t=2972).
 
+Home-folder destinations must use a writable local Linux filesystem on permanent
+storage, mounted automatically. USB and removable backing devices are rejected,
+including members beneath RAID or encrypted volumes. The checks run for individual
+home creation/moves and moving the shared home base. Read-only folder-selection
+queries expose eligible roots and explain unavailable locations; they do not
+create directories or replace the validation performed by each operation.
+
 ## Task cancellation and recovery
 
 The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional

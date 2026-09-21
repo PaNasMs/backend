@@ -1,6 +1,6 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.4
+The Linux server for **Pavlo's NAS Management System**. The current 0.2.5
 prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
 system-management adapters. The deployed target is Raspberry Pi OS ARM64.
 

@@ -300,6 +300,34 @@ def query():
             'services':{s:command(['systemctl','is-active',s],accepted=(0,3,4)).strip() for s in ('smbd','nfs-kernel-server')}}
 
 
+
+
+def folders(target):
+    from host import export_path
+    rows = json_command(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE,SOURCE']).get('filesystems', [])
+    roots = []
+    for row in rows:
+        if row.get('fstype') not in ('ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'vfat', 'exfat', 'ntfs', 'ntfs3') or row.get('target') == '/':
+            continue
+        path = row.get('target', '')
+        try:
+            export_path(path)
+            roots.append(path)
+        except Rejected:
+            continue
+    if not target:
+        return {'roots': sorted(set(roots)), 'path': '', 'folders': []}
+    path = export_path(target)
+    require(any(str(path) == root or str(path).startswith(root.rstrip('/') + '/') for root in roots), 'Choose a folder on a mounted local volume')
+    children = []
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.'):
+                children.append({'name': entry.name, 'path': entry.path})
+                if len(children) >= 1000:
+                    break
+    return {'roots': sorted(set(roots)), 'path': str(path), 'folders': sorted(children, key=lambda item: item['name'].casefold())}
+
 if __name__ == '__main__':
     try:
         if len(sys.argv) == 3 and sys.argv[1] == '--check':

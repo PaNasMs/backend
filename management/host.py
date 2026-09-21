@@ -90,8 +90,16 @@ def query(view, target):
     if view == "updates":
         raw = command(["apt-get", "--simulate", "upgrade"], timeout=60)
         rows = [line for line in raw.splitlines() if line.startswith(("Inst ", "Remv "))]
-        return {"packages": rows, "rebootRequired": Path("/run/reboot-required").exists()}
+        return {"packages": rows, "packageDetails": [package_detail(line) for line in rows], "rebootRequired": Path("/run/reboot-required").exists()}
     raise Rejected('Unknown system query')
+
+
+def package_detail(line):
+    match = re.match(r"^(Inst|Remv) (\S+)(?: \[([^\]]+)\])?(?: \((\S+) (.*)\))?", line)
+    if not match:
+        return {"name": line, "installed": "", "available": "", "source": "", "action": "unknown"}
+    action, name, installed, available, source = match.groups()
+    return {"name": name, "installed": installed or "", "available": available or "", "source": source or "", "action": "install" if action == "Inst" else "remove"}
 
 
 def plan(action, p, user=None):

@@ -63,8 +63,8 @@ runuser -u "$admin" -- env PATH="$scratch/go/bin:/usr/bin:/bin" GOPATH="$scratch
  scripts/build-cooling-deb.sh
 ' bash "$scratch"
 install -d -o "$admin" -g "$(id -gn "$admin")" "$repo/dist"
-package="$repo/dist/panasms-prototype_0.2.4_${arch}.deb"
-install -o "$admin" -g "$(id -gn "$admin")" -m 0644 "$scratch/backend/dist/panasms-prototype_0.2.4_${arch}.deb" "$package"
+package="$repo/dist/panasms-prototype_0.2.5_${arch}.deb"
+install -o "$admin" -g "$(id -gn "$admin")" -m 0644 "$scratch/backend/dist/panasms-prototype_0.2.5_${arch}.deb" "$package"
 if [[ $disk_fan == 1 ]]; then
  install -m 0644 "$scratch/backend/dist/panasms-cooling_0.2.0_all.deb" "$repo/dist/panasms-cooling_0.2.0_all.deb"
  apt-get install -y --reinstall "$repo/dist/panasms-cooling_0.2.0_all.deb"

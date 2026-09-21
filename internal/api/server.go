@@ -157,7 +157,7 @@ func (s *Server) Handler() http.Handler {
 		})
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.4"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.5"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Group(func(r chi.Router) {

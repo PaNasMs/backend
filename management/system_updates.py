@@ -141,6 +141,7 @@ def execute(action,p,user=None):
             publish_status()
             return {'message':'Update preferences saved'}
         operation=action.rsplit('.',1)[1]
+        save('active-units.json',[])
         worker=ROOT/'worker';worker.mkdir(exist_ok=True)
         for name in ('system_updates.py','common.py'):
             shutil.copy2(Path(__file__).parent/name,worker/name)
@@ -344,6 +345,7 @@ def work():
         op=s['operation'];units=[];mutated=False
         try:
             if op=='rollback':
+                mutated=True
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore();finish('rolled-back');return
             data=check()
             if op=='check':finish('checked');return

@@ -58,6 +58,12 @@ class Updates(unittest.TestCase):
         events=self.transaction(True)
         self.assertEqual(events.count('restore'),1)
         self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
+    def test_failed_manual_restore_keeps_recovery_required(self):
+        u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.5'})
+        with patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
+        self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
+        self.assertTrue(u.changing())
+
     def test_power_loss_recovery_only_restores_after_mutation(self):
         for phase in ('queued','backing-up','installing','verifying','rolling-back'):
             u.save('state.json',{'id':'test','phase':phase})

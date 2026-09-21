@@ -1,4 +1,5 @@
 import json
+import socket
 from pathlib import Path
 import sys
 import tempfile
@@ -31,6 +32,14 @@ class WebAccessTest(unittest.TestCase):
         self.assertEqual(web.current_port(), 8080)
         with patch.object(web, 'healthy', return_value=True):
             self.assertEqual(web.configure(None), 8080)
+
+    def test_listening_socket_is_rejected(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            with self.assertRaises(web.Rejected):
+                web.available(listener.getsockname()[1])
 
     def test_busy_port_changes_nothing(self):
         with patch.object(web, 'available', side_effect=web.Rejected('occupied')):

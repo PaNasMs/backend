@@ -51,6 +51,21 @@ def inspect(request):
         output = command(['nmcli', '-t', '-f', 'DEVICE,STATE,CONNECTION', 'device'], timeout=10)
         checks.append({'label': 'Network interfaces', 'value': output[:8192]})
         message = 'Network watchdogs handle pending rollbacks. Review current connectivity and any pending confirmation in Network before applying a fresh configuration.'
+    elif action.startswith('system.update.'):
+        import system_updates
+        state = system_updates.query()
+        route = '/settings/updates'
+        checks.append({'label': 'Installed packages', 'value': state['installed']})
+        checks.append({'label': 'Update journal', 'value': state['state']})
+        checks.append({'label': 'Backup available', 'value': state['rollbackAvailable']})
+        if state['state'].get('phase') == 'recovery-required' and state['rollbackAvailable']:
+            recovery_action = 'system.update.rollback'
+        message = 'The independent update worker owns installation recovery. Review its journal and backup before retrying; this check does not start or repeat an update.'
+    elif action == 'system.web-port':
+        import web_access
+        route = '/settings/general'
+        checks.append({'label': 'Web access', 'value': web_access.query()})
+        message = 'Check the active address before applying another port change.'
     elif action.startswith(('service.', 'updates.', 'system.')):
         route = '/system/updates' if action.startswith('updates.') else '/system/services'
         if action.startswith('service.'):
@@ -97,7 +112,7 @@ def inspect(request):
         if action == 'file.trash': message = 'Check Trash and the original folder. A missing source alone does not prove the item reached Trash.'
         elif action == 'file.mkdir': message = 'Check whether the intended folder exists before creating it again.'
         elif action == 'file.permissions': message = 'Review current ownership and permissions before applying another change.'
-    else:
+    elif action.startswith(('raid.', 'disk.', 'smart.', 'filesystem.', 'partition.', 'luks.', 'mount.', 'nfs.', 'smb.')):
         route = '/storage/disks' if action.startswith(('raid.', 'disk.', 'smart.')) else '/storage/mounts'
         inventory = json_command(['lsblk', '--json', '--bytes', '--output', 'NAME,PATH,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS'], timeout=15)
         checks.append({'label': 'Storage state', 'value': inventory})
@@ -106,4 +121,6 @@ def inspect(request):
             message = 'Check array members and maintenance progress. Use the array pause/resume controls for an existing operation; do not recreate or reformat the array.'
         elif action.startswith(('filesystem.', 'partition.', 'luks.', 'disk.')):
             message = 'Inspect the actual partition/filesystem state. Formatting and resizing cannot be safely rolled back by rerunning the command. Back up available data before repair.'
+    else:
+        message = 'No automatic recovery inspector is registered for this module action. Open the module and inspect its state before retrying. The operation has not been repeated.'
     return {'message': message, 'checks': checks, 'route': route, 'recoveryAction': recovery_action}

@@ -317,3 +317,34 @@ failed or interrupted operations with uncertain outcomes remain reviewable.
 Acknowledging an operation resolves its task alert, and resolved notifications
 can be dismissed per user. Clearing notification history does not acknowledge
 unreviewed work or reset an active hardware condition.
+
+## Core contracts, migrations and interruption safety
+
+The [management API contract](api/openapi.yaml) documents the core query schemas,
+preview/submission protocol and persistent task lifecycle. `ManagementViews` maps
+query names to response schemas; module queries and action parameters belong to
+the owning module. Native smartctl and Samba fields remain extensible. Generate
+frontend types with `npm run generate:api` in the adjacent frontend checkout.
+
+Core state and agent jobs use separate SQLite databases with WAL, FULL synchronous
+writes and one atomic migration transaction. Append migrations; never edit an
+applied migration. The checksum journal rejects changed, gapped or future schemas.
+The legacy core `schema_version=1` marker is retained for compatibility; the
+`panasms_migrations` journal is authoritative. Downgrades restore the matching
+package/configuration/database snapshot through the updater instead of rewriting
+new schemas with old migrations.
+
+A job must be durably marked running before its helper starts. If journal writes
+fail, new mutations are suspended until database access is restored and the agent
+is restarted. Running helpers reach their own safe completion points. On restart,
+queued jobs are cancelled and running jobs become interrupted, requiring inspection;
+operation credentials and commands are never replayed. Interrupted formatting or
+RAID changes are inspected, not advertised as automatically reversible.
+
+The regression suite includes legacy adoption, failed/future migrations, process
+crashes inside migration and job execution, journal write failures, cooperative
+cancellation, conflicting work ordering and independent work concurrency. API
+contract tests require `python3-yaml` and `python3-jsonschema` in addition to the
+existing native/Python test dependencies. Run `make check` and `make check-race`.
+These tests use temporary data; physical power-loss and hardware-controller behavior
+remain separate installation acceptance checks.

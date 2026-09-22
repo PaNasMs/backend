@@ -37,3 +37,12 @@ class JobControlTest(unittest.TestCase):
             self.assertEqual(destination.read_text(), 'partial')
             self.assertEqual(len(report['checks']), 2)
             self.assertIsNone(report['recoveryAction'])
+
+    def test_destructive_recovery_is_read_only_and_never_replays(self):
+        for action in ('raid.delete', 'raid.grow', 'disk.wipe', 'filesystem.format', 'filesystem.resize', 'partition.delete', 'luks.format', 'mount.detach'):
+            with self.subTest(action=action), patch.object(job_recovery, 'json_command', return_value={'blockdevices': []}) as query, patch.object(job_recovery, 'command') as mutation, patch.object(Path, 'read_text', return_value='Personalities : [raid1]'):
+                report = job_recovery.inspect({'action':action,'params':{'target':'/dev/example'}})
+                self.assertEqual(query.call_args.args[0][0], 'lsblk')
+                mutation.assert_not_called()
+                self.assertIsNone(report['recoveryAction'])
+                self.assertTrue(report['checks'])

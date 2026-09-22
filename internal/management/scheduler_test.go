@@ -85,3 +85,43 @@ func TestWorkerRunsIndependentJobsAndRechecksCancelledStatus(t *testing.T) {
 		t.Fatal("independent work blocked or cancelled job executed")
 	}
 }
+
+func TestQueuedExclusiveWorkRunsBeforeLaterReaders(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan string, 3)
+	copyRelease := make(chan struct{})
+	m.run = func(ctx context.Context, mode, user string, body any) (json.RawMessage, error) {
+		id := body.(Request).ID
+		started <- id
+		if id == "copy" {
+			<-copyRelease
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	defer func() { close(m.queue); <-m.finished; m.db.Close() }()
+	next := func() string {
+		select {
+		case id := <-started:
+			return id
+		case <-time.After(3 * time.Second):
+			t.Fatal("worker stalled")
+			return ""
+		}
+	}
+	for _, row := range []struct{ id, action string }{{"copy", "file.copy"}, {"eject", "disk.eject"}, {"smart", "smart.short"}} {
+		if _, err := m.db.Exec("INSERT INTO jobs VALUES(?,'alice',?,'target','queued','Queued','now','now','{}')", row.id, row.action); err != nil {
+			t.Fatal(err)
+		}
+		m.queue <- work{Job: Job{ID: row.id, User: "alice"}, Request: Request{ID: row.id, Action: row.action}}
+		if row.id == "copy" && next() != "copy" {
+			t.Fatal("copy missing")
+		}
+	}
+	close(copyRelease)
+	if next() != "eject" || next() != "smart" {
+		t.Fatal("exclusive queue order lost")
+	}
+}

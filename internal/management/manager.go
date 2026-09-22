@@ -7,12 +7,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/database"
 	"sync"
 	"time"
 )
@@ -47,6 +49,7 @@ type work struct {
 type Manager struct {
 	db         *sql.DB
 	mu         sync.Mutex
+	fault      error
 	queue      chan work
 	finished   chan struct{}
 	wake       chan struct{}
@@ -76,7 +79,7 @@ func helper(ctx context.Context, mode, user string, body any) (json.RawMessage, 
 		c.mu.Unlock()
 	}
 	// Helpers return bounded, redacted JSON, never subprocess output or credentials.
-	var output bytes.Buffer
+	output := limitedOutput{limit: 4 << 20}
 	cmd.Stdout = &output
 	pipe, e := cmd.StderrPipe()
 	if e != nil {
@@ -115,25 +118,32 @@ func helper(ctx context.Context, mode, user string, body any) (json.RawMessage, 
 	if e != nil {
 		return nil, errors.New("System handler unavailable")
 	}
-	if len(out) > 4<<20 || !json.Valid(out) {
+	if output.overflow || !json.Valid(out) {
 		return nil, errors.New("Invalid handler response")
 	}
 	return out, nil
 }
 func Open(path string) (*Manager, error) {
-	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate")
 	if e != nil {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	_, e = db.Exec(`CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, username TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, result TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS hidden_jobs(id TEXT PRIMARY KEY);
- CREATE TABLE IF NOT EXISTS job_reviews(id TEXT PRIMARY KEY, checked TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS job_context(id TEXT PRIMARY KEY, context TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS job_recovery(id TEXT PRIMARY KEY, report TEXT NOT NULL, checked TEXT NOT NULL);
+	e = database.Migrate(db, "jobs", migrations)
+	if e == nil {
+		var tx *sql.Tx
+		tx, e = db.Begin()
+		if e == nil {
+			_, e = tx.Exec(`
  INSERT OR IGNORE INTO job_reviews SELECT id,updated FROM jobs WHERE status='failed' AND stage IN ('The exact operation target was not confirmed','State has changed. Review a new operation plan.');
  UPDATE jobs SET status='cancelled',stage='Cancelled before start',updated=datetime('now') WHERE status='queued';
  UPDATE jobs SET status='interrupted',stage='Process interrupted. Check the actual state before retrying.',updated=datetime('now') WHERE status='running';`)
+			if e == nil {
+				e = tx.Commit()
+			}
+			tx.Rollback()
+		}
+	}
 	if e != nil {
 		db.Close()
 		return nil, e
@@ -144,13 +154,21 @@ func Open(path string) (*Manager, error) {
 }
 func (m *Manager) execute(w work) {
 	m.mu.Lock()
+	if m.fault != nil {
+		m.mu.Unlock()
+		return
+	}
 	r, e := m.db.Exec("UPDATE jobs SET status='running',stage=?,updated=? WHERE id=? AND status='queued'", "In progress; the result will be checked", time.Now().UTC().Format(time.RFC3339Nano), w.Job.ID)
 	n := int64(0)
 	if e == nil {
-		n, _ = r.RowsAffected()
+		n, e = r.RowsAffected()
+	}
+	if e != nil {
+		m.fault = e
+		log.Printf("Task journal unavailable: %v", e)
 	}
 	m.mu.Unlock()
-	if n == 0 {
+	if e != nil || n == 0 {
 		return
 	}
 	c := &control{}
@@ -159,7 +177,9 @@ func (m *Manager) execute(w work) {
 	m.controlsMu.Unlock()
 	defer func() { m.controlsMu.Lock(); delete(m.controls, w.Job.ID); m.controlsMu.Unlock() }()
 	ctx := context.WithValue(context.WithValue(context.Background(), controlKey{}, c), progressKey{}, func(stage string) {
-		m.db.Exec("UPDATE jobs SET stage=?,updated=? WHERE id=? AND status='running'", stage, time.Now().UTC().Format(time.RFC3339Nano), w.Job.ID)
+		if _, err := m.db.Exec("UPDATE jobs SET stage=?,updated=? WHERE id=? AND status='running'", stage, time.Now().UTC().Format(time.RFC3339Nano), w.Job.ID); err != nil {
+			m.fail(err)
+		}
 	})
 	result, err := m.run(ctx, "execute", w.Job.User, w.Request)
 	status := "succeeded"
@@ -184,9 +204,20 @@ func (m *Manager) execute(w work) {
 		status = "failed"
 		stage = response.Error
 	}
-	m.db.Exec("UPDATE jobs SET status=?,stage=?,updated=?,result=? WHERE id=?", status, stage, time.Now().UTC().Format(time.RFC3339Nano), string(result), w.Job.ID)
-	if status == "failed" && err == nil && response.NoChanges {
-		m.db.Exec("INSERT OR IGNORE INTO job_reviews(id,checked) VALUES(?,?)", w.Job.ID, time.Now().UTC().Format(time.RFC3339Nano))
+	tx, saveError := m.db.Begin()
+	if saveError == nil {
+		defer tx.Rollback()
+		_, saveError = tx.Exec("UPDATE jobs SET status=?,stage=?,updated=?,result=? WHERE id=?", status, stage, time.Now().UTC().Format(time.RFC3339Nano), string(result), w.Job.ID)
+		if saveError == nil && status == "failed" && err == nil && response.NoChanges {
+			_, saveError = tx.Exec("INSERT OR IGNORE INTO job_reviews(id,checked) VALUES(?,?)", w.Job.ID, time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		if saveError == nil {
+			saveError = tx.Commit()
+		}
+		tx.Rollback()
+	}
+	if saveError != nil {
+		m.fail(saveError)
 	}
 }
 
@@ -295,175 +326,195 @@ func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 			reply(w, 403, map[string]string{"error": "Access denied"})
 			return
 		}
-		if r.Method == "GET" {
-			if r.URL.Query().Get("view") == "jobs" || r.URL.Query().Get("view") == "job" {
-				single := r.URL.Query().Get("view") == "job"
-				var j []Job
-				var e error
-				if single {
-					j, e = m.list("id=?", r.URL.Query().Get("target"))
-				} else {
-					j, e = m.List()
-				}
-				if e != nil {
-					reply(w, 503, map[string]string{"error": "Task log unavailable"})
-					return
-				}
-				if id.Role != "admin" {
-					own := []Job{}
-					for _, item := range j {
-						if ownsJob(id, item.User, item.Created) {
-							own = append(own, item)
-						}
-					}
-					j = own
-				}
-				if single {
-					if len(j) == 0 {
-						reply(w, 404, map[string]string{"error": "Task not found"})
-						return
-					}
-					reply(w, 200, j[0])
-					return
-				}
-				reply(w, 200, j)
-				return
-			}
-			ctx, c := context.WithTimeout(r.Context(), 30*time.Second)
-			defer c()
-			v, e := m.run(ctx, "query", user, map[string]string{"view": r.URL.Query().Get("view"), "target": r.URL.Query().Get("target")})
-			if e != nil {
-				reply(w, 503, map[string]string{"error": e.Error()})
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(v)
-			return
-		}
-		if r.Method != "POST" {
-			w.WriteHeader(405)
-			return
-		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		var req Request
-		d := json.NewDecoder(r.Body)
-		d.DisallowUnknownFields()
-		if d.Decode(&req) != nil || d.Decode(new(any)) != io.EOF {
-			reply(w, 400, map[string]string{"error": "Invalid request"})
-			return
-		}
-		if r.URL.Query().Get("view") == "clear-history" {
-			if e := m.clearHistoryFor(user, id.Role == "admin"); e != nil {
-				reply(w, 503, map[string]string{"error": "Could not clear task history"})
-				return
-			}
-			reply(w, 200, map[string]bool{"ok": true})
-			return
-		}
-		if id.Role != "admin" {
-			view := r.URL.Query().Get("view")
-			if view == "cancel" || view == "recover" || view == "acknowledge" {
-				var owner, created string
-				if m.db.QueryRow("SELECT username,created FROM jobs WHERE id=?", req.ID).Scan(&owner, &created) != nil || !ownsJob(id, owner, created) {
-					reply(w, 403, map[string]string{"error": "Access denied"})
-					return
-				}
-			} else if !userAction(req.Action, req.Params, user) {
-				reply(w, 403, map[string]string{"error": "Administrator permissions required"})
-				return
-			}
-		}
-		if r.URL.Query().Get("view") == "cancel" {
-			if err := m.cancel(req.ID); err != nil {
-				reply(w, 409, map[string]string{"error": err.Error()})
-				return
-			}
-			reply(w, 200, map[string]bool{"ok": true})
-			return
-		}
-		if r.URL.Query().Get("view") == "acknowledge" {
-			if err := m.acknowledge(req.ID); err != nil {
-				reply(w, 409, map[string]string{"error": err.Error()})
-				return
-			}
-			reply(w, 200, map[string]bool{"ok": true})
-			return
-		}
-		if r.URL.Query().Get("view") == "recover" {
-			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-			defer cancel()
-			result, err := m.inspect(ctx, req.ID, user)
-			if err != nil {
-				reply(w, 409, map[string]string{"error": err.Error()})
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(result)
-			return
-		}
-		if r.URL.Query().Get("view") == "plan" {
-			ctx, c := context.WithTimeout(r.Context(), 30*time.Second)
-			defer c()
-			v, e := m.run(ctx, "plan", user, req)
-			if e != nil {
-				reply(w, 503, map[string]string{"error": e.Error()})
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(v)
-			return
-		}
-		if req.ID == "" || len(req.ID) > 100 || req.Fingerprint == "" {
-			reply(w, 400, map[string]string{"error": "Review the operation plan first"})
-			return
-		}
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		var existing string
-		if m.db.QueryRow("SELECT id FROM jobs WHERE id=? AND username=?", req.ID, user).Scan(&existing) == nil {
-			reply(w, 200, map[string]string{"id": existing})
-			return
-		}
-		var pending int
-		if err := m.db.QueryRow("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").Scan(&pending); err != nil {
-			reply(w, 503, map[string]string{"error": "Queue unavailable"})
-			return
-		}
-		if pending >= 32 || len(m.queue) == cap(m.queue) {
-			reply(w, 429, map[string]string{"error": "Queue is full"})
-			return
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		target, _ := req.Params["target"].(string)
-		if target == "" {
-			target, _ = req.Params["name"].(string)
-		}
-		if len(target) > 512 {
-			reply(w, 400, map[string]string{"error": "Target is too long"})
-			return
-		}
-		j := Job{ID: req.ID, User: user, Action: req.Action, Target: target, Status: "queued", Stage: "Queued", Created: now, Updated: now, Result: json.RawMessage(`{}`)}
-		tx, err := m.db.Begin()
-		if err != nil {
-			reply(w, 503, map[string]string{"error": "Task log unavailable"})
-			return
-		}
-		_, err = tx.Exec("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)", j.ID, j.User, j.Action, j.Target, j.Status, j.Stage, j.Created, j.Updated, "{}")
-		if err == nil {
-			_, err = tx.Exec("INSERT INTO job_context VALUES(?,?)", j.ID, recoveryContext(req))
-		}
-		if err == nil {
-			err = tx.Commit()
-		} else {
-			tx.Rollback()
-		}
-		if err != nil {
-			reply(w, 409, map[string]string{"error": "Task identifier already in use"})
-			return
-		}
-		m.queue <- work{j, req}
-		reply(w, 202, map[string]string{"id": j.ID})
+		m.serve(w, r, id)
 	}
+}
+
+func (m *Manager) serve(w http.ResponseWriter, r *http.Request, id auth.Identity) {
+	user := id.Username
+	view := r.URL.Query().Get("view")
+	if r.Method == "POST" && view != "plan" && view != "run" && view != "cancel" && view != "recover" && view != "acknowledge" && view != "clear-history" {
+		reply(w, 400, map[string]string{"error": "Unknown management operation mode"})
+		return
+	}
+	if r.Method == "GET" {
+		if r.URL.Query().Get("view") == "jobs" || r.URL.Query().Get("view") == "job" {
+			single := r.URL.Query().Get("view") == "job"
+			var j []Job
+			var e error
+			if single {
+				j, e = m.list("id=?", r.URL.Query().Get("target"))
+			} else {
+				j, e = m.List()
+			}
+			if e != nil {
+				reply(w, 503, map[string]string{"error": "Task log unavailable"})
+				return
+			}
+			if id.Role != "admin" {
+				own := []Job{}
+				for _, item := range j {
+					if ownsJob(id, item.User, item.Created) {
+						own = append(own, item)
+					}
+				}
+				j = own
+			}
+			if single {
+				if len(j) == 0 {
+					reply(w, 404, map[string]string{"error": "Task not found"})
+					return
+				}
+				reply(w, 200, j[0])
+				return
+			}
+			reply(w, 200, j)
+			return
+		}
+		ctx, c := context.WithTimeout(r.Context(), 30*time.Second)
+		defer c()
+		v, e := m.run(ctx, "query", user, map[string]string{"view": r.URL.Query().Get("view"), "target": r.URL.Query().Get("target")})
+		if e != nil {
+			reply(w, 503, map[string]string{"error": e.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(v)
+		return
+	}
+	if r.Method != "POST" {
+		w.WriteHeader(405)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req Request
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if d.Decode(&req) != nil || d.Decode(new(any)) != io.EOF {
+		reply(w, 400, map[string]string{"error": "Invalid request"})
+		return
+	}
+	if r.URL.Query().Get("view") == "clear-history" {
+		if e := m.clearHistoryFor(user, id.Role == "admin"); e != nil {
+			reply(w, 503, map[string]string{"error": "Could not clear task history"})
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	if id.Role != "admin" {
+		view := r.URL.Query().Get("view")
+		if view == "cancel" || view == "recover" || view == "acknowledge" {
+			var owner, created string
+			if m.db.QueryRow("SELECT username,created FROM jobs WHERE id=?", req.ID).Scan(&owner, &created) != nil || !ownsJob(id, owner, created) {
+				reply(w, 403, map[string]string{"error": "Access denied"})
+				return
+			}
+		} else if !userAction(req.Action, req.Params, user) {
+			reply(w, 403, map[string]string{"error": "Administrator permissions required"})
+			return
+		}
+	}
+	if r.URL.Query().Get("view") == "cancel" {
+		if err := m.cancel(req.ID); err != nil {
+			reply(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	if r.URL.Query().Get("view") == "acknowledge" {
+		if err := m.acknowledge(req.ID); err != nil {
+			reply(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	if r.URL.Query().Get("view") == "recover" {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		result, err := m.inspect(ctx, req.ID, user)
+		if err != nil {
+			reply(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(result)
+		return
+	}
+	if r.URL.Query().Get("view") == "plan" {
+		ctx, c := context.WithTimeout(r.Context(), 30*time.Second)
+		defer c()
+		v, e := m.run(ctx, "plan", user, req)
+		if e != nil {
+			reply(w, 503, map[string]string{"error": e.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(v)
+		return
+	}
+	if req.ID == "" || len(req.ID) > 100 || req.Fingerprint == "" {
+		reply(w, 400, map[string]string{"error": "Review the operation plan first"})
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fault != nil {
+		reply(w, 503, map[string]string{"error": "Task journal unavailable. Restore database access and restart the agent; inspect interrupted operations before retrying."})
+		return
+	}
+	var existing string
+	if m.db.QueryRow("SELECT id FROM jobs WHERE id=? AND username=?", req.ID, user).Scan(&existing) == nil {
+		reply(w, 200, map[string]string{"id": existing})
+		return
+	}
+	var pending int
+	if err := m.db.QueryRow("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").Scan(&pending); err != nil {
+		reply(w, 503, map[string]string{"error": "Queue unavailable"})
+		return
+	}
+	if pending >= 32 || len(m.queue) == cap(m.queue) {
+		reply(w, 429, map[string]string{"error": "Queue is full"})
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	target, _ := req.Params["target"].(string)
+	if target == "" {
+		target, _ = req.Params["name"].(string)
+	}
+	if len(target) > 512 {
+		reply(w, 400, map[string]string{"error": "Target is too long"})
+		return
+	}
+	j := Job{ID: req.ID, User: user, Action: req.Action, Target: target, Status: "queued", Stage: "Queued", Created: now, Updated: now, Result: json.RawMessage(`{}`)}
+	tx, err := m.db.Begin()
+	if err != nil {
+		reply(w, 503, map[string]string{"error": "Task log unavailable"})
+		return
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)", j.ID, j.User, j.Action, j.Target, j.Status, j.Stage, j.Created, j.Updated, "{}")
+	if err == nil {
+		_, err = tx.Exec("INSERT INTO job_context VALUES(?,?)", j.ID, recoveryContext(req))
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		var sqliteErr sqlite3.Error
+		if errors.As(err, &sqliteErr) && (sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey || sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique) {
+			reply(w, 409, map[string]string{"error": "Task identifier already in use"})
+		} else {
+			m.fault = err
+			log.Printf("Task journal unavailable: %v", err)
+			reply(w, 503, map[string]string{"error": "Task log unavailable; operation was not started"})
+		}
+		return
+	}
+	m.queue <- work{j, req}
+	reply(w, 202, map[string]string{"id": j.ID})
 }
 
 func ownsJob(id auth.Identity, username, created string) bool {

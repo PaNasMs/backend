@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PaNasMs prototype API
-  version: 0.2.4
+  version: 0.2.6
 paths:
   /api/v1/health:
     get:
@@ -414,34 +414,155 @@ paths:
         default: *id002
   /api/v1/manage:
     get:
-      summary: Read a management view using the authenticated administrator identity
+      summary: Read an authorized management snapshot
+      description: ManagementViews maps each core view to its response schema. Ordinary
+        users are restricted to their own account/session/jobs and authorized module
+        views. Domain validation errors use Error with HTTP 200 for compatibility. Unknown
+        views never execute mutations.
       parameters:
-      - {in: query, name: view, required: true, schema: {type: string, enum: [homes, homes-check, jobs, storage-options, raid-candidates, smart, services, journal, updates, files, nfs, power, network]}}
-      - {in: query, name: target, schema: {type: string}}
+      - in: query
+        name: view
+        required: true
+        schema:
+          type: string
+        description: 'Core views: job, jobs, accounts, account-details, account-sessions,
+          homes, homes-check, sharing, share-folders, home-folders, mount-folders, modules,
+          module-sources, module-catalog, web-access, system-updates, network, storage-options,
+          raid-candidates, smart, services, journal, updates, nfs, power. Additional
+          module queries require an enabled module.'
+      - in: query
+        name: target
+        schema:
+          type: string
       responses:
-        '200': {description: Typed view result or explicit error; never shell output}
-        '403': {description: Administrator required}
+        '200':
+          description: Selected core snapshot, module-owned JSON response, or domain
+            error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/ManagementJob'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/ManagementJob'
+                - $ref: '#/components/schemas/AccountInventory'
+                - $ref: '#/components/schemas/ManagedAccount'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/SSHSession'
+                - $ref: '#/components/schemas/HomeLocations'
+                - $ref: '#/components/schemas/HomePreflight'
+                - $ref: '#/components/schemas/ShareInventory'
+                - $ref: '#/components/schemas/FolderLocations'
+                - $ref: '#/components/schemas/FolderLocations'
+                - $ref: '#/components/schemas/FolderLocations'
+                - $ref: '#/components/schemas/InstalledModules'
+                - $ref: '#/components/schemas/ModuleSources'
+                - $ref: '#/components/schemas/ModuleCatalog'
+                - $ref: '#/components/schemas/WebAccess'
+                - $ref: '#/components/schemas/SystemUpdates'
+                - $ref: '#/components/schemas/NetworkView'
+                - $ref: '#/components/schemas/StorageOptions'
+                - $ref: '#/components/schemas/RaidCandidates'
+                - $ref: '#/components/schemas/SmartReport'
+                - $ref: '#/components/schemas/ServicesView'
+                - $ref: '#/components/schemas/JournalView'
+                - $ref: '#/components/schemas/PackageUpdates'
+                - $ref: '#/components/schemas/NFSExports'
+                - $ref: '#/components/schemas/PowerState'
+                - $ref: '#/components/schemas/Error'
+                - type: object
+                  additionalProperties: {}
+                  description: Installed module response, defined by its own API contract.
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: System handler or task journal unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
-      summary: Preview, enqueue, safely cancel, inspect or acknowledge a task, or clear reviewed history
+      summary: Preview, submit, cancel, inspect or acknowledge an operation
+      description: plan requires action/params and returns OperationPlan or Error; run
+        requires id/action/params/fingerprint/confirmation and returns JobAccepted.
+        cancel/recover/acknowledge require id; clear-history accepts {}. Queued work
+        is not replayed after restart. Cancellation is cooperative, never a kill request.
+        IDs must be unique per logical submission; retry uncertain submissions with
+        the same ID.
       parameters:
-      - {in: query, name: view, required: true, schema: {type: string, enum: [plan, run, cancel, recover, acknowledge, clear-history]}}
+      - in: query
+        name: view
+        required: true
+        schema:
+          type: string
+          enum:
+          - plan
+          - run
+          - cancel
+          - recover
+          - acknowledge
+          - clear-history
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              properties:
-                id: {type: string, description: Client idempotency identifier}
-                action: {type: string, description: Allowlisted domain action; arbitrary commands are rejected}
-                params: {type: object, additionalProperties: true}
-                fingerprint: {type: string, description: Fresh preview state digest}
-                confirmation: {type: string, description: Exact target acknowledgement from preview}
+              $ref: '#/components/schemas/ManagementRequest'
       responses:
-        '200': {description: Preview with target/details/fingerprint/confirmation, or existing idempotent job}
-        '202': {description: Persistent job accepted}
-        '409': {description: Conflict or task can no longer be cancelled}
+        '200':
+          description: Plan, existing job ID, recovery report, acknowledgement or domain
+            error
+          content:
+            application/json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/OperationPlan'
+                - $ref: '#/components/schemas/JobAccepted'
+                - $ref: '#/components/schemas/JobRecovery'
+                - $ref: '#/components/schemas/OperationOK'
+                - $ref: '#/components/schemas/Error'
+        '202':
+          description: Durably accepted job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '400':
+          description: Invalid request or mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Stale state or task conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Queue full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Handler or journal unavailable; reconcile by ID before retrying
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/v1/metrics/history:
     get:
       parameters:
@@ -455,9 +576,15 @@ paths:
   /api/v1/notifications:
     get:
       responses:
-        '200': {description: Persistent deduplicated active and resolved alerts}
+        '200':
+          description: Persistent alerts; an ordinary user receives an empty list
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Notification'}}
     delete:
-      summary: Clear resolved alert and event history; active warnings remain
+      summary: Dismiss resolved history for the caller; active warnings remain
+      parameters:
+      - {in: query, name: id, schema: {type: string}, description: Omit to dismiss all resolved history}
       responses:
         '204': {description: History cleared}
         '403': {description: Administrator required}
@@ -485,6 +612,36 @@ paths:
       responses:
         '204': {description: Entire upload atomically published; existing files are never overwritten}
         '409': {description: File exists, permission denied or transfer failed}
+
+  /api/v1/events:
+    get:
+      summary: Authenticated same-origin WebSocket invalidations
+      description: Server messages match EventEnvelope. Reread HTTP snapshots after resync/reconnect; there is no replay cursor. No commands are accepted. Slow clients disconnect; revoked sessions close with code 1008.
+      responses:
+        '101': {description: WebSocket established}
+        '401': {description: Sign-in required}
+        '403': {description: Invalid origin}
+  /api/v1/modules/upload:
+    post:
+      summary: Upload a module bundle for inspection before installation
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, description: Maximum 128 MiB}
+      responses:
+        '200': {description: Staged archive reference for module.install preview}
+        '403': {description: Administrator required}
+        '503': {description: Agent unavailable}
+  /api/v1/module-assets/{module}/{asset}:
+    get:
+      summary: Read a manifest-listed UI asset from an enabled module
+      parameters:
+      - {in: path, name: module, required: true, schema: {type: string}}
+      - {in: path, name: asset, required: true, schema: {type: string}, description: Relative asset path, potentially containing slashes}
+      responses:
+        '200': {description: Asset with its native content type and no-store policy}
+        '404': {description: Module disabled or asset not listed in its signed manifest}
 
 components:
   schemas:
@@ -1100,6 +1257,1461 @@ components:
           type: string
         id:
           type: string
+    ManagementRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          maxLength: 100
+        action:
+          type: string
+        params:
+          type: object
+          additionalProperties: {}
+          description: Action-specific parameters validated by the owning core component
+            or installed module. Secrets are never persisted in the job journal.
+        fingerprint:
+          type: string
+        confirmation:
+          type: string
+      required: []
+      additionalProperties: false
+    OperationPlan:
+      type: object
+      properties:
+        target:
+          type: string
+        details:
+          type: array
+          items:
+            type: string
+        fingerprint:
+          type: string
+        confirmation:
+          type: string
+      required:
+      - target
+      - details
+      - fingerprint
+      - confirmation
+    JobAccepted:
+      type: object
+      properties:
+        id:
+          type: string
+      required:
+      - id
+    OperationOK:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          const: true
+      required:
+      - ok
+    HomeLocations:
+      type: object
+      properties:
+        path:
+          type: string
+        users:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              home:
+                type: string
+            required:
+            - name
+            - home
+        recovery:
+          type: boolean
+      required:
+      - path
+      - users
+      - recovery
+    HomeBlocker:
+      type: object
+      properties:
+        title:
+          type: string
+        kind:
+          type: string
+        user:
+          type: string
+        unit:
+          type: string
+        reason:
+          type: string
+        processes:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              pid:
+                type: integer
+            required:
+            - name
+            - pid
+      required:
+      - title
+      - kind
+      - user
+      - unit
+      - reason
+      - processes
+    HomePreflight:
+      anyOf:
+      - $ref: '#/components/schemas/OperationPlan'
+      - type: object
+        properties:
+          blockers:
+            type: array
+            items:
+              $ref: '#/components/schemas/HomeBlocker'
+        required:
+        - blockers
+    FolderEntry:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - name
+      - path
+    FolderLocations:
+      type: object
+      properties:
+        roots:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - $ref: '#/components/schemas/FolderEntry'
+        path:
+          type: string
+        folders:
+          type: array
+          items:
+            $ref: '#/components/schemas/FolderEntry'
+      required:
+      - roots
+      - path
+      - folders
+    SSHSession:
+      type: object
+      properties:
+        id:
+          type: string
+        user:
+          type: string
+        uid:
+          anyOf:
+          - type: string
+          - type: 'null'
+        kind:
+          type: string
+        address:
+          type: string
+        leader:
+          anyOf:
+          - type: string
+          - type: 'null'
+        state:
+          anyOf:
+          - type: string
+          - type: 'null'
+        created:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - id
+      - user
+      - uid
+      - kind
+      - address
+      - leader
+      - state
+      - created
+    ManagedAccount:
+      type: object
+      properties:
+        username:
+          type: string
+        name:
+          type: string
+        home:
+          type: string
+        shell:
+          type: string
+        category:
+          type: string
+        primaryGroup:
+          type: string
+        expiry:
+          type: string
+        reason:
+          type: string
+        passwordStatus:
+          type: string
+        uid:
+          type: integer
+        gid:
+          type: integer
+        minDays:
+          type: integer
+        maxDays:
+          type: integer
+        warnDays:
+          type: integer
+        inactiveDays:
+          type: integer
+        expiryDay:
+          type: integer
+        panel:
+          type: boolean
+        disabled:
+          type: boolean
+        expired:
+          type: boolean
+        ssh:
+          type: boolean
+        forcePasswordChange:
+          type: boolean
+        groups:
+          type: array
+          items:
+            type: string
+        keys:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              type:
+                type: string
+              fingerprint:
+                type: string
+              comment:
+                type: string
+            required:
+            - id
+            - type
+            - fingerprint
+            - comment
+        keysError:
+          type: string
+        smb:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            status:
+              type: string
+          required:
+          - enabled
+          - status
+      required:
+      - username
+      - name
+      - uid
+      - gid
+      - home
+      - shell
+      - category
+      - groups
+      - primaryGroup
+      - panel
+      - disabled
+      - expired
+      - ssh
+      - expiry
+      - reason
+    ManagedGroup:
+      type: object
+      properties:
+        name:
+          type: string
+        gid:
+          type: integer
+        members:
+          type: array
+          items:
+            type: string
+        primaryMembers:
+          type: array
+          items:
+            type: string
+        editable:
+          type: boolean
+        system:
+          type: boolean
+      required:
+      - name
+      - gid
+      - members
+      - primaryMembers
+      - editable
+      - system
+    AccountInventory:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedAccount'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedGroup'
+        shells:
+          type: array
+          items:
+            type: string
+        passwordPolicy:
+          type: string
+        sshAvailable:
+          type: boolean
+      required:
+      - users
+      - groups
+      - shells
+      - passwordPolicy
+      - sshAvailable
+    SharedFolder:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        smb:
+          type: boolean
+        nfs:
+          type: boolean
+        readOnly:
+          type: boolean
+        readers:
+          type: array
+          items:
+            type: string
+        writers:
+          type: array
+          items:
+            type: string
+        clients:
+          type: array
+          items:
+            type: string
+      required:
+      - name
+      - path
+      - smb
+      - nfs
+      - readOnly
+      - readers
+      - writers
+      - clients
+    ShareInventory:
+      type: object
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: '#/components/schemas/SharedFolder'
+        accounts:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+              status:
+                type: string
+              uid:
+                type: integer
+            required:
+            - enabled
+            - status
+            - uid
+        drift:
+          type: boolean
+        recovery:
+          type: boolean
+        smbAvailable:
+          type: boolean
+        services:
+          type: object
+          additionalProperties:
+            type: string
+        sessions:
+          type: object
+          additionalProperties: {}
+          description: Redacted smbstatus JSON; fields depend on the installed Samba version.
+      required:
+      - shares
+      - accounts
+      - drift
+      - recovery
+      - smbAvailable
+      - services
+      - sessions
+    NFSExports:
+      type: object
+      properties:
+        exports:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              clients:
+                type: array
+                items:
+                  type: string
+              readOnly:
+                type: boolean
+            required:
+            - path
+            - clients
+            - readOnly
+      required:
+      - exports
+    ModuleManifest:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        version:
+          type: string
+        signer:
+          type: string
+        core:
+          type: string
+        enabled:
+          type: boolean
+        description:
+          type: string
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+        packages:
+          type: object
+          additionalProperties:
+            type: string
+        requiredBy:
+          type: array
+          items:
+            type: string
+        files:
+          type: object
+          additionalProperties:
+            type: string
+        translations:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              title:
+                type: string
+              description:
+                type: string
+            required:
+            - title
+      required:
+      - id
+      - title
+      - version
+      - signer
+      - core
+      - enabled
+      - requiredBy
+      - files
+    InstalledModules:
+      type: object
+      properties:
+        core:
+          type: string
+        api:
+          type: integer
+        installed:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModuleManifest'
+      required:
+      - core
+      - api
+      - installed
+    AvailableModule:
+      allOf:
+      - $ref: '#/components/schemas/ModuleManifest'
+      - type: object
+        properties:
+          reason:
+            type: string
+          updateAvailable:
+            type: boolean
+          repository:
+            type: string
+        required:
+        - reason
+        - updateAvailable
+        - repository
+    ModuleCatalog:
+      type: object
+      properties:
+        available:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableModule'
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              repository:
+                type: string
+              error:
+                type: string
+            required:
+            - repository
+            - error
+      required:
+      - available
+      - errors
+    ModuleSource:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        official:
+          type: boolean
+        fingerprint:
+          type: string
+        signers:
+          type: array
+          items:
+            type: string
+      required:
+      - id
+      - url
+      - official
+      - signers
+    ModuleSources:
+      type: object
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModuleSource'
+      required:
+      - sources
+    WebAccess:
+      type: object
+      properties:
+        port:
+          type: integer
+        pending:
+          type: boolean
+        error:
+          type: string
+      required: [port, pending, error]
+    PowerState:
+      type: object
+      properties:
+        throttled:
+          type: string
+        undervoltage:
+          type: boolean
+        throttling:
+          type: boolean
+        pastUndervoltage:
+          type: boolean
+      required:
+      - throttled
+      - undervoltage
+      - throttling
+      - pastUndervoltage
+    ServicesView:
+      type: object
+      properties:
+        services:
+          type: array
+          items:
+            type: object
+            properties:
+              unit:
+                type: string
+              load:
+                type: string
+              active:
+                type: string
+              sub:
+                type: string
+              description:
+                type: string
+              enabled:
+                type: string
+            required:
+            - unit
+            - enabled
+      required:
+      - services
+    JournalView:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              time:
+                anyOf:
+                - type: string
+                - type: 'null'
+              priority:
+                anyOf:
+                - type: string
+                - type: 'null'
+              unit:
+                anyOf:
+                - type: string
+                - type: 'null'
+              message:
+                type: string
+            required:
+            - time
+            - priority
+            - unit
+            - message
+      required:
+      - entries
+    PackageUpdates:
+      type: object
+      properties:
+        packages:
+          type: array
+          items:
+            type: string
+        packageDetails:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              installed:
+                type: string
+              available:
+                type: string
+              source:
+                type: string
+              action:
+                type: string
+            required:
+            - name
+            - installed
+            - available
+            - source
+            - action
+        rebootRequired:
+          type: boolean
+      required:
+      - packages
+      - packageDetails
+      - rebootRequired
+    UpdateSettings:
+      type: object
+      properties:
+        channel:
+          type: string
+          enum:
+          - stable
+          - testing
+        mode:
+          type: string
+          enum:
+          - notify
+          - download
+          - auto
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+      required:
+      - channel
+      - mode
+      - hour
+    UpdateState:
+      type: object
+      properties:
+        operation:
+          type: string
+        id:
+          type: string
+        phase:
+          type: string
+        error:
+          type: string
+        version:
+          type: [string, 'null']
+        startedAt:
+          type: string
+        finishedAt:
+          type: string
+      required: []
+    UpdateRelease:
+      type: object
+      properties:
+        version:
+          type: string
+        run:
+          type: string
+        createdAt:
+          type: string
+      required:
+      - version
+    SystemUpdates:
+      type: object
+      properties:
+        settings:
+          $ref: '#/components/schemas/UpdateSettings'
+        installed:
+          type: object
+          additionalProperties:
+            type: string
+        candidate:
+          anyOf:
+          - $ref: '#/components/schemas/UpdateRelease'
+          - type: 'null'
+        checkedAt:
+          anyOf:
+          - type: string
+          - type: 'null'
+        available:
+          type: boolean
+        busy:
+          type: boolean
+        rollbackAvailable:
+          type: boolean
+        state:
+          $ref: '#/components/schemas/UpdateState'
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateState'
+      required:
+      - settings
+      - installed
+      - candidate
+      - checkedAt
+      - available
+      - busy
+      - rollbackAvailable
+      - state
+      - history
+    IPConfig:
+      type: object
+      properties:
+        method:
+          type: string
+        addresses:
+          type: array
+          items:
+            type: string
+        gateway:
+          type: string
+        dns:
+          type: array
+          items:
+            type: string
+        ignoreAutoDns:
+          type: boolean
+        neverDefault:
+          type: boolean
+        metric:
+          type: integer
+        routes:
+          type: array
+          items:
+            type: object
+            properties:
+              destination:
+                type: string
+              gateway:
+                type: string
+              metric:
+                type: integer
+            required:
+            - destination
+            - gateway
+            - metric
+      required:
+      - method
+      - addresses
+      - gateway
+      - dns
+      - ignoreAutoDns
+      - neverDefault
+      - metric
+      - routes
+    InterfaceConfig:
+      type: object
+      properties:
+        ipv4:
+          $ref: '#/components/schemas/IPConfig'
+        ipv6:
+          $ref: '#/components/schemas/IPConfig'
+        mtu:
+          type: integer
+      required:
+      - ipv4
+      - ipv6
+      - mtu
+    WifiNetwork:
+      type: object
+      properties:
+        id:
+          type: string
+        ssid:
+          type: string
+        ssidHex:
+          type: string
+        security:
+          type: string
+        signal:
+          type: number
+        frequency:
+          type: number
+      required:
+      - id
+      - ssid
+      - ssidHex
+      - security
+      - signal
+      - frequency
+    WifiInterface:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        hardwareEnabled:
+          type: boolean
+        mode:
+          type: integer
+        clients:
+          type: integer
+        networks:
+          type: array
+          items:
+            $ref: '#/components/schemas/WifiNetwork'
+        saved:
+          type: array
+          items:
+            type: object
+            properties:
+              uuid:
+                type: string
+              name:
+                type: string
+              ssid:
+                type: string
+            required:
+            - uuid
+            - name
+            - ssid
+        activeAP:
+          type: string
+      required:
+      - networks
+      - saved
+      - activeAP
+    WifiRadio:
+      type: object
+      properties:
+        present:
+          type: boolean
+        enabled:
+          type: boolean
+        hardwareEnabled:
+          type: boolean
+      required:
+      - present
+      - enabled
+      - hardwareEnabled
+    NetworkInterface:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        mac:
+          type: string
+        state:
+          type: string
+        profile:
+          type: string
+        uuid:
+          type: string
+        index:
+          type: integer
+        mtu:
+          type: integer
+        nmState:
+          type: integer
+        adminUp:
+          type: boolean
+        carrier:
+          type: boolean
+        managed:
+          type: boolean
+        editable:
+          type: boolean
+        addresses:
+          type: array
+          items:
+            type: string
+        dns:
+          type: array
+          items:
+            type: string
+        config:
+          anyOf:
+          - $ref: '#/components/schemas/InterfaceConfig'
+          - type: 'null'
+        wifi:
+          $ref: '#/components/schemas/WifiInterface'
+        sharingGroup:
+          type: [string, 'null']
+        sharing:
+          type: object
+          properties:
+            available:
+              type: boolean
+            ap:
+              type: boolean
+            bands:
+              type: array
+              items:
+                type: string
+            channels:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: integer
+            phy:
+              type: string
+            concurrent:
+              type: boolean
+          required:
+          - available
+          - ap
+          - bands
+      required:
+      - name
+      - kind
+      - index
+      - mac
+      - mtu
+      - state
+      - adminUp
+      - editable
+      - profile
+      - addresses
+      - dns
+      - config
+    NetworkShareGroup:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source:
+          type: string
+        outputs:
+          type: array
+          items:
+            type: string
+        mode:
+          type: string
+          enum:
+          - bridge
+          - nat
+        wifi:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              ssid:
+                type: string
+              band:
+                type: string
+              channel:
+                type: integer
+            required:
+            - ssid
+            - band
+        enabled:
+          type: boolean
+        autostart:
+          type: boolean
+        bridge:
+          type: string
+        status:
+          type: string
+          enum:
+          - active
+          - stopped
+          - upstream
+          - error
+        addresses:
+          type: array
+          items:
+            type: string
+      required:
+      - id
+      - name
+      - source
+      - outputs
+      - mode
+      - wifi
+      - enabled
+      - autostart
+      - bridge
+      - status
+      - addresses
+    NetworkView:
+      type: object
+      properties:
+        backend:
+          type: string
+        interfaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkInterface'
+        routes:
+          type: array
+          items:
+            type: object
+            properties:
+              family:
+                type: integer
+              dst:
+                type: string
+              gateway:
+                type: string
+              dev:
+                type: string
+              metric:
+                type: integer
+              table:
+                type:
+                - string
+                - integer
+              protocol:
+                type: string
+              type:
+                type: string
+            required:
+            - family
+        change:
+          anyOf:
+          - type: object
+            properties:
+              id:
+                type: string
+              interface:
+                type: string
+              user:
+                type: string
+              status:
+                type: string
+              deadline:
+                type: number
+              addresses:
+                type: array
+                items:
+                  type: string
+            required:
+            - id
+            - interface
+            - user
+            - status
+            - deadline
+            - addresses
+          - type: 'null'
+        serverTime:
+          type: number
+        timeout:
+          type: integer
+        wifi:
+          anyOf:
+          - $ref: '#/components/schemas/WifiRadio'
+          - type: 'null'
+        sharing:
+          type: object
+          properties:
+            groups:
+              type: array
+              items:
+                $ref: '#/components/schemas/NetworkShareGroup'
+            ready:
+              type: boolean
+          required:
+          - groups
+          - ready
+      required:
+      - backend
+      - interfaces
+      - routes
+      - change
+      - serverTime
+      - timeout
+      - wifi
+      - sharing
+    SmartSchedule:
+      type: object
+      properties:
+        test:
+          type: string
+        weekday:
+          type: integer
+        hour:
+          type: integer
+        weeks:
+          type: integer
+        startDate:
+          type: string
+      required:
+      - test
+      - weekday
+      - hour
+    MediaInfo:
+      type: object
+      properties:
+        kind:
+          type: string
+        readOnly:
+          type: boolean
+        name:
+          type: string
+        manufacturerId:
+          type: string
+        manufactured:
+          type: string
+        revision:
+          type: string
+        usbId:
+          type: string
+        usbVersion:
+          type: string
+        linkMbps:
+          type: string
+        manufacturer:
+          type: string
+      required:
+      - kind
+      - readOnly
+    StorageOptionDevice:
+      type: object
+      properties:
+        path:
+          type: string
+        kname:
+          type: string
+        type:
+          type: string
+        size:
+          type: integer
+        fstype:
+          anyOf:
+          - type: string
+          - type: 'null'
+        uuid:
+          anyOf:
+          - type: string
+          - type: 'null'
+        mountpoints:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: 'null'
+        smartSchedules:
+          type: array
+          items:
+            $ref: '#/components/schemas/SmartSchedule'
+        smartSchedule:
+          anyOf:
+          - $ref: '#/components/schemas/SmartSchedule'
+          - type: 'null'
+        media:
+          $ref: '#/components/schemas/MediaInfo'
+        mountSettings:
+          anyOf:
+          - type: object
+            properties:
+              point:
+                type: string
+              automount:
+                type: boolean
+              readOnly:
+                type: boolean
+            required:
+            - point
+            - automount
+            - readOnly
+          - type: 'null'
+        protectedReason:
+          type: string
+        busyReason:
+          type: string
+        raidReason:
+          type: string
+        raidEligible:
+          type: boolean
+        ejectable:
+          type: boolean
+        filesystemHealth:
+          anyOf:
+          - type: object
+            additionalProperties: {}
+          - type: 'null'
+      required:
+      - path
+      - kname
+      - protectedReason
+      - busyReason
+      - raidReason
+      - raidEligible
+      - ejectable
+    StorageOptions:
+      type: object
+      properties:
+        sleepSettings:
+          type: object
+          properties:
+            minutes:
+              type: integer
+          required:
+          - minutes
+        sleepStatus:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              device:
+                type: string
+              minutes:
+                anyOf:
+                - type: integer
+                - type: 'null'
+              status:
+                type: string
+              error:
+                type: string
+            required:
+            - device
+            - minutes
+            - status
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorageOptionDevice'
+        formats:
+          type: array
+          items:
+            type: string
+        capabilities:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              create:
+                type: boolean
+              grow:
+                type: boolean
+              shrink:
+                type: boolean
+              resizeRequiresMount:
+                type: boolean
+              resizeRequiresUnmount:
+                type: boolean
+            required:
+            - create
+            - grow
+            - shrink
+      required:
+      - sleepSettings
+      - sleepStatus
+      - devices
+      - formats
+      - capabilities
+    RaidCandidates:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              kname:
+                type: string
+              type:
+                type: string
+              size:
+                type: integer
+            required:
+            - path
+            - kname
+            - type
+            - size
+      required:
+      - devices
+    SmartReport:
+      type: object
+      additionalProperties: {}
+      description: Native smartctl JSON report, versioned by smartctl (json_format_version).
+        Keys vary by SATA/NVMe/USB support; absence is not health success.
+      properties:
+        json_format_version:
+          type: array
+          items:
+            type: integer
+        smartctl:
+          type: object
+          additionalProperties: {}
+        device:
+          type: object
+          additionalProperties: {}
+        temperature:
+          type: object
+          properties:
+            current:
+              type: number
+          required: []
+        smart_status:
+          type: object
+          properties:
+            passed:
+              type: boolean
+          required: []
+      required:
+      - json_format_version
+      - smartctl
+    ManagementViews:
+      type: object
+      properties:
+        job:
+          $ref: '#/components/schemas/ManagementJob'
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagementJob'
+        accounts:
+          $ref: '#/components/schemas/AccountInventory'
+        account-details:
+          $ref: '#/components/schemas/ManagedAccount'
+        account-sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SSHSession'
+        homes:
+          $ref: '#/components/schemas/HomeLocations'
+        homes-check:
+          $ref: '#/components/schemas/HomePreflight'
+        sharing:
+          $ref: '#/components/schemas/ShareInventory'
+        share-folders:
+          $ref: '#/components/schemas/FolderLocations'
+        home-folders:
+          $ref: '#/components/schemas/FolderLocations'
+        mount-folders:
+          $ref: '#/components/schemas/FolderLocations'
+        modules:
+          $ref: '#/components/schemas/InstalledModules'
+        module-sources:
+          $ref: '#/components/schemas/ModuleSources'
+        module-catalog:
+          $ref: '#/components/schemas/ModuleCatalog'
+        web-access:
+          $ref: '#/components/schemas/WebAccess'
+        system-updates:
+          $ref: '#/components/schemas/SystemUpdates'
+        network:
+          $ref: '#/components/schemas/NetworkView'
+        storage-options:
+          $ref: '#/components/schemas/StorageOptions'
+        raid-candidates:
+          $ref: '#/components/schemas/RaidCandidates'
+        smart:
+          $ref: '#/components/schemas/SmartReport'
+        services:
+          $ref: '#/components/schemas/ServicesView'
+        journal:
+          $ref: '#/components/schemas/JournalView'
+        updates:
+          $ref: '#/components/schemas/PackageUpdates'
+        nfs:
+          $ref: '#/components/schemas/NFSExports'
+        power:
+          $ref: '#/components/schemas/PowerState'
+      required: []
+      description: Query-name to response-schema map. Each GET response is the value for
+        the selected view, not this mapping object. Installed modules own additional query
+        contracts.
+
+    Notification:
+      type: object
+      required: [id, message, severity, active, created, updated]
+      properties:
+        id: {type: string}
+        message: {type: string}
+        severity: {type: string, enum: [info, success, warning, error]}
+        active: {type: boolean}
+        created: {type: string}
+        updated: {type: string}
+    EventEnvelope:
+      oneOf:
+      - type: object
+        required: [version, type, data]
+        properties:
+          version: {const: 1}
+          type: {enum: [resync, storage.changed, jobs.changed, notifications.changed, cooling.unavailable, metrics.unavailable]}
+          data: {type: 'null'}
+      - type: object
+        required: [version, type, data]
+        properties:
+          version: {const: 1}
+          type: {const: metrics}
+          data: {$ref: '#/components/schemas/Metrics'}
+      - type: object
+        required: [version, type, data]
+        properties:
+          version: {const: 1}
+          type: {const: cooling}
+          data: {$ref: '#/components/schemas/CoolingState'}
   securitySchemes:
     session:
       type: apiKey

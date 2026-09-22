@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
+	"panasms.local/backend/internal/database"
 	"strconv"
 	"strings"
 	"time"
@@ -16,24 +17,12 @@ import (
 type Store struct{ db *sql.DB }
 
 func Open(path string) (*Store, error) {
-	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate&_foreign_keys=on")
 	if e != nil {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	_, e = db.Exec(`CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
- INSERT OR IGNORE INTO schema_version VALUES(1);
- CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, expires INTEGER NOT NULL);
- CREATE TABLE IF NOT EXISTS account_bindings(username TEXT PRIMARY KEY,uid INTEGER NOT NULL,principal TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS session_details(token TEXT PRIMARY KEY REFERENCES sessions(token) ON DELETE CASCADE,id TEXT UNIQUE NOT NULL,uid INTEGER NOT NULL,epoch TEXT NOT NULL,address TEXT NOT NULL,device TEXT NOT NULL,created INTEGER NOT NULL);
- CREATE TABLE IF NOT EXISTS account_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,result TEXT NOT NULL,created TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS account_audit_jobs(id TEXT PRIMARY KEY);
- CREATE TABLE IF NOT EXISTS avatars(username TEXT PRIMARY KEY,version TEXT NOT NULL,image BLOB NOT NULL);
- CREATE TABLE IF NOT EXISTS wallpapers(username TEXT PRIMARY KEY,version TEXT NOT NULL,image BLOB NOT NULL);
- CREATE TABLE IF NOT EXISTS preferences(username TEXT PRIMARY KEY, value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS metric_history(minute INTEGER PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS dismissed_alerts(username TEXT NOT NULL,id TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(username,id));
- CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,message TEXT NOT NULL,active INTEGER NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL);`)
+	e = database.Migrate(db, "core", migrations)
 	if e != nil {
 		db.Close()
 		return nil, e

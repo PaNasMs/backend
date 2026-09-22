@@ -1,6 +1,9 @@
 package management
 
 import (
+	"database/sql"
+	"errors"
+	"log"
 	"strings"
 	"time"
 )
@@ -65,11 +68,22 @@ func (m *Manager) worker() {
 	active := map[string][]resource{}
 	done := make(chan string, 4)
 	for queue != nil || len(pending) > 0 || len(active) > 0 {
+		m.mu.Lock()
+		faulted := m.fault != nil
+		m.mu.Unlock()
+		if faulted {
+			pending = nil
+		}
 		remaining := pending[:0]
 		for _, w := range pending {
 			var status string
 			err := m.db.QueryRow("SELECT status FROM jobs WHERE id=?", w.Job.ID).Scan(&status)
-			if err != nil || status == "queued" {
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				m.fail(err)
+				remaining = nil
+				break
+			}
+			if err == nil && status == "queued" {
 				remaining = append(remaining, w)
 			}
 		}
@@ -117,4 +131,13 @@ func (m *Manager) cancelQueued(id string) bool {
 	default:
 	}
 	return true
+}
+
+func (m *Manager) fail(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fault == nil {
+		m.fault = err
+		log.Printf("Task journal unavailable; new operations suspended: %v", err)
+	}
 }

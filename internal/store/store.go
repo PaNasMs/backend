@@ -11,10 +11,15 @@ import (
 	"panasms.local/backend/internal/database"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db       *sql.DB
+	keyPath  string
+	secretMu sync.Mutex
+}
 
 func Open(path string) (*Store, error) {
 	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate&_foreign_keys=on")
@@ -27,7 +32,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, e
 	}
-	return &Store{db}, nil
+	return &Store{db: db, keyPath: path + ".external.key"}, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
 func digest(t string) string  { h := sha256.Sum256([]byte(t)); return hex.EncodeToString(h[:]) }

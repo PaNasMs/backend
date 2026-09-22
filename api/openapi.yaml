@@ -3,6 +3,199 @@ info:
   title: PaNasMs prototype API
   version: 0.2.6
 paths:
+  /api/v1/external/providers:
+    get:
+      operationId: getExternalProviders
+      description: Public availability; no client secrets or account information.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalProviders'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/external/settings/google:
+    get:
+      operationId: getExternalGoogleSettings
+      description: Administrator only. Returns a secretConfigured flag, never the secret.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalGoogleSettings'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: putExternalGoogleSettings
+      description: Administrator only. Saves encrypted client credentials and cancels
+        pending OAuth flows.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalGoogleSettings'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExternalGoogleSettingsInput'
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema:
+          const: '1'
+          type: string
+  /api/v1/external/connections:
+    get:
+      operationId: getExternalConnections
+      description: Lists only connections owned by the current Linux identity.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExternalConnection'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: unlinkExternalConnection
+      description: Requires current Linux password. Unlinks an owned identity and revokes
+        all owner panel sessions.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExternalUnlink'
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema:
+          const: '1'
+          type: string
+  /api/v1/external/google/start:
+    post:
+      operationId: startExternalGoogle
+      description: Starts browser-bound Google OIDC authorization through the fixed
+        HTTPS relay. Linking also requires the existing panel session and current Linux
+        password.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalAuthorization'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExternalStart'
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema:
+          const: '1'
+          type: string
+  /api/v1/external/google/poll:
+    post:
+      operationId: pollExternalGoogle
+      description: Requires the HttpOnly flow cookie from start. Poll at most once every
+        three seconds. Expiration, cancellation, restart or settings changes require
+        a new flow.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalFlowStatus'
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '202':
+          description: Authorization still pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExternalFlowStatus'
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema:
+          const: '1'
+          type: string
+  /api/v1/external/google/cancel:
+    post:
+      operationId: cancelExternalGoogle
+      description: Cancels the flow belonging to the browser cookie.
+      responses:
+        '204':
+          description: Success
+        default:
+          description: Failure; external.* error codes describe authorization failures.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema:
+          const: '1'
+          type: string
   /api/v1/health:
     get:
       operationId: getHealth
@@ -645,6 +838,124 @@ paths:
 
 components:
   schemas:
+    ExternalGoogleSettings:
+      type: object
+      required:
+      - provider
+      - clientId
+      - secretConfigured
+      - enabled
+      - redirectUri
+      properties:
+        provider:
+          const: google
+        clientId:
+          type: string
+        secretConfigured:
+          type: boolean
+        enabled:
+          type: boolean
+        redirectUri:
+          type: string
+    ExternalGoogleSettingsInput:
+      type: object
+      additionalProperties: false
+      required:
+      - clientId
+      - clientSecret
+      - enabled
+      properties:
+        clientId:
+          type: string
+          maxLength: 256
+        clientSecret:
+          type: string
+          maxLength: 4096
+          writeOnly: true
+          description: Empty preserves the existing secret only when the client ID is
+            unchanged.
+        enabled:
+          type: boolean
+    ExternalConnection:
+      type: object
+      required:
+      - id
+      - provider
+      - email
+      - name
+      - created
+      properties:
+        id:
+          type: string
+        provider:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        created:
+          type: integer
+    ExternalStart:
+      type: object
+      additionalProperties: false
+      required:
+      - purpose
+      properties:
+        purpose:
+          type: string
+          enum:
+          - login
+          - link
+        password:
+          type: string
+          writeOnly: true
+          description: Current Linux password required for linking; never sent to the
+            gateway.
+    ExternalAuthorization:
+      type: object
+      required:
+      - url
+      - expiresIn
+      properties:
+        url:
+          type: string
+        expiresIn:
+          type: integer
+    ExternalFlowStatus:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - pending
+          - linked
+          - authenticated
+    ExternalProviders:
+      type: object
+      required:
+      - google
+      properties:
+        google:
+          type: object
+          required:
+          - enabled
+          properties:
+            enabled:
+              type: boolean
+    ExternalUnlink:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - password
+      properties:
+        id:
+          type: string
+        password:
+          type: string
+          writeOnly: true
     JobRecovery:
       type: object
       required: [message, checks, route]

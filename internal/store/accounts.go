@@ -106,7 +106,7 @@ func (s *Store) BindAccount(user string, uid int, principal string) error {
 	}
 	changed := err == nil && (oldUID != uid || oldPrincipal != principal) || errors.Is(err, sql.ErrNoRows) && principal != ""
 	if changed {
-		for _, table := range []string{"sessions", "preferences", "wallpapers", "avatars", "dismissed_alerts", "account_audit"} {
+		for _, table := range []string{"sessions", "preferences", "wallpapers", "avatars", "dismissed_alerts", "account_audit", "external_connections"} {
 			if _, err = tx.Exec("DELETE FROM "+table+" WHERE username=?", user); err != nil {
 				return err
 			}

@@ -26,6 +26,7 @@ import (
 )
 
 type Server struct {
+	external              *externalFlows
 	ModuleClient          func(string) (*http.Client, error)
 	Store                 *store.Store
 	Agent                 *http.Client
@@ -48,7 +49,7 @@ func New(db *store.Store, socket, static string, allowed map[string]bool, secure
 	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
-	return &Server{ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
+	return &Server{external: newExternalFlows(), ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
 }
 func (s *Server) Run(ctx context.Context) {
 	collector := &system.Collector{}
@@ -161,6 +162,10 @@ func (s *Server) Handler() http.Handler {
 		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.6", "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/login", s.login)
+	r.Get("/api/v1/external/providers", s.externalProviders)
+	r.Post("/api/v1/external/google/start", s.externalStart)
+	r.Post("/api/v1/external/google/poll", s.externalPoll)
+	r.Post("/api/v1/external/google/cancel", s.externalCancel)
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +181,10 @@ func (s *Server) Handler() http.Handler {
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, id)))
 			})
 		})
+		r.Get("/api/v1/external/settings/google", s.externalSettings)
+		r.Put("/api/v1/external/settings/google", s.externalSettings)
+		r.Get("/api/v1/external/connections", s.externalConnections)
+		r.Delete("/api/v1/external/connections", s.externalConnections)
 		r.Get("/api/v1/session", func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, 200, r.Context().Value(identityKey{})) })
 		r.Post("/api/v1/logout", func(w http.ResponseWriter, r *http.Request) {
 			c, _ := r.Cookie("panasms_session")

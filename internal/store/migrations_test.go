@@ -33,7 +33,7 @@ func TestLegacyCoreUpgradeRetainsUserState(t *testing.T) {
 	if err = s.db.QueryRow("SELECT count(*) FROM alerts WHERE id='old'").Scan(&count); err != nil || count != 1 {
 		t.Fatal(count, err)
 	}
-	if err = s.db.QueryRow("SELECT count(*) FROM panasms_migrations WHERE component='core'").Scan(&count); err != nil || count != 1 {
+	if err = s.db.QueryRow("SELECT count(*) FROM panasms_migrations WHERE component='core'").Scan(&count); err != nil || count != len(migrations) {
 		t.Fatal(count, err)
 	}
 }

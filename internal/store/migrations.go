@@ -14,4 +14,8 @@ var migrations = []database.Migration{{Name: "core-baseline", SQL: `CREATE TABLE
  CREATE TABLE IF NOT EXISTS preferences(username TEXT PRIMARY KEY, value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS metric_history(minute INTEGER PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS dismissed_alerts(username TEXT NOT NULL,id TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(username,id));
- CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,message TEXT NOT NULL,active INTEGER NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL);`}}
+ CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,message TEXT NOT NULL,active INTEGER NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL);`}, {Name: "external-connections", SQL: `
+CREATE TABLE external_providers(provider TEXT PRIMARY KEY,client_id TEXT NOT NULL,secret BLOB NOT NULL,enabled INTEGER NOT NULL,revision TEXT NOT NULL);
+CREATE TABLE external_connections(id TEXT PRIMARY KEY,provider TEXT NOT NULL,subject TEXT NOT NULL,username TEXT NOT NULL,uid INTEGER NOT NULL,principal TEXT NOT NULL,email TEXT NOT NULL,name TEXT NOT NULL,created INTEGER NOT NULL,UNIQUE(provider,subject));
+CREATE INDEX external_connection_owner ON external_connections(username);
+`}}

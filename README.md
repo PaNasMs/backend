@@ -348,3 +348,7 @@ contract tests require `python3-yaml` and `python3-jsonschema` in addition to th
 existing native/Python test dependencies. Run `make check` and `make check-race`.
 These tests use temporary data; physical power-loss and hardware-controller behavior
 remain separate installation acceptance checks.
+
+## External connections
+
+Google account linking and optional panel sign-in use NAS-specific OAuth credentials. See the [architecture, setup and Cloud Sync handoff](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md).

@@ -1,3 +1,4 @@
+import uuid
 import fcntl
 import stat
 import zipfile
@@ -593,7 +594,8 @@ def execute(action, p, user):
                     if mid in available:
                         (staging / mid).rename(dest)
                     enabled = action != "module.install" or mid != requested or before.get(mid, {}).get("enabled", True)
-                    installed[mid] = {**(available.get(mid) or installed[mid]), "enabled": enabled}
+                    installed[mid] = {**(available.get(mid) or installed[mid]), "enabled": enabled,
+                                      "installation": before.get(mid, {}).get("installation") or uuid.uuid4().hex}
                     if enabled:
                         activate(installed[mid])
                     elif installed[mid].get("service"):

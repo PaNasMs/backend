@@ -46,6 +46,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go s.Run(ctx)
+	go func() {
+		if err := s.ServeGrantBroker(ctx, "/run/panasms-core/grants.sock"); err != nil {
+			log.Fatal(err)
+		}
+	}()
 	srv := &http.Server{Addr: *addr, Handler: s.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 0, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	go func() {
 		<-ctx.Done()

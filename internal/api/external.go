@@ -22,19 +22,22 @@ import (
 
 type externalFlow struct {
 	State, Nonce, Verifier, Revision, Purpose, Session string
+	Connection                                         store.ExternalConnection
+	Consumer, Capability, Scope, Installation          string
 	Identity                                           auth.Identity
 	Expires, NextPoll                                  time.Time
 	Busy                                               bool
 }
 type externalFlows struct {
 	sync.Mutex
-	pending  map[string]*externalFlow
-	client   *http.Client
-	exchange func(context.Context, *http.Client, string, string, string, string, string) (external.Account, error)
+	pending       map[string]*externalFlow
+	client        *http.Client
+	exchangeGrant func(context.Context, *http.Client, string, string, string, string, string, string) (external.Authorization, error)
+	exchange      func(context.Context, *http.Client, string, string, string, string, string) (external.Account, error)
 }
 
 func newExternalFlows() *externalFlows {
-	return &externalFlows{pending: map[string]*externalFlow{}, client: &http.Client{Timeout: 15 * time.Second}, exchange: external.Exchange}
+	return &externalFlows{pending: map[string]*externalFlow{}, client: &http.Client{Timeout: 15 * time.Second}, exchange: external.Exchange, exchangeGrant: external.ExchangeGrant}
 }
 func randomExternal() string { return hex.EncodeToString(randomExternalBytes()) }
 func randomExternalBytes() []byte {
@@ -166,14 +169,17 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Purpose  string `json:"purpose"`
-		Password string `json:"password"`
+		Purpose      string `json:"purpose"`
+		ConnectionID string `json:"connectionId"`
+		Consumer     string `json:"consumer"`
+		Capability   string `json:"capability"`
+		Password     string `json:"password"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	flow := &externalFlow{Purpose: body.Purpose, State: randomExternal(), Nonce: randomExternal(), Verifier: randomExternal(), Expires: time.Now().Add(10 * time.Minute)}
-	if body.Purpose == "link" {
+	if body.Purpose == "link" || body.Purpose == "grant" {
 		id, err := s.Identity(r)
 		if err != nil {
 			fail(w, 401, "Sign-in required")
@@ -182,6 +188,19 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 		if !s.externalReauthenticate(r, id, body.Password) {
 			fail(w, 403, "external.passwordRequired")
 			return
+		}
+		if body.Purpose == "grant" {
+			c, err := s.Store.ExternalConnection(body.ConnectionID)
+			policy, installation, ok := grantInstallation(body.Consumer, body.Capability)
+			if err != nil || !s.grantOwnerMatches(c, id) || !ok || c.Provider != policy.Provider {
+				fail(w, 403, "external.grantUnavailable")
+				return
+			}
+			flow.Connection = c
+			flow.Consumer = body.Consumer
+			flow.Capability = body.Capability
+			flow.Scope = policy.Scope
+			flow.Installation = installation
 		}
 		flow.Identity = id
 		c, _ := r.Cookie("panasms_session")
@@ -217,7 +236,11 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 	flow.Revision = config.Revision
 	s.external.pending[externalDigest(ticket)] = flow
 	s.externalCookie(w, ticket, 600)
-	jsonResponse(w, 200, map[string]any{"url": external.Authorize(config.ClientID, flow.State, flow.Nonce, flow.Verifier), "expiresIn": 600})
+	authorize := external.Authorize(config.ClientID, flow.State, flow.Nonce, flow.Verifier)
+	if flow.Purpose == "grant" {
+		authorize = external.AuthorizeGrant(config.ClientID, flow.State, flow.Nonce, flow.Verifier, flow.Connection.Subject, flow.Scope)
+	}
+	jsonResponse(w, 200, map[string]any{"url": authorize, "expiresIn": 600})
 }
 func (s *Server) externalCancel(w http.ResponseWriter, r *http.Request) {
 	s.external.Lock()
@@ -268,7 +291,7 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 	flow.NextPoll = time.Now().Add(3 * time.Second)
 	s.external.Unlock()
 	defer func() { s.external.Lock(); flow.Busy = false; s.external.Unlock() }()
-	if flow.Purpose == "link" {
+	if flow.Purpose == "link" || flow.Purpose == "grant" {
 		id, e := s.Identity(r)
 		session, se := r.Cookie("panasms_session")
 		if e != nil || se != nil || externalDigest(session.Value) != flow.Session || id.Username != flow.Identity.Username || id.UID != flow.Identity.UID || id.Principal != flow.Identity.Principal || id.Epoch != flow.Identity.Epoch {
@@ -310,7 +333,14 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "external.denied")
 		return
 	}
-	account, err := s.external.exchange(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier)
+	var account external.Account
+	var authorization external.Authorization
+	if flow.Purpose == "grant" {
+		authorization, err = s.external.exchangeGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier, flow.Scope)
+		account = authorization.Account
+	} else {
+		account, err = s.external.exchange(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier)
+	}
 	if err != nil {
 		fail(w, 401, "external.validationFailed")
 		return
@@ -322,10 +352,26 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 		fail(w, 410, "external.expired")
 		return
 	}
-	if flow.Purpose == "link" {
+	if flow.Purpose == "link" || flow.Purpose == "grant" {
 		id, err := s.Identity(r)
 		if err != nil || id.Username != flow.Identity.Username || id.UID != flow.Identity.UID || id.Principal != flow.Identity.Principal || id.Epoch != flow.Identity.Epoch {
 			fail(w, 401, "Sign-in required")
+			return
+		}
+		if flow.Purpose == "grant" {
+			owner, e := s.Store.ExternalConnection(flow.Connection.ID)
+			policy, installation, ok := grantInstallation(flow.Consumer, flow.Capability)
+			if e != nil || !s.grantOwnerMatches(owner, id) || owner.Subject != account.Subject || !ok || installation != flow.Installation || policy.Scope != flow.Scope {
+				fail(w, 403, "external.grantUnavailable")
+				return
+			}
+			grant := store.ExternalGrant{ID: randomExternal(), ConnectionID: owner.ID, Consumer: flow.Consumer, Capability: flow.Capability, Scope: flow.Scope, Revision: flow.Revision, Epoch: id.Epoch, Installation: installation, Token: authorization.Token}
+			if s.Store.SaveExternalGrant(grant) != nil {
+				fail(w, 503, "external.unavailable")
+				return
+			}
+			s.Store.Audit(id.Username, id.Username, "external.grant", "succeeded")
+			jsonResponse(w, 200, map[string]string{"status": "granted", "grantId": grant.ID})
 			return
 		}
 		if err = s.Store.LinkExternal(store.ExternalConnection{ID: randomExternal(), Provider: "google", Subject: account.Subject, Username: id.Username, UID: id.UID, Principal: id.Principal, Email: account.Email, Name: account.Name}); err != nil {

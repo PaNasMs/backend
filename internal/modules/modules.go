@@ -15,12 +15,13 @@ var Root = "/var/lib/panasms-modules"
 var ID = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 
 type Manifest struct {
-	ID      string            `json:"id"`
-	Title   string            `json:"title"`
-	Version string            `json:"version"`
-	Enabled bool              `json:"enabled"`
-	Widgets map[string][2]int `json:"widgets"`
-	Files   map[string]string `json:"files"`
+	Installation string            `json:"installation"`
+	ID           string            `json:"id"`
+	Title        string            `json:"title"`
+	Version      string            `json:"version"`
+	Enabled      bool              `json:"enabled"`
+	Widgets      map[string][2]int `json:"widgets"`
+	Files        map[string]string `json:"files"`
 }
 
 func Read() map[string]Manifest {

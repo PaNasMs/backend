@@ -112,11 +112,42 @@ paths:
         schema:
           const: '1'
           type: string
+  /api/v1/external/grants:
+    get:
+      operationId: getExternalGrants
+      description: Current user's consumer-bound permissions; metadata only, never credentials.
+      responses:
+        '200':
+          description: Permission metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/ExternalGrant'}
+        default:
+          description: Authorization or storage error
+    delete:
+      operationId: revokeExternalGrant
+      description: Password-confirmed local revocation; stops future token delivery/refresh. Already-issued access tokens can remain valid at Google until expiry.
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema: {type: string, const: '1'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExternalUnlink'}
+      responses:
+        '204': {description: Revoked}
+        default: {description: Authorization or storage error}
   /api/v1/external/google/start:
     post:
       operationId: startExternalGoogle
       description: Starts browser-bound Google OIDC authorization through the fixed
-        HTTPS relay. Linking also requires the existing panel session and current Linux
+        HTTPS relay. Grant purpose adds the registered capability scope and offline consent,
+        bound to connectionId and consumer. Linking and grants require the existing panel session and current Linux
         password.
       responses:
         '200':
@@ -906,11 +937,32 @@ components:
           enum:
           - login
           - link
+          - grant
         password:
           type: string
           writeOnly: true
           description: Current Linux password required for linking; never sent to the
             gateway.
+        connectionId:
+          type: string
+          description: Owned linked identity; required for purpose grant.
+        consumer:
+          type: string
+          description: Registered installed module; required for purpose grant.
+        capability:
+          type: string
+          description: Reviewed capability identifier; required for purpose grant. Never arbitrary scopes.
+    ExternalGrant:
+      type: object
+      required: [id, connectionId, consumer, capability, scope, status, created]
+      properties:
+        id: {type: string}
+        connectionId: {type: string}
+        consumer: {type: string}
+        capability: {type: string}
+        scope: {type: string}
+        status: {type: string, enum: [active, unavailable, reconnect_required]}
+        created: {type: integer}
     ExternalAuthorization:
       type: object
       required:
@@ -932,6 +984,10 @@ components:
           - pending
           - linked
           - authenticated
+          - granted
+        grantId:
+          type: string
+          description: Present on successful grant; no tokens are returned to the browser.
     ExternalProviders:
       type: object
       required:

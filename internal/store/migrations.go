@@ -18,4 +18,6 @@ var migrations = []database.Migration{{Name: "core-baseline", SQL: `CREATE TABLE
 CREATE TABLE external_providers(provider TEXT PRIMARY KEY,client_id TEXT NOT NULL,secret BLOB NOT NULL,enabled INTEGER NOT NULL,revision TEXT NOT NULL);
 CREATE TABLE external_connections(id TEXT PRIMARY KEY,provider TEXT NOT NULL,subject TEXT NOT NULL,username TEXT NOT NULL,uid INTEGER NOT NULL,principal TEXT NOT NULL,email TEXT NOT NULL,name TEXT NOT NULL,created INTEGER NOT NULL,UNIQUE(provider,subject));
 CREATE INDEX external_connection_owner ON external_connections(username);
+`}, {Name: "external-grants", SQL: `
+CREATE TABLE external_grants(id TEXT PRIMARY KEY,connection_id TEXT NOT NULL REFERENCES external_connections(id) ON DELETE CASCADE,consumer TEXT NOT NULL,capability TEXT NOT NULL,scope TEXT NOT NULL,revision TEXT NOT NULL,epoch TEXT NOT NULL,installation TEXT NOT NULL,secret BLOB NOT NULL,status TEXT NOT NULL,created INTEGER NOT NULL,UNIQUE(connection_id,consumer,capability));
 `}}

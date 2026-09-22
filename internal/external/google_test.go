@@ -84,3 +84,52 @@ func TestGoogleIdentityValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestGoogleGrantRequiresOfflineScopeAndVerifiedIdentity(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	signer, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key}, (&jose.SignerOptions{}).WithHeader("kid", "grant-key"))
+	claims, _ := json.Marshal(map[string]any{"iss": "https://accounts.google.com", "aud": "client", "exp": time.Now().Add(time.Hour).Unix(), "sub": "subject", "nonce": "nonce", "email": "test@example.test", "email_verified": true})
+	signed, _ := signer.Sign(claims)
+	jwt, _ := signed.CompactSerialize()
+	for _, variant := range []string{"valid", "scope", "refresh", "expiry", "nonce"} {
+		t.Run(variant, func(t *testing.T) {
+			c := &http.Client{Transport: transport(func(r *http.Request) (*http.Response, error) {
+				var body any
+				if r.URL.Host == "oauth2.googleapis.com" {
+					data := map[string]any{"access_token": "access", "refresh_token": "refresh", "token_type": "Bearer", "expires_in": 3600, "id_token": jwt, "scope": "openid email profile " + DriveScope}
+					if variant == "scope" {
+						data["scope"] = "openid email profile"
+					}
+					if variant == "refresh" {
+						delete(data, "refresh_token")
+					}
+					if variant == "expiry" {
+						delete(data, "expires_in")
+					}
+					body = data
+				} else {
+					body = jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "grant-key", Algorithm: "RS256", Use: "sig"}}}
+				}
+				raw, _ := json.Marshal(body)
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
+			})}
+			nonce := "nonce"
+			if variant == "nonce" {
+				nonce = "wrong"
+			}
+			grant, err := ExchangeGrant(context.Background(), c, "client", "secret", "code", nonce, "verifier", DriveScope)
+			if variant == "valid" {
+				if err != nil || grant.Account.Subject != "subject" || grant.Token.RefreshToken != "refresh" {
+					t.Fatal(err)
+				}
+			} else if err == nil {
+				t.Fatal("incomplete consent accepted")
+			}
+		})
+	}
+	u, _ := url.Parse(AuthorizeGrant("client", "state", "nonce", "verifier", "subject", DriveReadScope))
+	q := u.Query()
+	if q.Get("access_type") != "offline" || q.Get("prompt") != "consent" || q.Get("login_hint") != "subject" || q.Get("code_challenge_method") != "S256" || !strings.Contains(q.Get("scope"), DriveReadScope) {
+		t.Fatal("unsafe grant authorize URL")
+	}
+}

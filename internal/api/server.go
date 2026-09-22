@@ -27,6 +27,7 @@ import (
 
 type Server struct {
 	external              *externalFlows
+	lookupIdentity        func(string, map[string]bool) (auth.Identity, error)
 	ModuleClient          func(string) (*http.Client, error)
 	Store                 *store.Store
 	Agent                 *http.Client
@@ -49,7 +50,7 @@ func New(db *store.Store, socket, static string, allowed map[string]bool, secure
 	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
-	return &Server{external: newExternalFlows(), ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
+	return &Server{external: newExternalFlows(), lookupIdentity: auth.Lookup, ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
 }
 func (s *Server) Run(ctx context.Context) {
 	collector := &system.Collector{}
@@ -112,7 +113,7 @@ func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
 	if e != nil {
 		return auth.Identity{}, e
 	}
-	id, err := auth.Lookup(username, s.Allowed)
+	id, err := s.lookupIdentity(username, s.Allowed)
 	if err != nil {
 		return auth.Identity{}, err
 	}
@@ -183,6 +184,8 @@ func (s *Server) Handler() http.Handler {
 		})
 		r.Get("/api/v1/external/settings/google", s.externalSettings)
 		r.Put("/api/v1/external/settings/google", s.externalSettings)
+		r.Get("/api/v1/external/grants", s.externalGrants)
+		r.Delete("/api/v1/external/grants", s.externalGrants)
 		r.Get("/api/v1/external/connections", s.externalConnections)
 		r.Delete("/api/v1/external/connections", s.externalConnections)
 		r.Get("/api/v1/session", func(w http.ResponseWriter, r *http.Request) { jsonResponse(w, 200, r.Context().Value(identityKey{})) })

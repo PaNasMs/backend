@@ -10,7 +10,7 @@ REGISTRY = ROOT / "registry.json"
 UPLOADS = Path("/var/lib/panasms-agent/module-uploads")
 KEYS = Path("/etc/panasms/module-keys")
 UNITS = Path("/etc/systemd/system")
-CORE = "0.2.6"
+CORE = "0.2.7"
 ACTIONS = {"module.recover", "module.install", "module.enable", "module.disable", "module.remove"}
 
 

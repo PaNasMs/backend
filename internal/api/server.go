@@ -160,7 +160,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		allowHealthProbe(w, r)
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.6", "product": "PaNasMs"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.7", "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/login", s.login)
 	r.Get("/api/v1/external/providers", s.externalProviders)

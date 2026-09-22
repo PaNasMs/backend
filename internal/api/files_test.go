@@ -58,3 +58,30 @@ func TestDownloadPropagatesLengthAndAbortsTruncation(t *testing.T) {
 		})
 	}
 }
+
+func TestUploadForwardsReplacementRevisionWithAuthenticatedIdentity(t *testing.T) {
+	for _, revision := range []string{strings.Repeat("a", 64), "invalid"} {
+		s := testServer(t)
+		called := false
+		s.ModuleClient = func(string) (*http.Client, error) {
+			return &http.Client{Transport: thumbnailTransport(func(r *http.Request) (*http.Response, error) {
+				called = true
+				if r.URL.Query().Get("replace_revision") != revision || r.URL.Query().Get("user") != "alice" {
+					t.Fatal("replacement authority was not forwarded correctly")
+				}
+				return &http.Response{StatusCode: 204, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}, nil
+		}
+		req := httptest.NewRequest("PUT", "/api/v1/files/content?target=/home/alice/file&user=root&replace_revision="+revision, strings.NewReader("new"))
+		req = req.WithContext(context.WithValue(req.Context(), identityKey{}, auth.Identity{Username: "alice"}))
+		out := httptest.NewRecorder()
+		s.files(out, req)
+		if revision == "invalid" {
+			if out.Code != 400 || called {
+				t.Fatal("invalid replacement revision accepted")
+			}
+		} else if out.Code != 204 || !called {
+			t.Fatal("valid replacement failed")
+		}
+	}
+}

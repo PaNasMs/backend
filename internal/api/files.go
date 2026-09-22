@@ -5,9 +5,10 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/modules"
+	"path/filepath"
+	"regexp"
 	"strconv"
 )
 
@@ -23,6 +24,13 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := url.Values{"user": {id.Username}, "target": {r.URL.Query().Get("target")}}
+	if revision := r.URL.Query().Get("replace_revision"); r.Method == "PUT" && revision != "" {
+		if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(revision) {
+			fail(w, 400, "Invalid replacement revision")
+			return
+		}
+		v.Set("replace_revision", revision)
+	}
 	thumbnail := r.Method == "GET" && r.URL.Query().Get("thumbnail") == "1"
 	if thumbnail {
 		v.Set("thumbnail", "1")

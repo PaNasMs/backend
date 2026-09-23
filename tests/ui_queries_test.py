@@ -27,7 +27,7 @@ class PresentationQueriesTest(unittest.TestCase):
                 {'target': folder, 'fstype': 'ext4'},
             ]}
             with patch.object(sharing, 'json_command', return_value=rows), patch.object(host, 'export_path', side_effect=lambda value: Path(value)):
-                self.assertEqual(sharing.folders('')['roots'], [folder])
+                self.assertEqual(sharing.folders('')['roots'], [{'name': root.name, 'path': folder}])
                 self.assertEqual([r['name'] for r in sharing.folders(folder)['folders']], ['media'])
                 with self.assertRaises(Rejected):
                     sharing.folders('/etc')

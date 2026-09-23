@@ -25,6 +25,28 @@ class CoolingTest(unittest.TestCase):
         self.assertEqual(duty("quiet", [{"state": "active", "temperature": 50}], 50)[0], 1)
         self.assertEqual(duty("quiet", [{"state": "active", "temperature": None}], 50)[0], 1)
 
+    def test_cold_disks_stop_fan_in_every_profile(self):
+        for profile in ("quiet", "balanced", "performance"):
+            self.assertEqual(duty(profile, [{"state": "active", "temperature": 29}], 50), (0, "disks-cool"))
+            self.assertGreater(duty(profile, [{"state": "active", "temperature": 30}], 50)[0], 0)
+            self.assertGreater(duty(profile, [{"state": "active", "temperature": 29}], 65)[0], 0)
+        self.assertGreater(duty("quiet", [{"state": "active", "temperature": 29},
+                                          {"state": "active", "temperature": 35}], 50)[0], 0)
+
+    def test_startup_is_bounded_and_fail_safe_is_preserved(self):
+        target = m["control_target"]
+        unknown = [{"state": "unknown", "temperature": None}]
+        self.assertEqual(target("quiet", [], 50, True, 0, stale=True), (0.5, "initializing-sensors"))
+        self.assertEqual(target("quiet", unknown, 50, True, 119)[0], 0.5)
+        self.assertEqual(target("quiet", unknown, 50, True, 120)[0], 1)
+        self.assertEqual(target("quiet", unknown, 50, False, 10)[0], 1)
+        self.assertEqual(target("quiet", unknown, 70, True, 0)[0], 1)
+        self.assertEqual(target("quiet", unknown, 50, True, 0, invalid=True)[0], 1)
+        hot = unknown + [{"state": "active", "temperature": 50}]
+        self.assertEqual(target("quiet", hot, 50, True, 0)[0], 1)
+        cold = [{"state": "active", "temperature": 29}]
+        self.assertEqual(target("quiet", cold, 50, False, 10, stale=True)[0], 1)
+
     def test_cpu_profiles_keep_critical_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

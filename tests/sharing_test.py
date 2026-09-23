@@ -16,6 +16,22 @@ class SharingTest(unittest.TestCase):
         p=patch.object(sharing,'atomic',side_effect=atomic);p.start();self.addCleanup(p.stop)
         p=patch.object(sharing,'validate_config');p.start();self.addCleanup(p.stop)
         self.share={'name':'Media','path':'/srv/data/media','smb':True,'nfs':True,'readers':['alice'],'writers':['@family'],'clients':['192.168.1.0/24'],'readOnly':False,'mountpoint':'/srv/data','volume':'uuid'}
+    def test_unicode_folder_name_and_config_injection(self):
+        data = dict(self.share, name='Документи', clients='', nfs=False, readers=[], writers=[])
+        data['smb'] = False
+        with patch('host.export_path', return_value=Path('/srv/data/Документи')), patch.object(sharing,'volume',return_value='uuid'), patch.object(sharing,'mountpoint',return_value='/srv/data'):
+            self.assertEqual(sharing.normalize(data)['name'], 'Документи')
+            for name in ('global', 'bad\nname', '[global]', 'a;cmd', 'a/b'):
+                with self.assertRaises(Rejected): sharing.normalize(dict(data, name=name))
+
+    def test_folder_locations_include_home_and_labeled_volumes(self):
+        rows={'filesystems':[{'target':'/','fstype':'ext4','source':'/dev/root'}, {'target':'/srv/data','fstype':'ext4','source':'/dev/md127','label':'Storage'}]}
+        from types import SimpleNamespace
+        with patch.object(sharing,'json_command',return_value=rows), patch('host.export_path',side_effect=Path), patch.object(sharing.pwd,'getpwnam',return_value=SimpleNamespace(pw_dir='/srv/data/home/alice')):
+            result=sharing.folders('', 'alice')
+            self.assertEqual(result['roots'], [{'name':'Home','path':'/srv/data/home/alice'}, {'name':'Storage','path':'/srv/data'}])
+            with self.assertRaises(Rejected): sharing.folders('/etc','alice')
+
     def test_protocols_and_permissions(self):
         smb,nfs=sharing.config([self.share])
         self.assertIn('read only = yes',smb);self.assertIn('write list = @family',smb)

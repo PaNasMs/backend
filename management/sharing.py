@@ -63,7 +63,7 @@ def volume(path):
 def normalize(p):
     from host import export_path
     n = p.get('name', '')
-    require(isinstance(n, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', n) and n.lower() not in ('global','homes','printers','print$','ipc$'), 'Choose a unique share name using letters, numbers, dots, dashes or underscores')
+    require(isinstance(n, str) and re.fullmatch(r'[\w][\w.-]{0,63}', n) and n == n.strip() and n.lower() not in ('global','homes','printers','print$','ipc$'), 'Choose a unique share name using letters, numbers, dots, dashes or underscores')
     path = str(export_path(p.get('path')))
     require(not any(c in path for c in '%#;[]\r\n'), 'Share path contains unsupported configuration characters')
     for k in ('smb','nfs','readOnly'): require(type(p.get(k)) is bool, 'Protocol settings must be true or false')
@@ -302,9 +302,9 @@ def query():
 
 
 
-def folders(target):
+def folders(target, user=None):
     from host import export_path
-    rows = json_command(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE,SOURCE']).get('filesystems', [])
+    rows = json_command(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE,SOURCE,LABEL']).get('filesystems', [])
     roots = []
     for row in rows:
         if row.get('fstype') not in ('ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'vfat', 'exfat', 'ntfs', 'ntfs3') or row.get('target') == '/':
@@ -312,13 +312,23 @@ def folders(target):
         path = row.get('target', '')
         try:
             export_path(path)
-            roots.append(path)
+            roots.append({'name': row.get('label') or Path(path).name, 'path': path})
         except Rejected:
             continue
+    roots = list({root['path']: root for root in roots}.values())
+    roots.sort(key=lambda root: root['name'].casefold())
+    if user:
+        home = pwd.getpwnam(user).pw_dir
+        if any(home == root['path'] or home.startswith(root['path'].rstrip('/') + '/') for root in roots):
+            try:
+                export_path(home)
+                roots.insert(0, {'name': 'Home', 'path': home})
+            except Rejected:
+                pass
     if not target:
-        return {'roots': sorted(set(roots)), 'path': '', 'folders': []}
+        return {'roots': roots, 'path': '', 'folders': []}
     path = export_path(target)
-    require(any(str(path) == root or str(path).startswith(root.rstrip('/') + '/') for root in roots), 'Choose a folder on a mounted local volume')
+    require(any(str(path) == root['path'] or str(path).startswith(root['path'].rstrip('/') + '/') for root in roots), 'Choose a folder on a mounted local volume')
     children = []
     with os.scandir(path) as entries:
         for entry in entries:
@@ -326,7 +336,7 @@ def folders(target):
                 children.append({'name': entry.name, 'path': entry.path})
                 if len(children) >= 1000:
                     break
-    return {'roots': sorted(set(roots)), 'path': str(path), 'folders': sorted(children, key=lambda item: item['name'].casefold())}
+    return {'roots': roots, 'path': str(path), 'folders': sorted(children, key=lambda item: item['name'].casefold())}
 
 if __name__ == '__main__':
     try:

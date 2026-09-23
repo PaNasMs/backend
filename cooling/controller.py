@@ -11,6 +11,9 @@ import time
 CONFIG = Path('/etc/panasms-cooling/config.json')
 STATUS = Path('/run/panasms-cooling/status.json')
 CPU_PROFILES={'quiet':(50000,60000,67500,75000),'balanced':(45000,55000,64000,70000),'performance':(40000,50000,60000,65000)}
+STARTUP_SECONDS = 120
+STARTUP_RETRY_SECONDS = 5
+
 PROFILES = {'quiet': (40, 45, 50), 'balanced': (35, 40, 45), 'performance': (30, 35, 40)}
 
 
@@ -40,8 +43,23 @@ def duty(profile, disks, sensor_temperature):
     if any(t is None for t in temperatures):
         return 1.0, 'sensor-unavailable'
     temp = max(temperatures)
+    if temp < 30 and sensor_temperature < 65:
+        return 0.0, 'disks-cool'
     a, b, c = PROFILES[profile]
     return (0.25 if temp < a else 0.5 if temp < b else 0.75 if temp < c else 1.0), 'automatic'
+
+
+def control_target(profile, disks, sensor_temperature, starting, elapsed, stale=False, invalid=False):
+    target, reason = duty(profile, disks, sensor_temperature)
+    hot = any(d.get('temperature') is not None and d['temperature'] >= PROFILES[profile][2]
+              for d in disks if d['state'] == 'active')
+    if invalid or (sensor_temperature is not None and sensor_temperature >= 70) or hot:
+        return 1.0, 'stale-or-invalid-data' if invalid else 'system-temperature' if not hot else 'automatic'
+    if starting and elapsed < STARTUP_SECONDS and reason == 'sensor-unavailable':
+        return 0.5, 'initializing-sensors'
+    if stale:
+        return 1.0, 'stale-or-invalid-data'
+    return target, reason
 
 
 def disk_read(path):
@@ -53,9 +71,9 @@ def disk_read(path):
             messages = ' '.join(x.get('string', '') for x in data.get('smartctl', {}).get('messages', []))
             if any(mode in messages.upper() for mode in ('STANDBY', 'SLEEP')):
                 return {'path': path, 'state': 'sleeping', 'temperature': None}
-            return {'path': path, 'state': 'unknown', 'temperature': None}
+            raise ValueError('SMART command exited 3 without standby confirmation')
         if p.returncode & 7:
-            raise ValueError('SMART command failed')
+            raise ValueError(f'SMART command failed (exit {p.returncode})')
         data = json.loads(p.stdout)
         temp = data.get('temperature', {}).get('current')
         if temp is None:
@@ -72,8 +90,8 @@ def disk_read(path):
         health='failed' if passed is False or p.returncode & 8 else 'warning' if warnings else 'passed' if passed is True else 'unknown'
         return {'path':path,'state':'active','temperature':temp,'health':health,'warnings':warnings,'attributes':attributes,
                 'powerOnHours':data.get('power_on_time',{}).get('hours'),'observedAt':time.time(),'stale':False}
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
-        return {'path': path, 'state': 'unknown', 'temperature': None}
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        return {'path': path, 'state': 'unknown', 'temperature': None, 'error': str(error)}
 
 
 def system_temperature():
@@ -106,10 +124,12 @@ def main():
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
-    shared = {'disks': [], 'sampled': 0.0}
+    started = time.monotonic()
+    shared = {'disks': [], 'sampled': 0.0, 'initialized': False}
     lock = threading.Lock()
 
     cached={}
+    errors={}
     def sample():
         while not stopped.is_set():
             paths=set(config['disks'])
@@ -122,18 +142,27 @@ def main():
                     row={**cached[path],**row,'temperature':cached[path]['temperature'],'stale':True}
                 else: row.update(health='unknown',warnings=[],attributes=[],observedAt=None,stale=True)
                 row['device']=str(Path(path).resolve())
-                if not Path(path).exists(): row['state']='unavailable'
+                if not Path(path).exists():
+                    row.update(state='unavailable', error='Device path is not available')
+                error = row.get('error') if row['state'] in ('unknown', 'unavailable') else None
+                if errors.get(path) != error:
+                    print(f"Cooling sensor {path}: {error or 'recovered'}", flush=True)
+                    errors[path] = error
                 disks.append(row)
             with lock:
-                shared.update(disks=disks, sampled=time.monotonic())
-            stopped.wait(config['sampleSeconds'])
+                required = [d for d in disks if d['path'] in config['disks']]
+                ready = bool(required) and all(d['state'] in ('active', 'sleeping') for d in required)
+                shared.update(disks=disks, sampled=time.monotonic(), initialized=shared['initialized'] or ready)
+                initialized = shared['initialized']
+            retry = not initialized and time.monotonic()-started < STARTUP_SECONDS
+            stopped.wait(STARTUP_RETRY_SECONDS if retry else config['sampleSeconds'])
 
     threading.Thread(target=sample, daemon=True).start()
-    duty_value = 1.0
+    duty_value = 0.5
     last_update = 0
     lower_since = None
     previous_target = None
-    kick_until = time.monotonic()+2
+    kick_until = 0
     cpu_applied=None
     cpu_status={'available':False}
     notify('READY=1')
@@ -159,9 +188,11 @@ def main():
                     cpu_status={'available':False,'profile':cpu_profile,'error':'Cannot apply kernel thermal thresholds'}
                 with lock:
                     disks, sampled = shared['disks'], shared['sampled']
-                target, reason = duty(config['profile'], [d for d in disks if d['path'] in config['disks']], system_temperature())
-                if now-sampled > config['sampleSeconds']+60 or config_error:
-                    target, reason = 1.0, 'stale-or-invalid-data'
+                    initialized = shared['initialized']
+                target, reason = control_target(
+                    config['profile'], [d for d in disks if d['path'] in config['disks']],
+                    system_temperature(), not initialized, now-started,
+                    stale=now-sampled > config['sampleSeconds']+60, invalid=config_error)
                 if target < duty_value:
                     if previous_target != target:
                         lower_since = now

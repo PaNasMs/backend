@@ -78,7 +78,7 @@ fi
 apt-get install -y --reinstall "$package"
 panasms-inspect-hardware > /var/lib/panasms-installer/hardware.json
 if [[ -n $port ]]; then panasms-configure --port "$port"; else panasms-configure; fi
-port=$(python3 -c 'import sys;sys.path.insert(0,"/usr/lib/panasms/management");import web_access;print(web_access.current_port())')
+port=$(/usr/lib/panasms/panasms-system-helper web-access --current)
 for attempt in {1..30}; do
  if curl --fail --silent "http://localhost:$port/api/v1/health" > "$scratch/health.json"; then break; fi
  sleep 1

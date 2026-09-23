@@ -13,6 +13,9 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
 mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/panasms" "$stage/usr/share/panasms/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
 go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
+for helper in panasms-system-helper panasms-keys; do
+ go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/$helper" "./cmd/$helper"
+done
 go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-agent" ./cmd/panasms-agent
 go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-password" ./cmd/panasms-password
 install -d "$stage/usr/share/doc/panasms-prototype"

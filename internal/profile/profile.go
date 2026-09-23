@@ -35,7 +35,7 @@ func Keys(ctx context.Context, username string, body any) ([]Key, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/python3", "/usr/lib/panasms/profile-keys.py", username)
+	cmd := exec.CommandContext(ctx, "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--", "/usr/lib/panasms/panasms-keys", username)
 	cmd.Stdin = bytes.NewReader(data)
 	out, err := cmd.Output()
 	if err != nil {

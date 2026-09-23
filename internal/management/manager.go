@@ -15,12 +15,14 @@ import (
 	"os/exec"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/database"
+	"panasms.local/backend/internal/systemops"
 	"sync"
 	"time"
 )
 
 type progressKey struct{}
 type Request struct {
+	actor        *systemops.Actor
 	Action       string         `json:"action"`
 	Params       map[string]any `json:"params"`
 	Fingerprint  string         `json:"fingerprint,omitempty"`
@@ -59,11 +61,31 @@ type Manager struct {
 }
 
 func helper(ctx context.Context, mode, user string, body any) (json.RawMessage, error) {
+	return runHelper(ctx, mode, user, body, []string{"/usr/bin/python3", "-B", "/usr/lib/panasms/management/main.py"})
+}
+
+func helperArgs(mode, user string, executable []string) []string {
+	args := []string{"--mount=/proc/1/ns/mnt", "--"}
+	args = append(args, executable...)
+	return append(args, mode, user)
+}
+
+func runHelper(ctx context.Context, mode, user string, body any, executable []string) (json.RawMessage, error) {
+	if req, ok := body.(Request); ok && req.actor != nil {
+		current, err := auth.Lookup(user, nil)
+		if err != nil || current.UID != req.actor.UID || current.Epoch != req.actor.Epoch || current.Principal != req.actor.Principal {
+			return json.RawMessage(`{"error":"Account identity or access has changed; request a new operation plan","noChanges":true}`), nil
+		}
+		body = struct {
+			Request
+			Actor *systemops.Actor `json:"actor,omitempty"`
+		}{req, req.actor}
+	}
 	raw, e := json.Marshal(body)
 	if e != nil {
 		return nil, e
 	}
-	cmd := exec.CommandContext(ctx, "/usr/bin/nsenter", "--mount=/proc/1/ns/mnt", "--", "/usr/bin/python3", "-B", "/usr/lib/panasms/management/main.py", mode, user)
+	cmd := exec.CommandContext(ctx, "/usr/bin/nsenter", helperArgs(mode, user, executable)...)
 	cmd.Stdin = bytes.NewReader(raw)
 	if c, ok := ctx.Value(controlKey{}).(*control); ok {
 		read, write, err := os.Pipe()
@@ -148,7 +170,7 @@ func Open(path string) (*Manager, error) {
 		db.Close()
 		return nil, e
 	}
-	m := &Manager{db: db, queue: make(chan work, 32), finished: make(chan struct{}), wake: make(chan struct{}, 1), run: helper, controls: make(map[string]*control)}
+	m := &Manager{db: db, queue: make(chan work, 32), finished: make(chan struct{}), wake: make(chan struct{}, 1), run: route(nativeRun, helper), controls: make(map[string]*control)}
 	go m.worker()
 	return m, nil
 }
@@ -390,10 +412,12 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, id auth.Identity
 	var req Request
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
+	d.UseNumber()
 	if d.Decode(&req) != nil || d.Decode(new(any)) != io.EOF {
 		reply(w, 400, map[string]string{"error": "Invalid request"})
 		return
 	}
+	req.actor = &systemops.Actor{UID: id.UID, Epoch: id.Epoch, Principal: id.Principal}
 	if r.URL.Query().Get("view") == "clear-history" {
 		if e := m.clearHistoryFor(user, id.Role == "admin"); e != nil {
 			reply(w, 503, map[string]string{"error": "Could not clear task history"})

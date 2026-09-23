@@ -349,6 +349,33 @@ existing native/Python test dependencies. Run `make check` and `make check-race`
 These tests use temporary data; physical power-loss and hardware-controller behavior
 remain separate installation acceptance checks.
 
+## Native system-operation workers
+
+The agent routes account/group/SSH/session operations, services, system packages,
+power operations and HTTP-port changes to `panasms-system-helper` in the host mount
+namespace. The helper rechecks Linux identity and access, updater state and the
+confirmed plan before crossing the mutation boundary. Interrupted operations are
+inspected, never automatically replayed. `panasms-system-helper routes` prints the
+complete native/legacy inventory; a native failure never falls back to Python.
+
+`panasms-keys` performs SSH-key edits and home-content removal in a separate process
+with the target user's credentials. The parent only removes the verified, empty
+home directory. Host PAM/password rules remain authoritative.
+
+Other domains still use the explicit legacy dispatcher. In particular, bulk home
+relocation (`homes.*`), storage, networking and Samba/NFS have not been migrated.
+The narrow `management/account_dependencies.py` bridge preserves Samba account
+status, disconnect/disable/remove and password synchronization until that domain
+moves to Go. This is not a fallback for an account operation.
+
+`make check-accounts-integration` builds the workers and runs disposable account
+and PAM tests in user/mount/PID/network namespaces. It needs Linux user namespaces,
+`newuidmap`/`newgidmap` with subordinate UID/GID ranges, PAM development headers and
+standard account tools. Host accounts are never modified. Account commands, PAM,
+keys and home moves/deletion are real; systemd and storage discovery use fixtures.
+The tests compare native queries, plans and recovery reports with the legacy
+contract. Live hardware and service-manager deployment remain separate checks.
+
 ## External connections
 
 Google account linking and optional panel sign-in use NAS-specific OAuth credentials. See the [architecture, setup and Cloud Sync handoff](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md).

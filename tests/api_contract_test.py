@@ -1,5 +1,8 @@
 import ast
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -10,6 +13,24 @@ import yaml
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def go_route_inventory():
+    """Return the Go dispatcher's exported routing inventory.
+
+    Replaces the former AST scan of main.py: the routing table now lives in Go
+    (internal/management/routing.go) and is emitted by the helper's `routes`
+    subcommand, so coverage is asserted against the single source of truth
+    rather than re-derived from Python control flow. Skips cleanly when the Go
+    toolchain is unavailable in the test environment.
+    """
+    go = shutil.which('go')
+    if not go:
+        raise unittest.SkipTest('go toolchain not available')
+    env = dict(os.environ, GOTOOLCHAIN='local', GOFLAGS='-buildvcs=false')
+    out = subprocess.check_output(
+        [go, 'run', './cmd/panasms-system-helper', 'routes'], cwd=ROOT, env=env)
+    return json.loads(out)
 sys.path.insert(0, str(ROOT / 'management'))
 import homes
 import host
@@ -43,15 +64,24 @@ class ManagementContractTest(unittest.TestCase):
         visit(DOCUMENT)
 
     def test_core_query_dispatch_has_contracts(self):
-        supported = set()
-        for file in ('main.py', 'host.py', 'storage.py'):
-            for node in ast.walk(ast.parse((ROOT / 'management' / file).read_text())):
-                if isinstance(node, ast.Compare) and isinstance(node.left, ast.Name) and node.left.id == 'view':
-                    if isinstance(node.ops[0], (ast.Eq, ast.In)):
-                        for item in ast.walk(node.comparators[0]):
-                            if isinstance(item, ast.Constant) and isinstance(item.value, str): supported.add(item.value)
+        inventory = go_route_inventory()
         declared = DOCUMENT['components']['schemas']['ManagementViews']['properties']
-        self.assertEqual(supported, set(declared) - {'job', 'jobs'})
+        # Every routed query view must have an OpenAPI contract, and every
+        # declared view (except the jobs journal, served directly by the Go
+        # manager) must be routed. This keeps the Go routing table, the Python
+        # dispatcher and the API schema in lockstep.
+        self.assertEqual(set(inventory['views']), set(declared) - {'job', 'jobs'})
+
+    def test_legacy_actions_are_all_in_route_inventory(self):
+        actions = set()
+        for source in (ROOT / 'management').glob('*.py'):
+            for node in ast.walk(ast.parse(source.read_text())):
+                if isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id == 'ACTIONS'
+                    for target in node.targets
+                ):
+                    actions.update(ast.literal_eval(node.value))
+        self.assertEqual(set(go_route_inventory()['actions']), actions)
 
     def test_real_empty_and_recovery_queries_match_schemas(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -183,6 +183,29 @@ def mount_targets():
     return set(walk(rows))
 
 
+def stale_block_mount(point):
+    result = subprocess.run(
+        ["findmnt", "--json", "--mountpoint", str(point), "-o", "TARGET,SOURCE,MAJ:MIN"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode == 1:
+        return False
+    require(result.returncode == 0, "Could not inspect the mount point")
+    rows = json.loads(result.stdout).get("filesystems", [])
+    if len(rows) != 1 or rows[0].get("target") != str(point):
+        return False
+    source = rows[0].get("source", "")
+    major_minor = rows[0].get("maj:min", "")
+    return (
+        source.startswith("/dev/")
+        and major_minor
+        and not Path(source).exists()
+        and not (Path("/sys/dev/block") / major_minor).exists()
+    )
+
+
 def nfs_exports():
     path = Path("/var/lib/nfs/etab")
     raw = path.read_text() if path.exists() else ""
@@ -635,11 +658,13 @@ def plan(action, p):
                 require(
                     action not in ("mount.attach", "mount.open")
                     or str(point) not in mount_targets()
+                    or (action == "mount.open" and stale_block_mount(point))
                     or str(point) in [m for _, m in mounted_rows(target, inv)],
                     'The mount point is already used by another volume',
                 )
                 require(
                     str(point) in [m for _, m in mounted_rows(target, inv)]
+                    or (action == "mount.open" and stale_block_mount(point))
                     or not point.exists()
                     or not any(point.iterdir()),
                     'The mount point directory must be empty',
@@ -755,6 +780,18 @@ def open_filesystem(target, p, user, inv):
     fs = inv[target]["fstype"]
     mode = p.get("mode", "auto")
     points = mounted_rows(target, inv)
+    point = mountpoint(p["point"])
+    occupied = str(point) in mount_targets()
+    if occupied and not points and stale_block_mount(point):
+        try:
+            command(["umount", "--", str(point)])
+        except Rejected as error:
+            raise Rejected(
+                f"A disconnected volume still occupies {point}. Close files using it and retry."
+            ) from error
+        require(not any(point.iterdir()), "The mount point directory must be empty")
+    else:
+        require(not occupied or points, "The mount point is already used by another volume")
 
     def choice(reason):
         return {
@@ -1010,6 +1047,8 @@ def execute_unlocked(action, p, user=None):
             opts += f",uid={owner.pw_uid},gid={owner.pw_gid},fmask=0177,dmask=0077"
         if p.get("readOnly") and inv[target]["fstype"] in ("ext3", "ext4"):
             opts += ",noload"
+        if action == "mount.attach":
+            require(str(point) not in mount_targets(), 'The mount point is already used by another volume')
         escaped = str(point).replace("\\", "\\134").replace(" ", "\\040")
         fstab_change(
             uuid, f'UUID={uuid} {escaped} {inv[target]["fstype"]} {opts} 0 0' if p.get("automount") else None

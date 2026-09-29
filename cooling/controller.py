@@ -7,6 +7,8 @@ import socket
 import subprocess
 import threading
 import time
+import sys
+from hardware import Hardware, normalize, signature, failsafe
 
 CONFIG = Path('/etc/panasms-cooling/config.json')
 STATUS = Path('/run/panasms-cooling/status.json')
@@ -114,13 +116,11 @@ def notify(message):
 
 
 def main():
-    import gpiod
-    from gpiod.line import Direction, Value
-    config = json.loads(CONFIG.read_text())
-    with gpiod.Chip('/dev/gpiochip0') as chip:
-        if chip.get_info().label != 'pinctrl-rp1' or chip.get_line_info(27).name != 'GPIO27':
-            raise RuntimeError('Unrecognized GPIO mapping; refusing control')
-    request = gpiod.request_lines('/dev/gpiochip0', consumer='panasms-cooling', config={27:gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE)})
+    config = normalize(json.loads(CONFIG.read_text()))
+    failsafe()
+    hardware = Hardware(config)
+    hardware_error = None
+    attempted = signature(config)
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
@@ -150,7 +150,7 @@ def main():
                     errors[path] = error
                 disks.append(row)
             with lock:
-                required = [d for d in disks if d['path'] in config['disks']]
+                required = [d for d in disks if not config['disks'] or d['path'] in config['disks']]
                 ready = bool(required) and all(d['state'] in ('active', 'sleeping') for d in required)
                 shared.update(disks=disks, sampled=time.monotonic(), initialized=shared['initialized'] or ready)
                 initialized = shared['initialized']
@@ -173,10 +173,24 @@ def main():
                 last_update = now
                 config_error = False
                 try:
-                    new = json.loads(CONFIG.read_text())
+                    new = normalize(json.loads(CONFIG.read_text()))
                     if new['profile'] not in PROFILES or not 30 <= new['sampleSeconds'] <= 600 or new['disks'] != config['disks']:
                         raise ValueError('invalid config')
-                    config = new
+                    if signature(new) != attempted:
+                        attempted = signature(new)
+                        previous = config
+                        hardware.close()
+                        try:
+                            hardware = Hardware(new)
+                            hardware_error = None
+                        except Exception as error:
+                            hardware_error = str(error)
+                            hardware = Hardware(previous)
+                        duty_value = 0.5
+                        lower_since = None
+                        previous_target = None
+                        kick_until = 0
+                    config = {**new, **hardware.config}
                 except (OSError, ValueError, KeyError, TypeError):
                     config_error = True
                 cpu_profile=config.get('cpuProfile','balanced')
@@ -190,7 +204,7 @@ def main():
                     disks, sampled = shared['disks'], shared['sampled']
                     initialized = shared['initialized']
                 target, reason = control_target(
-                    config['profile'], [d for d in disks if d['path'] in config['disks']],
+                    config['profile'], [d for d in disks if not config['disks'] or d['path'] in config['disks']],
                     system_temperature(), not initialized, now-started,
                     stale=now-sampled > config['sampleSeconds']+60, invalid=config_error)
                 if target < duty_value:
@@ -205,23 +219,19 @@ def main():
                     lower_since = None
                 previous_target = target
                 actual = 1.0 if now < kick_until else duty_value
+                if hardware.mode == 'none':
+                    actual, reason = 0.0, 'disabled'
                 status = {'profile':config['profile'], 'sampleSeconds':config['sampleSeconds'], 'dutyPercent':round(actual*100), 'reason':reason,
                           'disks':disks, 'observedAt':time.time(), 'sampleAgeSeconds':round(now-sampled) if sampled else None,
-                          'controller':'GPIO27 / MOSFET / 40 Hz', 'rpm':None,'cpu':cpu_status}
+                          'controller':hardware.mode, 'rpm':hardware.rpm,'cpu':cpu_status,
+                          'hardware':hardware.config, 'hardwareAttempt':attempted, 'hardwareError':hardware_error}
                 tmp = STATUS.with_suffix('.tmp'); tmp.write_text(json.dumps(status)); os.chmod(tmp,0o644); tmp.replace(STATUS)
                 notify('WATCHDOG=1')
             actual = 1.0 if now < kick_until else duty_value
-            request.set_value(27, Value.ACTIVE if actual else Value.INACTIVE)
-            if actual in (0.0, 1.0):
-                stopped.wait(0.025)
-            else:
-                stopped.wait(0.025*actual)
-                request.set_value(27, Value.INACTIVE)
-                stopped.wait(0.025*(1-actual))
+            hardware.tick(actual, stopped)
     finally:
-        request.set_value(27, Value.ACTIVE)
-        request.release()
+        hardware.close()
 
 
 if __name__ == '__main__':
-    main()
+    failsafe() if "--failsafe" in sys.argv else main()

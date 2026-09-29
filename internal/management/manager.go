@@ -146,6 +146,9 @@ func runHelper(ctx context.Context, mode, user string, body any, executable []st
 	return out, nil
 }
 func Open(path string) (*Manager, error) {
+	if err := database.RequireExistingAfterInitialization(path); err != nil {
+		return nil, err
+	}
 	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate")
 	if e != nil {
 		return nil, e
@@ -167,6 +170,10 @@ func Open(path string) (*Manager, error) {
 		}
 	}
 	if e != nil {
+		db.Close()
+		return nil, e
+	}
+	if e = database.MarkInitialized(path); e != nil {
 		db.Close()
 		return nil, e
 	}

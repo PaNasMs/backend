@@ -22,6 +22,9 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
+	if err := database.RequireExistingAfterInitialization(path); err != nil {
+		return nil, err
+	}
 	db, e := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=FULL&_txlock=immediate&_foreign_keys=on")
 	if e != nil {
 		return nil, e
@@ -29,6 +32,10 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	e = database.Migrate(db, "core", migrations)
 	if e != nil {
+		db.Close()
+		return nil, e
+	}
+	if e = database.MarkInitialized(path); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -167,8 +174,10 @@ func alertSeverity(id, message string) string {
 	case strings.HasPrefix(id, "device:") && strings.Contains(message, "check storage."):
 		return "warning"
 	case strings.HasPrefix(message, "SMART: disk failure:"):
-		return "error"
-	case strings.HasPrefix(id, "smart:"), strings.HasPrefix(id, "heat:"), id == "cpu-hot", id == "system-full", id == "cooling-stale":
+		return "critical"
+	case id == "cpu-hot", id == "system-full":
+		return "critical"
+	case strings.HasPrefix(id, "smart:"), strings.HasPrefix(id, "heat:"), id == "cooling-stale":
 		return "warning"
 	default:
 		return "info"

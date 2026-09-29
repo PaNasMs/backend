@@ -147,8 +147,8 @@ func main() {
 				http.Error(w, "invalid cooling settings", 400)
 				return
 			}
-			if cooling.Save(cfg) != nil {
-				http.Error(w, "cooling configuration unavailable", 503)
+			if err := cooling.Save(cfg); err != nil {
+				http.Error(w, err.Error(), 503)
 				return
 			}
 		} else if r.Method != "GET" {

@@ -4,6 +4,7 @@ import sys
 import pwd
 import grp
 import os
+import errno
 from common import *
 import storage
 import accounts
@@ -20,6 +21,16 @@ import job_recovery
 
 
 mutation_started = False
+
+
+def operation_error(error):
+    if error.errno in (errno.EIO, errno.ENODEV, errno.ENXIO, errno.ESTALE):
+        return 'The storage device was disconnected or failed during the operation. Reconnect it, check the file system, then retry.'
+    if error.errno in (errno.ENOSPC, errno.EDQUOT):
+        return 'The destination is full. Free space or choose another destination, then retry.'
+    if error.errno == errno.EROFS:
+        return 'The destination is read-only. Check the file system before retrying.'
+    return 'Could not process the operation. Check the object and system journal.'
 
 def dispatch(mode, user, request):
     global mutation_started
@@ -122,6 +133,8 @@ if __name__ == "__main__":
         result = {
             "error": 'Operation timed out. Check the actual state before retrying.'
         }
+    except OSError as error:
+        result = {"error": operation_error(error)}
     except Exception:
         result = {
             "error": 'Could not process the operation. Check parameters, object availability and the system journal.'

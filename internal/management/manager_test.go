@@ -1,9 +1,36 @@
 package management
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestMissingInitializedJobJournalStopsAgent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	m, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(m.queue)
+	<-m.finished
+	if err = m.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(path + ".initialized"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Open(path); err == nil || !strings.Contains(err.Error(), "restore the database") {
+		t.Fatalf("missing job journal was not rejected: %v", err)
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("empty job journal was created: %v", err)
+	}
+}
 
 func TestInterruptedOperationsAreNotReplayed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")

@@ -12,9 +12,9 @@ func userRoute(id auth.Identity, r *http.Request) bool {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/")
 	switch path {
-	case "external/grants", "external/connections", "session", "logout", "preferences", "wallpaper", "wallpaper/image", "avatar", "avatar/image", "profile", "sessions", "security-history", "files/content":
+	case "notifications", "notification-profile", "notification-telegram-link", "notification-telegram-test", "notification-push", "notification-test", "notification-retry", "external/grants", "external/connections", "session", "logout", "preferences", "wallpaper", "wallpaper/image", "avatar", "avatar/image", "profile", "sessions", "security-history", "files/content":
 		return true
-	case "events", "metrics", "metrics/history", "storage", "cooling", "notifications":
+	case "events", "metrics", "metrics/history", "storage", "cooling":
 		return r.Method == "GET"
 	case "manage":
 		if r.Method == "POST" {

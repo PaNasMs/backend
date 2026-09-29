@@ -274,6 +274,13 @@ class StorageSafety(unittest.TestCase):
         with self.assertRaises(Rejected):
             storage.device("/dev/missing", self.inv)
 
+    def test_storage_failures_have_actionable_messages(self):
+        import errno
+        import main
+
+        self.assertIn("Reconnect", main.operation_error(OSError(errno.EIO, "I/O error")))
+        self.assertIn("full", main.operation_error(OSError(errno.ENOSPC, "No space")))
+
     def test_service_core_protected(self):
         for unit in ("panasms-core.service", "ssh.service", "../../root.service", "dbus.service"):
             with self.assertRaises(Rejected):

@@ -867,8 +867,317 @@ paths:
         '200': {description: Asset with its native content type and no-store policy}
         '404': {description: Module disabled or asset not listed in its signed manifest}
 
+  /api/v1/notification-settings:
+    get:
+      summary: Get notification settings
+      responses:
+        "200":
+          description: Notification state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationSettings"}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+    put:
+      summary: Put notification settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationConfig"}
+      responses:
+        "200":
+          description: Notification state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationSettings"}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+  /api/v1/notification-profile:
+    get:
+      summary: Get notification profile
+      responses:
+        "200":
+          description: Notification state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationProfile"}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+    put:
+      summary: Put notification profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationPreferences"}
+      responses:
+        "200":
+          description: Notification state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationProfile"}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+  /api/v1/notification-push:
+    post:
+      summary: Post notification push
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PushSubscription"}
+      responses:
+        "200":
+          description: Notification state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NotificationPush"}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+    delete:
+      summary: Delete notification push
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationDeviceID"}
+      responses:
+        "204": {description: Subscription removed}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+  /api/v1/notification-smtp-test:
+    post:
+      summary: Send a test email using saved SMTP settings (administrator only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: {type: string, format: email}
+      responses:
+        '204': {description: SMTP server accepted the message}
+        '400': {description: Invalid recipient}
+        '401': {description: Sign-in required}
+        '403': {description: Administrator permissions required}
+        '409': {description: SMTP disabled}
+        '429': {description: Too many tests}
+        '502': {description: SMTP delivery failed}
+        '503': {description: Settings unavailable}
+  /api/v1/notification-telegram-test:
+    post:
+      summary: Send a test to the signed-in user's linked Telegram account
+      responses:
+        '204': {description: Telegram accepted the message}
+        '401': {description: Sign-in required}
+        '409': {description: Telegram not linked or bot disabled}
+        '429': {description: Too many tests}
+        '502': {description: Telegram delivery failed}
+  /api/v1/notification-telegram-link:
+    get:
+      summary: Read own Telegram link and pending confirmation
+      responses:
+        '200': {description: Link status and pending display name; no chat ID exposed}
+    post:
+      summary: Start pairing or confirm the pending Telegram identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [start, confirm]}
+      responses:
+        '200': {description: One-time code or confirmed link status}
+        '409': {description: Code expired or bot disabled}
+    delete:
+      summary: Remove own Telegram link and pending pairing
+      responses:
+        '204': {description: Link removed and pending deliveries cancelled}
+  /api/v1/notification-telegram-relay:
+    post:
+      summary: Submit a Telegram identity from a trusted bot relay
+      description: Requires HMAC-SHA256 of the domain separator and raw body using the configured bot token, in X-PaNasMs-Telegram-Signature. The timestamp must be within 60 seconds. Records a candidate only; the signed-in NAS user must confirm it. Requires the standard Origin and X-PaNasMs-Request headers.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, chatId, name, timestamp]
+              properties:
+                code: {type: string}
+                chatId: {type: string}
+                name: {type: string}
+                timestamp: {type: integer}
+      responses:
+        '204': {description: Candidate recorded}
+        '403': {description: Invalid signature or disabled bot}
+        '409': {description: Code expired or already claimed by another account}
+  /api/v1/notification-test:
+    post:
+      summary: Post notification test
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NotificationTestRequest"}
+      responses:
+        "202": {description: Test delivery queued}
+        "400": {description: Invalid request}
+        "401": {description: Sign-in required}
+        "403": {description: Access denied}
+        "503": {description: Notification storage unavailable}
+  /api/v1/notification-retry:
+    post:
+      summary: Retry an owned failed notification delivery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: {type: integer}
+      responses:
+        '204': {description: Delivery requeued}
+        '401': {description: Sign-in required}
+        '409': {description: Delivery cannot be retried}
+        '429': {description: Too many requests}
 components:
   schemas:
+    NotificationConfig:
+      type: object
+      additionalProperties: false
+      required: [smtp, telegramEnabled, contact]
+      properties:
+        smtp:
+          type: object
+          additionalProperties: false
+          required: [host, port, security, username, from, enabled]
+          properties:
+            host: {type: string}
+            port: {type: integer, minimum: 1, maximum: 65535}
+            security: {type: string, enum: [tls, starttls]}
+            username: {type: string}
+            password: {type: string, writeOnly: true}
+            from: {type: string}
+            enabled: {type: boolean}
+        telegramToken: {type: string, writeOnly: true}
+        telegramEnabled: {type: boolean}
+        contact: {type: string}
+        publicKey: {type: string, readOnly: true}
+    NotificationSettings:
+      type: object
+      required: [config, passwordConfigured, tokenConfigured]
+      properties:
+        config: {$ref: '#/components/schemas/NotificationConfig'}
+        passwordConfigured: {type: boolean}
+        tokenConfigured: {type: boolean}
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      required: [enabled, email, chatId, routes]
+      properties:
+        enabled: {type: boolean}
+        email: {type: string}
+        chatId: {type: string}
+        routes:
+          type: object
+          additionalProperties: false
+          required: [info, warning, error, critical]
+          properties:
+            info: {type: array, uniqueItems: true, maxItems: 3, items: {type: string, enum: [push, email, telegram]}}
+            warning: {type: array, uniqueItems: true, maxItems: 3, items: {type: string, enum: [push, email, telegram]}}
+            error: {type: array, uniqueItems: true, maxItems: 3, items: {type: string, enum: [push, email, telegram]}}
+            critical: {type: array, uniqueItems: true, maxItems: 3, items: {type: string, enum: [push, email, telegram]}}
+    NotificationChannel:
+      type: string
+      enum: [panel, email, telegram, push]
+    NotificationProfile:
+      type: object
+      required: [preferences, publicKey, devices, available, history]
+      properties:
+        preferences: {$ref: '#/components/schemas/NotificationPreferences'}
+        publicKey: {type: string}
+        devices: {type: array, items: {type: string}}
+        available:
+          type: object
+          required: [email, telegram, push]
+          properties:
+            email: {type: boolean}
+            telegram: {type: boolean}
+            push: {type: boolean}
+        history:
+          type: array
+          items: {$ref: '#/components/schemas/NotificationDelivery'}
+    NotificationDelivery:
+      type: object
+      required: [id, channel, event, attempts, status, created]
+      properties:
+        id: {type: integer}
+        channel: {$ref: '#/components/schemas/NotificationChannel'}
+        event:
+          type: object
+          required: [id, revision, severity, kind, object, route, resolved]
+          properties:
+            id: {type: string}
+            revision: {type: string}
+            severity: {type: string}
+            kind: {type: string}
+            object: {type: string}
+            route: {type: string}
+            resolved: {type: boolean}
+        attempts: {type: integer}
+        status: {type: string, enum: [pending, sent, failed, cancelled]}
+        error: {type: string}
+        created: {type: integer}
+    PushSubscription:
+      type: object
+      additionalProperties: false
+      required: [endpoint, keys]
+      properties:
+        endpoint: {type: string}
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: {type: string}
+            auth: {type: string}
+    NotificationPush:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+    NotificationDeviceID:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+    NotificationTestRequest:
+      type: object
+      required: [channel]
+      properties:
+        channel: {type: string, enum: [email, telegram, push]}
     ExternalGoogleSettings:
       type: object
       required:
@@ -1437,8 +1746,22 @@ components:
       - profile
       - sampleSeconds
       - cpuProfile
+      - hardwareMode
+      - controlGPIO
+      - tachGPIO
       additionalProperties: false
       properties:
+        hardwareMode:
+          type: string
+          enum: [none, external-pwm, internal-pwm]
+        controlGPIO:
+          type: integer
+          minimum: 2
+          maximum: 27
+        tachGPIO:
+          type: [integer, 'null']
+          minimum: 2
+          maximum: 27
         profile:
           type: string
           enum:
@@ -1475,6 +1798,12 @@ components:
           - observedAt
           - profile
           properties:
+            hardwareError:
+              type: [string, 'null']
+            rpm:
+              type: [integer, 'null']
+            controller:
+              type: string
             profile:
               type: string
             dutyPercent:
@@ -3055,7 +3384,7 @@ components:
       properties:
         id: {type: string}
         message: {type: string}
-        severity: {type: string, enum: [info, success, warning, error]}
+        severity: {type: string, enum: [info, success, warning, error, critical]}
         active: {type: boolean}
         created: {type: string}
         updated: {type: string}

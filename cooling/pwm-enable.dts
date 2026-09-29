@@ -1,0 +1,9 @@
+/dts-v1/;
+/plugin/;
+/ {
+ compatible = "brcm,bcm2712";
+ fragment@0 {
+  target = <&pwm>;
+  __overlay__ { status = "okay"; };
+ };
+};

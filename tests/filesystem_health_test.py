@@ -1,6 +1,7 @@
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "modules/files/backend"))
 import sys, unittest
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -59,6 +60,40 @@ class RecoveryTest(unittest.TestCase):
         self.mocks[8].return_value = (True, "")
         self.assertTrue(self.run_open()["repaired"])
         self.mocks[5].assert_not_called()
+
+    def test_stale_mount_is_detached_before_repair(self):
+        self.p["mode"] = "repair-only"
+        self.mocks[8].return_value = (True, "")
+        events = []
+        self.mocks[4].side_effect = lambda args: events.append(args[0])
+        self.mocks[8].side_effect = lambda *a, **kw: (events.append("repair") or (True, ""))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.p["point"] = tmp
+            with (
+                patch.object(storage, "mount_targets", return_value={tmp}),
+                patch.object(storage, "stale_block_mount", return_value=True),
+                patch.object(storage, "mountpoint", return_value=Path(tmp)),
+            ):
+                self.assertTrue(self.run_open()["repaired"])
+        self.assertEqual(events, ["umount", "repair"])
+
+    def test_stale_mount_detection_requires_missing_device_and_sysfs(self):
+        from subprocess import CompletedProcess
+        payload = '{"filesystems":[{"target":"/mnt/test","source":"/dev/panasms-absent1","maj:min":"999:999"}]}'
+        with patch.object(storage.subprocess, "run", return_value=CompletedProcess([], 0, payload, "")):
+            self.assertTrue(storage.stale_block_mount("/mnt/test"))
+        with patch.object(storage.subprocess, "run", return_value=CompletedProcess([], 1, "", "")):
+            self.assertFalse(storage.stale_block_mount("/mnt/test"))
+
+    def test_other_live_volume_is_never_detached(self):
+        with (
+            patch.object(storage, "mount_targets", return_value={"/mnt/test"}),
+            patch.object(storage, "stale_block_mount", return_value=False),
+        ):
+            with self.assertRaisesRegex(storage.Rejected, "another volume"):
+                self.run_open()
+        self.mocks[4].assert_not_called()
+        self.mocks[8].assert_not_called()
 
     def test_failed_repair_does_not_mount(self):
         self.p["mode"] = "repair"

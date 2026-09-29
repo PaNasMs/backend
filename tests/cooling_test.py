@@ -1,5 +1,7 @@
 from pathlib import Path
 import runpy
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cooling"))
 import subprocess
 import tempfile
 import unittest
@@ -80,3 +82,42 @@ class CoolingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoolingHardwareTest(unittest.TestCase):
+    def test_legacy_and_four_wire_defaults(self):
+        import hardware
+        legacy = hardware.normalize({})
+        self.assertEqual(hardware.signature(legacy), {'hardwareMode':'external-pwm','controlGPIO':27,'tachGPIO':None})
+        new = hardware.normalize({'hardwareMode':'internal-pwm'})
+        self.assertEqual((new['controlGPIO'], new['tachGPIO']), (18,24))
+        hardware.validate(new)
+        for pin in [2,14,24,27]:
+            with self.assertRaises(ValueError): hardware.validate({**new,'controlGPIO':pin})
+        with self.assertRaises(ValueError): hardware.validate({**new,'tachGPIO':18})
+
+    def test_disabled_never_claims_gpio(self):
+        import hardware
+        with patch.object(hardware, 'gpio_chip', side_effect=AssertionError('GPIO accessed')):
+            driver = hardware.Hardware(hardware.normalize({'hardwareMode':'none'}))
+            driver.close()
+            self.assertIsNone(driver.request)
+            self.assertIsNone(driver.rpm)
+
+    def test_failsafe_uses_active_pins_not_changed_configuration(self):
+        import hardware,json
+        with tempfile.TemporaryDirectory() as tmp:
+            marker=Path(tmp)/'hardware.json'
+            marker.write_text(json.dumps({'hardwareMode':'external-pwm','controlGPIO':22,'tachGPIO':None}))
+            with patch.object(hardware,'MARKER',marker), patch.object(hardware.subprocess,'run') as run:
+                hardware.failsafe()
+                self.assertEqual(run.call_args.args[0],['pinctrl','set','22','op','dh'])
+                self.assertFalse(marker.exists())
+
+    def test_tach_counts_cycles_not_both_transitions(self):
+        import hardware
+        from types import SimpleNamespace
+        edges=[SimpleNamespace(event_type=SimpleNamespace(name=name)) for name in
+               ['RISING_EDGE','FALLING_EDGE','RISING_EDGE','FALLING_EDGE']]
+        self.assertEqual(hardware.tach_pulses(edges),2)
+        self.assertEqual(hardware.tach_pulses([]),0)

@@ -8,7 +8,7 @@ Server messages: `{ "version": 1, "type": "...", "data": ... }`.
 - `resync`: reread HTTP snapshots after opening/reopening the connection.
 - `storage.changed`: invalidate storage snapshot and read `/api/v1/storage`.
 - `metrics`: data matches the [OpenAPI](openapi.yaml) Metrics schema.
-- `cooling`: current CoolingState, including applied profile and duty (not RPM).
+- `cooling`: current CoolingState, including applied profile, commanded duty, hardware configuration and optional measured RPM.
 - `cooling.unavailable`: mark the last cooling snapshot unavailable.
 - `metrics.unavailable`: invalidate the metric snapshot and display its failure.
 - `notifications.changed`: reread persisted alerts and device event history; initial snapshots do not trigger toasts.

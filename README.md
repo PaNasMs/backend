@@ -19,7 +19,12 @@ system-management adapters. The deployed target is Raspberry Pi OS ARM64.
   have their own repositories and signed packages; their code is not installed
   as part of the core package.
 - **Cooling** has an independent package and service, so removing the panel does
-  not stop the disk cooling controller.
+  not stop the disk cooling controller. Fresh cooling configurations default to no
+  disk-bay GPIO control. Advanced disk settings select external power PWM (two-wire,
+  GPIO27 by default) or built-in fan PWM (four-wire, GPIO18/25kHz and GPIO24 tachometer).
+  GPIO hardware support currently targets Raspberry Pi5; pin numbers are BCM.
+  Mode changes validate ownership and wait for controller acknowledgment, restoring
+  the previous configuration on failure. CPU cooling remains independent.
 
 The implementation uses `net/http`, chi, coder/websocket, `database/sql` with
 SQLite, PAM through cgo, and systemd. SQLite schema initialization and migrations

@@ -1,0 +1,4 @@
+name: panasms-telegram-link
+version: 1.0.0
+description: "Link private Telegram chats to PaNasMs notification profiles without involving the language model."
+author: PaNasMs

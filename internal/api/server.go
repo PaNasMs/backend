@@ -26,6 +26,7 @@ import (
 )
 
 type Server struct {
+	deliveryMu            sync.Mutex
 	external              *externalFlows
 	lookupIdentity        func(string, map[string]bool) (auth.Identity, error)
 	ModuleClient          func(string) (*http.Client, error)
@@ -53,6 +54,7 @@ func New(db *store.Store, socket, static string, allowed map[string]bool, secure
 	return &Server{external: newExternalFlows(), lookupIdentity: auth.Lookup, ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
 }
 func (s *Server) Run(ctx context.Context) {
+	go s.runDelivery(ctx)
 	collector := &system.Collector{}
 	collect := func() {
 		m, e := collector.Read()
@@ -162,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 		allowHealthProbe(w, r)
 		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.7", "product": "PaNasMs"})
 	})
+	r.Post("/api/v1/notification-telegram-relay", s.telegramLinkRelay)
 	r.Post("/api/v1/login", s.login)
 	r.Get("/api/v1/external/providers", s.externalProviders)
 	r.Post("/api/v1/external/google/start", s.externalStart)
@@ -182,6 +185,19 @@ func (s *Server) Handler() http.Handler {
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, id)))
 			})
 		})
+		r.Get("/api/v1/notification-settings", s.deliverySettings)
+		r.Put("/api/v1/notification-settings", s.deliverySettings)
+		r.Get("/api/v1/notification-profile", s.deliveryProfile)
+		r.Put("/api/v1/notification-profile", s.deliveryProfile)
+		r.Post("/api/v1/notification-push", s.deliveryPush)
+		r.Delete("/api/v1/notification-push", s.deliveryPush)
+		r.Post("/api/v1/notification-test", s.deliveryTest)
+		r.Post("/api/v1/notification-smtp-test", s.smtpTest)
+		r.Post("/api/v1/notification-telegram-test", s.telegramTest)
+		r.Get("/api/v1/notification-telegram-link", s.telegramLink)
+		r.Post("/api/v1/notification-telegram-link", s.telegramLink)
+		r.Delete("/api/v1/notification-telegram-link", s.telegramLink)
+		r.Post("/api/v1/notification-retry", s.deliveryRetry)
 		r.Get("/api/v1/external/settings/google", s.externalSettings)
 		r.Put("/api/v1/external/settings/google", s.externalSettings)
 		r.Get("/api/v1/external/grants", s.externalGrants)
@@ -216,11 +232,7 @@ func (s *Server) Handler() http.Handler {
 			jsonResponse(w, 200, v)
 		})
 		r.Get("/api/v1/notifications", func(w http.ResponseWriter, r *http.Request) {
-			if r.Context().Value(identityKey{}).(auth.Identity).Role != "admin" {
-				jsonResponse(w, 200, []any{})
-				return
-			}
-			v, e := s.notifications(r.Context(), r.Context().Value(identityKey{}).(auth.Identity).Username)
+			v, e := s.recipientAlerts(r.Context(), r.Context().Value(identityKey{}).(auth.Identity))
 			if e != nil {
 				fail(w, 503, "Notifications unavailable")
 				return
@@ -228,11 +240,7 @@ func (s *Server) Handler() http.Handler {
 			jsonResponse(w, 200, v)
 		})
 		r.Delete("/api/v1/notifications", func(w http.ResponseWriter, r *http.Request) {
-			if r.Context().Value(identityKey{}).(auth.Identity).Role != "admin" {
-				fail(w, 403, "Administrator permissions required")
-				return
-			}
-			alerts, e := s.notifications(r.Context(), r.Context().Value(identityKey{}).(auth.Identity).Username)
+			alerts, e := s.recipientAlerts(r.Context(), r.Context().Value(identityKey{}).(auth.Identity))
 			if e != nil {
 				fail(w, 503, "Could not read notifications")
 				return
@@ -563,7 +571,11 @@ func (s *Server) cooling(w http.ResponseWriter, r *http.Request) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		fail(w, response.StatusCode, "Could not read or apply cooling settings")
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+		if strings.TrimSpace(string(message)) == "" {
+			message = []byte("Could not read or apply cooling settings")
+		}
+		fail(w, response.StatusCode, strings.TrimSpace(string(message)))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

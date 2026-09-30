@@ -183,7 +183,7 @@ class PackagingTest(unittest.TestCase):
             )
             wifi = root / "wifi.py"
             wifi.write_text("")
-            script = script.replace("/usr/lib/panasms/management/wifi.py", str(wifi)).replace("/usr/lib/panasms/management/sharing.py", str(wifi)).replace("/usr/lib/panasms/sharing-install.py", str(wifi))
+            script = script.replace("/usr/lib/panasms/management/storage_reshape.py", str(wifi)).replace("/usr/lib/panasms/management/wifi.py", str(wifi)).replace("/usr/lib/panasms/management/sharing.py", str(wifi)).replace("/usr/lib/panasms/sharing-install.py", str(wifi))
             path = root / "prerm"
             path.write_text(script)
             env = dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"])

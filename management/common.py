@@ -60,6 +60,16 @@ def command(args, *, data=None, accepted=(0,), timeout=120):
         timeout=timeout,
         env={**os.environ, "LC_ALL": "C", "DEBIAN_FRONTEND": "noninteractive"},
     )
+    if result.returncode not in accepted:
+        failures = {
+            'No space left on device': 'The destination is full. Free space or choose another destination, then retry.',
+            'Disk quota exceeded': 'The destination is full. Free space or choose another destination, then retry.',
+            'Read-only file system': 'The destination is read-only. Check the file system before retrying.',
+            'Input/output error': 'The storage device was disconnected or failed during the operation. Reconnect it, check the file system, then retry.',
+        }
+        for signature, message in failures.items():
+            if signature in result.stderr:
+                raise Rejected(message)
     require(
         result.returncode in accepted,
         f"Command {Path(args[0]).name} exited with code {result.returncode}. Check the object's state and system journal.",

@@ -3087,6 +3087,9 @@ components:
     SmartSchedule:
       type: object
       properties:
+        nextScheduledAt:
+          type: [string, "null"]
+          description: Next configured calendar slot in NAS local time, including UTC offset. Runtime conditions may skip the test.
         test:
           type: string
         weekday:
@@ -3168,6 +3171,9 @@ components:
             properties:
               point:
                 type: string
+              mountPolicy:
+                type: string
+                enum: [manual, boot, on-demand]
               automount:
                 type: boolean
               readOnly:
@@ -3319,6 +3325,38 @@ components:
     ManagementViews:
       type: object
       properties:
+        storage-luks:
+          type: object
+          properties:
+            target:
+              type: string
+            uuid:
+              type: string
+            slots:
+              type: array
+              items:
+                type: integer
+            automatic:
+              type: boolean
+            managedSlot:
+              type: [integer, "null"]
+          required: [target, uuid, slots, automatic, managedSlot]
+        storage-snapshots:
+          type: object
+          properties:
+            target:
+              type: string
+            point:
+              type: string
+            snapshots:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                required: [name]
+          required: [target, point, snapshots]
         job:
           $ref: '#/components/schemas/ManagementJob'
         jobs:

@@ -22,6 +22,9 @@ if p.exists():
         if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]:
             raise SystemExit('PaNasMs has active operations. Wait for completion or cancel queued tasks before package changes.')
 CHECK
+ if [ "$1" = remove ]; then
+  python3 /usr/lib/panasms/management/storage_reshape.py --check-removal
+ fi
  systemctl stop 'panasms-fs-check@*.service' || true
  systemctl stop panasms-core.service panasms-agent.service
  systemctl stop panasms-sharing.timer panasms-sharing.service || true
@@ -37,7 +40,7 @@ CHECK
   python3 /usr/lib/panasms/management/wifi.py --remove
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' panasms-network-recovery.service || true
-  systemctl disable panasms-network-recovery.service || true
+  systemctl disable panasms-network-recovery.service panasms-raid-recovery.service || true
   systemctl stop 'panasms-module-*.service' || true
   systemctl disable 'panasms-module-*.service' || true
   systemctl stop 'panasms-smart-*.timer' || true

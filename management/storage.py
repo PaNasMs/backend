@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shutil
 import disk_sleep
+import storage_reshape
 import filesystem_health
 import datetime
 from common import *
@@ -138,8 +139,14 @@ def unused(dev, inv, allow_children=False):
         not any(m for p in paths for m in inv[p].get("mountpoints", [])),
         'Unmount file systems first',
     )
-    holders = list((Path("/sys/class/block") / inv[dev]["kname"] / "holders").glob("*"))
-    require(not holders, 'The device is used by another storage layer')
+    for path in sorted(paths):
+        require(path == dev or inv[path]["type"] in ("disk", "part"),
+                'The drive is used by an array or another storage layer')
+        try:
+            holders = sorted(p.name for p in (Path("/sys/class/block") / inv[path]["kname"] / "holders").iterdir())
+        except OSError:
+            raise Rejected('Could not verify storage dependencies. No changes were made.')
+        require(not holders, "Device " + path + ' is used by: ' + ", ".join(holders))
 
 
 def eject_check(target, inv):
@@ -170,6 +177,22 @@ def mountpoint(value):
 
 def mounted_rows(dev, inv):
     return [(p, m) for p in descendants(dev, inv) for m in inv[p].get("mountpoints", []) if m]
+
+
+def mount_policy(params):
+    policy = params.get("mountPolicy", "boot" if params.get("automount") else "manual")
+    require(policy in ("manual", "boot", "on-demand"), 'Unknown automatic mount policy')
+    return policy
+
+
+def mount_options(params):
+    policy = mount_policy(params)
+    options = ("ro" if params.get("readOnly") else "rw") + ",noatime,nofail,x-systemd.device-timeout=30s"
+    if policy == "manual":
+        options += ",noauto"
+    elif policy == "on-demand":
+        options += ",x-systemd.automount,x-systemd.idle-timeout=10min"
+    return options
 
 
 def mount_targets():
@@ -261,6 +284,10 @@ def mount_blockers(target, inv):
             problems.append(
                 f"Volume “{point}” is busy: {processes}. Close the files or stop the relevant service; if this is a terminal, leave the volume's directory."
             )
+        homes = sorted(account.pw_name + ': ' + account.pw_dir for account in pwd.getpwall()
+                       if account.pw_dir == point or account.pw_dir.startswith(point + '/'))
+        if homes:
+            problems.append('User home folders on this volume: ' + ', '.join(homes) + '. Move these homes before unmounting the volume.')
         nested = sorted(p for p in targets if p.startswith(point + "/"))
         if nested:
             problems.append(
@@ -280,6 +307,26 @@ def mount_blockers(target, inv):
 
 def table(dev):
     return json_command(["sfdisk", "--json", dev])["partitiontable"]
+
+
+def partition_layout(dev, inv):
+    try:
+        probe = json_command(["wipefs", "--json", "--no-act", "--output", "TYPE,OFFSET", "--", dev])
+        require(isinstance(probe, dict), 'Could not read the partition table. No changes were made.')
+        signatures = probe["signatures"]
+        require(isinstance(signatures, list) and all(isinstance(s, dict) for s in signatures), 'Could not read the partition table. No changes were made.')
+        if not signatures:
+            require(descendants(dev, inv) == {dev},
+                    'Partition metadata is inconsistent. No changes were made.')
+            return None
+        require(all(s.get("type") in ("gpt", "PMBR", "dos") for s in signatures),
+                'Existing signatures prevent creating a partition. Prepare the disk explicitly first.')
+        layout = table(dev)
+        require(isinstance(layout, dict) and layout.get("label") in ("gpt", "dos"),
+                'Unsupported partition table. No changes were made.')
+        return layout
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        raise Rejected('Could not read the partition table. No changes were made.')
 
 
 def reshape_control_state(md, action):
@@ -311,7 +358,7 @@ def reshape_control_state(md, action):
             'Reshape is already running or the array is busy with another operation',
         )
         require(
-            state["degraded"] == "0", 'Recover missing or failed array members first'
+            state["degraded"] == "0" or storage_reshape.safe_to_resume(md), 'Recover missing or failed array members first'
         )
         require(
             state["array_state"] not in ("inactive", "clear", "suspended"),
@@ -330,7 +377,9 @@ def control_reshape(md, target, action):
         return {"message": 'Reshape paused. Position saved.'}
     if (md / "array_state").read_text().strip() in ("read-auto", "readonly"):
         command(["mdadm", "--readwrite", target])
-    if (md / "sync_action").read_text().strip() == "frozen":
+    import storage_reshape
+    recovered = storage_reshape.resume(target, md)
+    if not recovered and (md / "sync_action").read_text().strip() == "frozen":
         (md / "sync_action").write_text("reshape")
     if (md / "sync_action").read_text().strip() != "reshape" and (
         md / "reshape_position"
@@ -404,6 +453,7 @@ def plan(action, p):
     paths = []
     details = []
     growth = None
+    partition_state = None
     if action == "raid.create":
         raid_name(p.get("name"))
         require(p.get("level") in ("0", "1", "5", "6", "10"), 'RAID0/1/5/6/10 are supported')
@@ -550,6 +600,7 @@ def plan(action, p):
                         'Select a disk or array',
                     )
                     require(not inv[target].get("fstype"), 'The device contains a file system')
+                    partition_state = partition_layout(target, inv)
                     start = integer(p.get("startMiB"), 1, inv[target]["size"] // 1048576)
                     end = integer(p.get("endMiB"), start + 1, inv[target]["size"] // 1048576)
                     for k in descendants(target, inv) - {target}:
@@ -561,6 +612,8 @@ def plan(action, p):
                             'The partition overlaps an existing partition',
                         )
                     details = [target, f'New partition: {start}–{end} MiB']
+                    if partition_state is None:
+                        details.append('A new GPT partition table will be created on the empty device.')
                 else:
                     require(inv[target]["type"] == "part", 'Select a partition')
                     unused(target, inv)
@@ -670,7 +723,12 @@ def plan(action, p):
                     'The mount point directory must be empty',
                 )
                 require(inv[target].get("uuid"), 'A UUID is required for mounting')
-                details = [target, str(point), 'At startup: ' + str(bool(p.get("automount")))]
+                policy = mount_policy(p)
+                details = [target, str(point), {
+                    "manual": "Manual mounting; remember this mount point without mounting at startup.",
+                    "boot": "Mount at startup; a missing device will not block boot.",
+                    "on-demand": "Mount on first access after startup; unmount after 10 idle minutes when not busy.",
+                }[policy], "Changes to automatic mounting take effect at the next startup. The current mount is unchanged."]
             elif action == "mount.detach":
                 require(bool(mounted_rows(target, inv)), 'Device is not mounted')
                 mount_blockers(target, inv)
@@ -731,6 +789,8 @@ def plan(action, p):
         state["reshape_control"] = reshape_control_state(md, action)
     if growth is not None:
         state["raid_growth"] = growth
+    if action == "partition.create":
+        state["partition_table"] = partition_state
     state["fstab"] = Path("/etc/fstab").read_text()
     return {
         "target": target,
@@ -895,6 +955,10 @@ def execute_unlocked(action, p, user=None):
             command(["mdadm", "--zero-superblock", dev])
         conf = Path("/etc/mdadm/mdadm.conf")
         atomic(conf, without_array(conf.read_text(), uuid), 0o644)
+        import storage_reshape
+        record = storage_reshape.backup_path(uuid).with_suffix('.json')
+        if record.exists():
+            record.rename(record.with_suffix('.retired'))
         for dev in descendants(target, inv):
             if inv[dev].get("uuid"):
                 fstab_change(inv[dev]["uuid"])
@@ -958,15 +1022,22 @@ def execute_unlocked(action, p, user=None):
     elif action == "raid.replace":
         new = device(p["replacement"], inv)
         old = device(p["member"], inv)
-        command(["mdadm", "--manage", target, "--add", new])
-        command(["mdadm", "--manage", target, "--replace", old, "--with", new])
+        md = Path('/sys/class/block') / inv[target]['kname'] / 'md'
+        state = (md / ('dev-' + inv[old]['kname']) / 'state').read_text().strip().split(',')
+        if 'faulty' in state:
+            command(["mdadm", "--manage", target, "--remove", old])
+            command(["mdadm", "--manage", target, "--add", new])
+        else:
+            command(["mdadm", "--manage", target, "--add", new])
+            command(["mdadm", "--manage", target, "--replace", old, "--with", new])
     elif action in ("raid.check", "raid.check-stop"):
         (Path("/sys/class/block") / inv[target]["kname"] / "md/sync_action").write_text(
             "check" if action == "raid.check" else "idle"
         )
     elif action == "partition.create":
-        check = subprocess.run(["sfdisk", "--json", target], capture_output=True)
-        if check.returncode:
+        protected(target, inv)
+        unused(target, inv, True)
+        if partition_layout(target, inv) is None:
             command(["parted", "--script", target, "mklabel", "gpt"])
         command(
             [
@@ -1040,7 +1111,7 @@ def execute_unlocked(action, p, user=None):
                 directory.mkdir()
                 directory.chmod(0o755)
         uuid = inv[target]["uuid"]
-        opts = ("ro" if p.get("readOnly") else "rw") + ",noatime,nofail,x-systemd.device-timeout=30s"
+        opts = mount_options(p)
         if inv[target]["fstype"] in ("vfat", "exfat", "ntfs", "ntfs3"):
             require(bool(user), 'No user specified for mounting the volume')
             owner = pwd.getpwnam(user)
@@ -1051,7 +1122,7 @@ def execute_unlocked(action, p, user=None):
             require(str(point) not in mount_targets(), 'The mount point is already used by another volume')
         escaped = str(point).replace("\\", "\\134").replace(" ", "\\040")
         fstab_change(
-            uuid, f'UUID={uuid} {escaped} {inv[target]["fstype"]} {opts} 0 0' if p.get("automount") else None
+            uuid, f'UUID={uuid} {escaped} {inv[target]["fstype"]} {opts} 0 0'
         )
         if action == "mount.attach":
             command(["mount", "-o", opts, "--", target, str(point)])
@@ -1059,6 +1130,8 @@ def execute_unlocked(action, p, user=None):
         for _, point in sorted(mounted_rows(target, inv), key=lambda row: len(row[1]), reverse=True):
             command(["umount", "--", point])
     elif action == "disk.prepare":
+        protected(target, inv)
+        unused(target, inv, True)
         command(["wipefs", "--all", "--", target])
         for dev in descendants(target, inv):
             if inv[dev].get("uuid"):
@@ -1189,7 +1262,8 @@ def smart_schedules(serial, root=Path("/etc/systemd/system")):
             match = re.search(r"^# PaNasMs schedule: (.+)$", service.read_text(), re.M)
             if match:
                 result[test] = json.loads(match[1])
-    return list(result.values())
+    from smart_schedule import next_scheduled
+    return [{**schedule, "nextScheduledAt": next_scheduled(schedule)} for schedule in result.values()]
 
 
 def media_info(row, sysroot=Path("/sys/class/block")):
@@ -1283,6 +1357,7 @@ def query(view, target):
                 {
                     "point": re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), entry[1]),
                     "automount": "noauto" not in entry[3].split(","),
+                    "mountPolicy": "on-demand" if "x-systemd.automount" in entry[3].split(",") else "manual" if "noauto" in entry[3].split(",") else "boot",
                     "readOnly": "ro" in entry[3].split(","),
                 }
                 if entry

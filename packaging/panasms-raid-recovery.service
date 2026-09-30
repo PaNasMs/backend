@@ -1,0 +1,14 @@
+[Unit]
+Description=Resume PaNasMs RAID conversions with their saved recovery data
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=panasms-agent.service
+ConditionDirectoryNotEmpty=/var/lib/panasms-agent/raid-reshape
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/storage_reshape.py --recover
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

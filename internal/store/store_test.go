@@ -223,3 +223,50 @@ func TestNotificationSeverityRetainsErrorAfterReview(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsRetentionAndRepeatedSampleWriteBudget(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	minute := time.Now().Unix() / 60
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for offset := int64(1); offset <= 9*24*60; offset++ {
+		if _, err := tx.Exec("INSERT INTO metric_history VALUES(?,?)", minute-offset, `{"test":true}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordMetrics(map[string]bool{"current": true}); err != nil {
+		t.Fatal(err)
+	}
+	var oldest, count, before, after int64
+	if err := s.db.QueryRow("SELECT min(minute), count(*) FROM metric_history").Scan(&oldest, &count); err != nil {
+		t.Fatal(err)
+	}
+	if oldest < minute-7*24*60 || count > 7*24*60+1 {
+		t.Fatalf("unbounded history: oldest=%d count=%d", oldest, count)
+	}
+	if err := s.db.QueryRow("SELECT total_changes()").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 500; i++ {
+		if err := s.RecordMetrics(map[string]int{"sample": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.db.QueryRow("SELECT total_changes()").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Now().Unix()/60 - minute
+	if after-before > elapsed*2 {
+		t.Fatalf("duplicate samples caused %d row writes in %d minutes", after-before, elapsed)
+	}
+}

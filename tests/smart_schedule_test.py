@@ -12,6 +12,18 @@ class SmartScheduleTest(unittest.TestCase):
         for offset, expected in [(-7, False), (0, True), (7, False), (14, True), (21, False), (28, True)]:
             self.assertEqual(smart_schedule.due(start + datetime.timedelta(days=offset), start, 2), expected)
 
+    def test_next_slot_skips_alternate_week_and_crosses_year(self):
+        schedule = {"weekday": 0, "hour": 2, "weeks": 2, "startDate": "2026-12-28"}
+        result = smart_schedule.next_scheduled(schedule, datetime.datetime(2026, 12, 28, 2))
+        self.assertEqual(datetime.datetime.fromisoformat(result).replace(tzinfo=None), datetime.datetime(2027, 1, 11, 2))
+
+    def test_legacy_weekly_slot_and_future_anchor(self):
+        schedule = {"weekday": 0, "hour": 2}
+        result = smart_schedule.next_scheduled(schedule, datetime.datetime(2026, 9, 30))
+        self.assertEqual(datetime.datetime.fromisoformat(result).replace(tzinfo=None), datetime.datetime(2026, 10, 5, 2))
+        schedule.update(startDate="2027-01-04", weeks=2)
+        self.assertTrue(smart_schedule.next_scheduled(schedule, datetime.datetime(2026, 9, 30)).startswith("2027-01-04T02:"))
+
     def test_both_schedules_are_read_independently(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

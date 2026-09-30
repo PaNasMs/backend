@@ -7,6 +7,9 @@ import os
 import errno
 from common import *
 import storage
+import storage_snapshots
+import storage_luks
+import storage_reshape
 import accounts
 import host
 import web_access
@@ -55,6 +58,8 @@ def dispatch(mode, user, request):
     if mode == "query":
         view = request.get("view")
         target = request.get("target", "")
+        if view == "storage-luks": return storage_luks.query(target)
+        if view == "storage-snapshots": return storage_snapshots.query(target)
         if view == "system-updates": return system_updates.query()
         if view == "web-access": return web_access.query()
         if view == 'accounts': return accounts.query()
@@ -90,7 +95,7 @@ def dispatch(mode, user, request):
     require(isinstance(params, dict), 'Parameters must be an object')
     extensions = module_manager.load_operations("actions", action)
     module = next(
-        (m for m in (storage, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
+        (m for m in (storage, storage_snapshots, storage_luks, storage_reshape, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
         None,
     )
     require(module, 'Unknown operation')

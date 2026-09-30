@@ -12,7 +12,7 @@ class ReshapeControlTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.md = Path(self.tmp.name)
         for k, v in {
-            "uuid": "test",
+            "uuid": "01234567:89abcdef:01234567:89abcdef",
             "level": "raid5",
             "metadata_version": "1.2",
             "sync_action": "reshape",

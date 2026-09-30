@@ -384,3 +384,5 @@ contract. Live hardware and service-manager deployment remain separate checks.
 ## External connections
 
 Google account linking and optional panel sign-in use NAS-specific OAuth credentials. See the [architecture, setup and Cloud Sync handoff](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md).
+
+See [storage capabilities and recovery](docs/storage.md).

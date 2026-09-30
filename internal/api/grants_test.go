@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"golang.org/x/oauth2"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/external"
 	"panasms.local/backend/internal/modules"
+	"panasms.local/backend/internal/store"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -249,5 +251,76 @@ func TestGrantTransientRefreshAndAccountEpoch(t *testing.T) {
 	})}
 	if tokenGrant(s, id, "cloud-sync", "alice").Code != 409 {
 		t.Fatal("changed epoch reused grant")
+	}
+}
+
+func TestDropboxGrantBindingAndBroker(t *testing.T) {
+	for _, wrongIdentity := range []bool{false, true} {
+		t.Run(fmt.Sprint(wrongIdentity), func(t *testing.T) {
+			s, session := grantFixture(t)
+			if err := s.Store.SaveExternalConfig("dropbox", store.ExternalConfig{ClientID: "dropbox-id", ClientSecret: "secret", Enabled: true, Revision: "dropbox-revision"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Store.LinkExternal(store.ExternalConnection{ID: "dropbox-connection", Provider: "dropbox", Subject: "dbid:alice", Username: "alice", UID: 1000, Principal: "principal", Email: "alice@example.test"}); err != nil {
+				t.Fatal(err)
+			}
+			s.external.client = &http.Client{Transport: externalTransport(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Host {
+				case "panasms-oauth-gateway.panasms.workers.dev":
+					return externalJSON(200, map[string]string{"code": "one-time-code"}), nil
+				case "api.dropboxapi.com":
+					if r.URL.Path == "/oauth2/token" {
+						return externalJSON(200, map[string]any{"access_token": "private-access", "token_type": "bearer", "refresh_token": "private-refresh", "expires_in": 14400, "scope": external.DropboxFilesScope}), nil
+					}
+					subject := "dbid:alice"
+					if wrongIdentity {
+						subject = "dbid:bob"
+					}
+					return externalJSON(200, map[string]any{"account_id": subject, "email": "alice@example.test", "email_verified": true}), nil
+				default:
+					t.Fatal("unexpected endpoint", r.URL)
+					return nil, nil
+				}
+			})}
+			r := externalRequest("POST", "dropbox/start", `{"purpose":"grant","password":"test","connectionId":"dropbox-connection","consumer":"cloud-sync","capability":"dropbox-files"}`)
+			r.AddCookie(session)
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			flow := w.Result().Cookies()[0]
+			r = externalRequest("POST", "dropbox/poll", `{}`)
+			r.AddCookie(session)
+			r.AddCookie(flow)
+			w = httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if wrongIdentity {
+				if w.Code != 403 {
+					t.Fatal("wrong account accepted", w.Code)
+				}
+				return
+			}
+			if w.Code != 200 || strings.Contains(w.Body.String(), "private") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			var result map[string]string
+			json.Unmarshal(w.Body.Bytes(), &result)
+			if tokenGrant(s, result["grantId"], "cloud-sync", "alice").Code != 200 {
+				t.Fatal("Dropbox broker denied valid grant")
+			}
+			if tokenGrant(s, result["grantId"], "cloud-sync", "bob").Code != 403 {
+				t.Fatal("owner isolation failed")
+			}
+			// Changing Google's configuration must not invalidate Dropbox permissions.
+			s.Store.SaveExternalConfig("google", store.ExternalConfig{Enabled: false, Revision: "changed"})
+			r = externalRequest("GET", "grants", "")
+			r = r.WithContext(context.WithValue(r.Context(), identityKey{}, auth.Identity{Username: "alice", UID: 1000, Principal: "principal", Epoch: "epoch"}))
+			w = httptest.NewRecorder()
+			s.externalGrants(w, r)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"active"`) {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		})
 	}
 }

@@ -17,6 +17,7 @@ type grantPolicy struct {
 // Consumers opt into reviewed capabilities; modules cannot supply OAuth scopes or endpoints.
 var grantPolicies = map[string]map[string]grantPolicy{
 	"cloud-sync": {
+		"dropbox-files":         {Scope: external.DropboxFilesScope, Provider: "dropbox"},
 		"google-drive":          {Scope: external.DriveScope, Provider: "google"},
 		"google-drive-readonly": {Scope: external.DriveReadScope, Provider: "google"},
 	},

@@ -109,7 +109,7 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 		fail(w, 409, "external.reconnectRequired")
 		return
 	}
-	updated, err := external.Refresh(r.Context(), s.external.client, config.ClientID, config.ClientSecret, g.Token)
+	updated, err := external.RefreshProvider(r.Context(), s.external.client, owner.Provider, config.ClientID, config.ClientSecret, g.Token)
 	if err != nil {
 		if errors.Is(err, external.ErrReconnect) {
 			if s.Store.SetGrantStatus(g.ID, "reconnect_required") != nil {

@@ -52,13 +52,13 @@ func (s *Server) externalGrants(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "external.unavailable")
 		return
 	}
-	config, err := s.Store.ExternalConfig("google")
-	if err != nil {
-		fail(w, 503, "external.unavailable")
-		return
-	}
 	for i, g := range grants {
-		_, installation, ok := grantInstallation(g.Consumer, g.Capability)
+		policy, installation, ok := grantInstallation(g.Consumer, g.Capability)
+		config, err := s.Store.ExternalConfig(policy.Provider)
+		if err != nil {
+			fail(w, 503, "external.unavailable")
+			return
+		}
 		if g.Status == "active" {
 			if !ok || !config.Enabled {
 				grants[i].Status = "unavailable"

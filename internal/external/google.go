@@ -98,8 +98,18 @@ func ExchangeGrant(ctx context.Context, client *http.Client, clientID, secret, c
 var ErrReconnect = errors.New("external.reconnectRequired")
 
 func Refresh(ctx context.Context, client *http.Client, clientID, secret string, token *oauth2.Token) (*oauth2.Token, error) {
+	return RefreshProvider(ctx, client, "google", clientID, secret, token)
+}
+
+func RefreshProvider(ctx context.Context, client *http.Client, provider, clientID, secret string, token *oauth2.Token) (*oauth2.Token, error) {
+	c := Config(clientID, secret)
+	if provider == "dropbox" {
+		c = providerConfig(provider, clientID, secret)
+	} else if provider != "google" {
+		return nil, ErrReconnect
+	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
-	updated, err := Config(clientID, secret).TokenSource(ctx, token).Token()
+	updated, err := c.TokenSource(ctx, token).Token()
 	if err != nil {
 		var oauthErr *oauth2.RetrieveError
 		if errors.As(err, &oauthErr) && oauthErr.ErrorCode == "invalid_grant" {

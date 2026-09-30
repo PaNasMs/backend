@@ -199,7 +199,7 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if (body.Purpose == "login" && !external.LoginSupported(provider)) || (body.Purpose == "grant" && provider != "google") {
+	if (body.Purpose == "login" && !external.LoginSupported(provider)) || (body.Purpose == "grant" && provider != "google" && provider != "dropbox") {
 		fail(w, 400, "external.unsupportedPurpose")
 		return
 	}
@@ -263,7 +263,7 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 	s.externalCookie(w, ticket, 600)
 	authorize := external.AuthorizeProvider(provider, config.ClientID, flow.State, flow.Nonce, flow.Verifier)
 	if flow.Purpose == "grant" {
-		authorize = external.AuthorizeGrant(config.ClientID, flow.State, flow.Nonce, flow.Verifier, flow.Connection.Subject, flow.Scope)
+		authorize = external.AuthorizeProviderGrant(provider, config.ClientID, flow.State, flow.Nonce, flow.Verifier, flow.Connection.Subject, flow.Scope)
 	}
 	jsonResponse(w, 200, map[string]any{"url": authorize, "expiresIn": 600})
 }
@@ -379,7 +379,11 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 	var account external.Account
 	var authorization external.Authorization
 	if flow.Purpose == "grant" {
-		authorization, err = s.external.exchangeGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier, flow.Scope)
+		if flow.Provider == "dropbox" {
+			authorization, err = external.ExchangeDropboxGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Verifier, flow.Scope)
+		} else {
+			authorization, err = s.external.exchangeGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier, flow.Scope)
+		}
 		account = authorization.Account
 	} else if flow.Provider == "google" {
 		account, err = s.external.exchange(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier)
@@ -406,7 +410,7 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 		if flow.Purpose == "grant" {
 			owner, e := s.Store.ExternalConnection(flow.Connection.ID)
 			policy, installation, ok := grantInstallation(flow.Consumer, flow.Capability)
-			if e != nil || !s.grantOwnerMatches(owner, id) || owner.Subject != account.Subject || !ok || installation != flow.Installation || policy.Scope != flow.Scope {
+			if e != nil || !s.grantOwnerMatches(owner, id) || owner.Subject != account.Subject || owner.Provider != flow.Provider || policy.Provider != flow.Provider || !ok || installation != flow.Installation || policy.Scope != flow.Scope {
 				fail(w, 403, "external.grantUnavailable")
 				return
 			}

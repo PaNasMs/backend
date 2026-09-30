@@ -334,8 +334,12 @@ func TestProviderIsolation(t *testing.T) {
 		r := externalRequest("POST", provider+"/start", `{"purpose":"grant"}`)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
-		if w.Code != 400 {
-			t.Fatal("unsupported grant accepted", provider, w.Code)
+		expected := 400
+		if provider == "dropbox" {
+			expected = 401
+		}
+		if w.Code != expected {
+			t.Fatal("grant purpose/authentication not checked", provider, w.Code)
 		}
 	}
 	if pollExternal(s, cookie).Code != 200 {

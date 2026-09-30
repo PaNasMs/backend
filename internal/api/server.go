@@ -162,7 +162,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		allowHealthProbe(w, r)
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.7", "product": "PaNasMs"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.8", "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/notification-telegram-relay", s.telegramLinkRelay)
 	r.Post("/api/v1/login", s.login)

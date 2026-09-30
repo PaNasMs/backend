@@ -63,6 +63,10 @@ func ExchangeProvider(ctx context.Context, client *http.Client, provider, id, se
 	if err != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") {
 		return Account{}, errors.New("provider authorization failed")
 	}
+	return providerAccount(ctx, client, provider, token)
+}
+
+func providerAccount(ctx context.Context, client *http.Client, provider string, token *oauth2.Token) (Account, error) {
 	method, endpoint := http.MethodGet, "https://api.github.com/user"
 	if provider == "dropbox" {
 		method, endpoint = http.MethodPost, "https://api.dropboxapi.com/2/users/get_current_account"

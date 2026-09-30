@@ -162,7 +162,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		allowHealthProbe(w, r)
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.8", "product": "PaNasMs"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.9", "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/notification-telegram-relay", s.telegramLinkRelay)
 	r.Post("/api/v1/login", s.login)
@@ -316,7 +316,7 @@ func (s *Server) Handler() http.Handler {
 				fail(w, 400, "Invalid settings")
 				return
 			}
-			if !validTaskbar(p.Taskbar) || !validDesktop(p.DesktopLayouts) {
+			if !validTaskbar(p.Taskbar) || !validDesktop(p.DesktopLayouts) || !validFilePins(p.FilePins) {
 				fail(w, 400, "Invalid layout")
 				return
 			}
@@ -748,6 +748,20 @@ func validTaskbar(ids *[]string) bool {
 			return false
 		}
 		seen[id] = true
+	}
+	return true
+}
+
+func validFilePins(pins []string) bool {
+	if len(pins) > 64 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, p := range pins {
+		if len(p) == 0 || len(p) > 2048 || strings.ContainsAny(p, "\x00\r\n") || (!strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "cloud:")) || seen[p] {
+			return false
+		}
+		seen[p] = true
 	}
 	return true
 }

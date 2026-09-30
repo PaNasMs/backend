@@ -65,6 +65,9 @@ func (s *Server) externalGrants(w http.ResponseWriter, r *http.Request) {
 			} else if g.Revision != config.Revision || g.Epoch != id.Epoch || g.Installation != installation {
 				grants[i].Status = "reconnect_required"
 			}
+			if authorization, e := s.Store.AccountAuthorization(g.ConnectionID, g.Scope); e == nil && (authorization.Status != "active" || authorization.Revision != config.Revision || authorization.Epoch != id.Epoch) {
+				grants[i].Status = "reconnect_required"
+			}
 		}
 	}
 	jsonResponse(w, 200, grants)

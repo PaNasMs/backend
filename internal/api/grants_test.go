@@ -142,7 +142,7 @@ func TestBrokerCannotBeReachedFromPublicHTTP(t *testing.T) {
 	if strings.Contains(w.Body.String(), "accessToken") {
 		t.Fatal("public broker exposed")
 	}
-	for input, want := range map[string]string{"0::/system.slice/panasms-module-cloud-sync.service": "cloud-sync", "0::/user.slice/panasms-module-cloud-sync.service": "", "0::/system.slice/panasms-module-files.service": "", "0::/system.slice/panasms-module-cloud-sync.service-evil": ""} {
+	for input, want := range map[string]string{"0::/system.slice/panasms-module-cloud-sync.service": "cloud-sync", "0::/user.slice/panasms-module-cloud-sync.service": "", "0::/system.slice/panasms-module-files.service": "files", "0::/system.slice/panasms-module-terminal.service": "", "0::/system.slice/panasms-module-cloud-sync.service-evil": ""} {
 		if peerConsumer(input) != want {
 			t.Fatal(input)
 		}
@@ -160,7 +160,7 @@ func TestGrantRefreshPersistsAndRevocationFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.Token.Expiry = time.Now().Add(-time.Hour)
-	s.Store.UpdateExternalGrant(g)
+	s.Store.SaveAccountAuthorization(g)
 	calls := 0
 	s.external.client = &http.Client{Transport: externalTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -174,7 +174,7 @@ func TestGrantRefreshPersistsAndRevocationFailsClosed(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	g, _ = s.Store.ExternalGrant(id)
+	g, _ = s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
 	if calls != 1 || g.Token.RefreshToken != "rotated" {
 		t.Fatal("rotation lost")
 	}
@@ -183,7 +183,7 @@ func TestGrantRefreshPersistsAndRevocationFailsClosed(t *testing.T) {
 		t.Fatal("valid token unnecessarily refreshed")
 	}
 	g.Token.Expiry = time.Now().Add(-time.Hour)
-	s.Store.UpdateExternalGrant(g)
+	s.Store.SaveAccountAuthorization(g)
 	s.external.client = &http.Client{Transport: externalTransport(func(*http.Request) (*http.Response, error) {
 		return externalJSON(400, map[string]string{"error": "invalid_grant"}), nil
 	})}
@@ -235,7 +235,7 @@ func TestGrantTransientRefreshAndAccountEpoch(t *testing.T) {
 	id := result["grantId"]
 	g, _ := s.Store.ExternalGrant(id)
 	g.Token.Expiry = time.Now().Add(-time.Hour)
-	s.Store.UpdateExternalGrant(g)
+	s.Store.SaveAccountAuthorization(g)
 	s.external.client = &http.Client{Transport: externalTransport(func(*http.Request) (*http.Response, error) {
 		return externalJSON(503, map[string]string{"error": "temporarily_unavailable"}), nil
 	})}

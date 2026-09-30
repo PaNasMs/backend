@@ -21,6 +21,7 @@ import (
 )
 
 type progressKey struct{}
+type percentKey struct{}
 type Request struct {
 	actor        *systemops.Actor
 	Action       string         `json:"action"`
@@ -36,6 +37,7 @@ type Job struct {
 	Target          string          `json:"target"`
 	Status          string          `json:"status"`
 	Stage           string          `json:"stage"`
+	Percent         *float64        `json:"percent,omitempty"`
 	Created         string          `json:"created"`
 	Updated         string          `json:"updated"`
 	Result          json.RawMessage `json:"result"`
@@ -114,10 +116,16 @@ func runHelper(ctx context.Context, mode, user string, body any, executable []st
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
 		var update struct {
-			Stage       string `json:"stage"`
-			Cancellable *bool  `json:"cancellable"`
+			Stage       string   `json:"stage"`
+			Percent     *float64 `json:"percent"`
+			Cancellable *bool    `json:"cancellable"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &update) == nil {
+			if update.Percent != nil && *update.Percent >= 0 && *update.Percent <= 100 {
+				if callback, ok := ctx.Value(percentKey{}).(func(float64)); ok {
+					callback(*update.Percent)
+				}
+			}
 			if update.Cancellable != nil {
 				if c, ok := ctx.Value(controlKey{}).(*control); ok {
 					c.mu.Lock()
@@ -210,6 +218,11 @@ func (m *Manager) execute(w work) {
 			m.fail(err)
 		}
 	})
+	ctx = context.WithValue(ctx, percentKey{}, func(percent float64) {
+		if _, err := m.db.Exec("INSERT INTO job_progress(id,percent) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET percent=excluded.percent", w.Job.ID, percent); err != nil {
+			m.fail(err)
+		}
+	})
 	result, err := m.run(ctx, "execute", w.Job.User, w.Request)
 	status := "succeeded"
 	stage := "Done"
@@ -285,7 +298,7 @@ func (m *Manager) Monitor(ids []string) ([]Job, error) {
 }
 
 func (m *Manager) list(filter string, args ...any) ([]Job, error) {
-	rows, e := m.db.Query("SELECT id,username,action,target,status,stage,created,updated,result,(SELECT report FROM job_recovery WHERE job_recovery.id=jobs.id),EXISTS(SELECT 1 FROM job_reviews WHERE job_reviews.id=jobs.id) FROM jobs WHERE "+filter, args...)
+	rows, e := m.db.Query("SELECT id,username,action,target,status,stage,created,updated,result,(SELECT percent FROM job_progress WHERE job_progress.id=jobs.id),(SELECT report FROM job_recovery WHERE job_recovery.id=jobs.id),EXISTS(SELECT 1 FROM job_reviews WHERE job_reviews.id=jobs.id) FROM jobs WHERE "+filter, args...)
 	if e != nil {
 		return nil, e
 	}
@@ -296,7 +309,7 @@ func (m *Manager) list(filter string, args ...any) ([]Job, error) {
 		var raw string
 		var recovery sql.NullString
 		var reviewed bool
-		if e = rows.Scan(&j.ID, &j.User, &j.Action, &j.Target, &j.Status, &j.Stage, &j.Created, &j.Updated, &raw, &recovery, &reviewed); e != nil {
+		if e = rows.Scan(&j.ID, &j.User, &j.Action, &j.Target, &j.Status, &j.Stage, &j.Created, &j.Updated, &raw, &j.Percent, &recovery, &reviewed); e != nil {
 			return nil, e
 		}
 		j.Result = json.RawMessage(raw)

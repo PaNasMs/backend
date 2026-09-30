@@ -10,7 +10,7 @@ REGISTRY = ROOT / "registry.json"
 UPLOADS = Path("/var/lib/panasms-agent/module-uploads")
 KEYS = Path("/etc/panasms/module-keys")
 UNITS = Path("/etc/systemd/system")
-CORE = "0.2.8"
+CORE = "0.2.9"
 ACTIONS = {"module.recover", "module.install", "module.enable", "module.disable", "module.remove"}
 
 
@@ -131,6 +131,8 @@ def manifest(m):
     require(
         not m.get("service") or m["service"] in m["files"], 'Service executable is missing'
     )
+    require(m.get("operations") in (None, "bin/server"), 'Unknown native operation format')
+    require(not m.get("operations") or m["operations"] in m["files"], 'Native operation executable is missing')
     return m
 
 
@@ -620,6 +622,36 @@ def execute(action, p, user):
         }
 
 
+class NativeOperations:
+    def __init__(self, executable, actions):
+        self.executable = executable
+        self.ACTIONS = actions
+
+    def invoke(self, mode, user, body):
+        control = os.environ.get("PANASMS_CONTROL_FD")
+        result = subprocess.run(
+            [str(self.executable), "operations", mode, user],
+            input=json.dumps(body), text=True, stdout=subprocess.PIPE,
+            pass_fds=(int(control),) if control is not None else (),
+        )
+        require(result.returncode == 0, "Native module worker failed")
+        value = json.loads(result.stdout)
+        if value.get("cancelled"):
+            import job_control
+            raise job_control.Cancelled()
+        require(not value.get("error"), value.get("error", "Native operation failed"))
+        return value
+
+    def query(self, user, target):
+        return self.invoke("query", user, {"target": target})
+
+    def plan(self, action, params, user):
+        return self.invoke("plan", user, {"action": action, "params": params})
+
+    def execute(self, action, params, user):
+        return self.invoke("execute", user, {"action": action, "params": params})
+
+
 def load_operations(kind, name):
     installed = registry()
     result = []
@@ -627,8 +659,11 @@ def load_operations(kind, name):
         if (
             not m.get("enabled")
             or name not in m.get(kind, [])
-            or "backend/operations.py" not in m.get("files", {})
+            or ("backend/operations.py" not in m.get("files", {}) and not m.get("operations"))
         ):
+            continue
+        if m.get("operations") == "bin/server" and "bin/server" in m.get("files", {}):
+            result.append(NativeOperations(ROOT / mid / "bin/server", m.get("actions", [])))
             continue
         import importlib.util
 

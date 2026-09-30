@@ -76,6 +76,7 @@ type DesktopTile struct {
 	Y    int    `json:"y"`
 }
 type Preferences struct {
+	FilePins          []string                 `json:"filePins,omitempty"`
 	Language          string                   `json:"language"`
 	Taskbar           *[]string                `json:"taskbar,omitempty"`
 	DesktopLayouts    map[string][]DesktopTile `json:"desktopLayouts,omitempty"`

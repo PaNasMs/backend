@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
@@ -109,9 +110,29 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 		fail(w, 409, "external.reconnectRequired")
 		return
 	}
+	authorization, authorizationErr := s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
+	if errors.Is(authorizationErr, sql.ErrNoRows) && g.Token != nil {
+		authorizationErr = s.Store.SaveAccountAuthorization(g)
+		if authorizationErr == nil {
+			authorization, authorizationErr = s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
+		}
+	}
+	if authorizationErr != nil {
+		fail(w, 503, "external.unavailable")
+		return
+	}
+	if authorization.Status != "active" || authorization.Revision != config.Revision || authorization.Epoch != id.Epoch || authorization.Token == nil {
+		fail(w, 409, "external.reconnectRequired")
+		return
+	}
+	g.Token = authorization.Token
 	updated, err := external.RefreshProvider(r.Context(), s.external.client, owner.Provider, config.ClientID, config.ClientSecret, g.Token)
 	if err != nil {
 		if errors.Is(err, external.ErrReconnect) {
+			if s.Store.InvalidateAccountAuthorization(g.ConnectionID, g.Scope) != nil {
+				fail(w, 503, "external.unavailable")
+				return
+			}
 			if s.Store.SetGrantStatus(g.ID, "reconnect_required") != nil {
 				fail(w, 503, "external.unavailable")
 				return
@@ -130,7 +151,7 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 		return
 	}
 	g.Token = updated
-	if err = s.Store.UpdateExternalGrant(g); err != nil {
+	if err = s.Store.SaveAccountAuthorization(g); err != nil {
 		fail(w, 503, "external.unavailable")
 		return
 	}

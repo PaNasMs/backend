@@ -259,3 +259,26 @@ class Modules(unittest.TestCase):
                 self.assertEqual(m.registry(), before)
                 command.assert_not_called()
                 self.assertFalse((root / ".transaction").exists())
+
+class NativeOperations(unittest.TestCase):
+    def test_native_manifest_loads_without_python_payload(self):
+        module = {'enabled': True, 'actions': ['file.copy'], 'operations': 'bin/server', 'files': {'bin/server': 'a' * 64}}
+        with patch.object(m, 'registry', return_value={'files': module}):
+            handlers = m.load_operations('actions', 'file.copy')
+            self.assertEqual(len(handlers), 1)
+            self.assertIsInstance(handlers[0], m.NativeOperations)
+        with patch.object(m, 'registry', return_value={'files': {**module, 'enabled': False}}):
+            self.assertEqual(m.load_operations('actions', 'file.copy'), [])
+
+    def test_native_error_is_not_reported_as_success(self):
+        handler = m.NativeOperations(Path('/module/bin/server'), ['file.copy'])
+        with patch.object(m.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"error":"Destination changed"}')):
+            with self.assertRaisesRegex(Rejected, 'Destination changed'):
+                handler.execute('file.copy', {'target': '/data/source'}, 'alice')
+
+    def test_native_cancellation_is_forwarded(self):
+        import job_control
+        handler = m.NativeOperations(Path('/module/bin/server'), ['file.copy'])
+        with patch.object(m.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"cancelled":true}')):
+            with self.assertRaises(job_control.Cancelled):
+                handler.execute('file.copy', {'target': '/data/source'}, 'alice')

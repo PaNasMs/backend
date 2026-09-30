@@ -124,3 +124,27 @@ func TestClearHistoryKeepsActiveJobsAndIds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestJobProgressSurvivesReadingFromJournal(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(m.queue); <-m.finished; m.db.Close() }()
+	_, err = m.db.Exec("INSERT INTO jobs VALUES('progress','alice','file.copy','folder','running','work','now','now','{}'); INSERT INTO job_progress VALUES('progress',42.5)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := m.list("id=?", "progress")
+	if err != nil || len(jobs) != 1 || jobs[0].Percent == nil || *jobs[0].Percent != 42.5 {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
+	}
+	_, err = m.db.Exec("DELETE FROM job_progress WHERE id='progress'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err = m.list("id=?", "progress")
+	if err != nil || jobs[0].Percent != nil {
+		t.Fatal("unknown progress must remain absent", err)
+	}
+}

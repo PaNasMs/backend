@@ -6,4 +6,4 @@ var migrations = []database.Migration{{Name: "jobs-baseline", SQL: `CREATE TABLE
  CREATE TABLE IF NOT EXISTS hidden_jobs(id TEXT PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS job_reviews(id TEXT PRIMARY KEY, checked TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS job_context(id TEXT PRIMARY KEY, context TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS job_recovery(id TEXT PRIMARY KEY, report TEXT NOT NULL, checked TEXT NOT NULL);`}}
+ CREATE TABLE IF NOT EXISTS job_recovery(id TEXT PRIMARY KEY, report TEXT NOT NULL, checked TEXT NOT NULL);`}, {Name: "job-percent", SQL: `CREATE TABLE job_progress(id TEXT PRIMARY KEY, percent REAL NOT NULL);`}}

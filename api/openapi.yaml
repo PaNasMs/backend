@@ -1271,8 +1271,12 @@ components:
         password:
           type: string
           writeOnly: true
-          description: Current Linux password required for linking; never sent to the
+          description: Current NAS user password required for linking, not module grants; never sent to the
             gateway.
+        fileAccess:
+          type: boolean
+          default: false
+          description: For Google/Dropbox linking, authorize file access once for later module grants.
         connectionId:
           type: string
           description: Owned linked identity; required for purpose grant.
@@ -1368,6 +1372,7 @@ components:
         target: {type: string}
         status: {type: string, enum: [queued, running, succeeded, failed, cancelled, interrupted]}
         stage: {type: string}
+        percent: {type: number, minimum: 0, maximum: 100, description: Known operation progress; absent while total work is unknown}
         created: {type: string}
         updated: {type: string}
         result: {type: object, additionalProperties: true}
@@ -1618,6 +1623,12 @@ components:
                 x: {type: integer}
                 y: {type: integer}
 
+        filePins:
+          type: array
+          maxItems: 64
+          uniqueItems: true
+          items: {type: string, maxLength: 2048}
+          description: Personal Files sidebar folder bookmarks.
         smartCrcBaselines:
           type: object
           additionalProperties:

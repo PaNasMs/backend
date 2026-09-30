@@ -30,4 +30,6 @@ CREATE INDEX notification_delivery_pending ON notification_delivery(status,next_
 `}, {Name: "telegram-link", SQL: `
 CREATE TABLE telegram_pair(username TEXT PRIMARY KEY,uid INTEGER NOT NULL,principal TEXT NOT NULL,bot TEXT NOT NULL,code TEXT UNIQUE NOT NULL,expires INTEGER NOT NULL,chat TEXT NOT NULL,name TEXT NOT NULL);
 CREATE TABLE telegram_links(username TEXT PRIMARY KEY,uid INTEGER NOT NULL,principal TEXT NOT NULL,bot TEXT NOT NULL,chat TEXT NOT NULL,name TEXT NOT NULL);
+`}, {Name: "external-account-authorizations", SQL: `
+CREATE TABLE external_account_authorizations(connection_id TEXT NOT NULL REFERENCES external_connections(id) ON DELETE CASCADE,scope TEXT NOT NULL,revision TEXT NOT NULL,epoch TEXT NOT NULL,secret BLOB NOT NULL,status TEXT NOT NULL,PRIMARY KEY(connection_id,scope));
 `}}

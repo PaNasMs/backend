@@ -15,6 +15,7 @@ import (
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/cooling"
 	"panasms.local/backend/internal/modules"
+	"panasms.local/backend/internal/notify"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
 	"path/filepath"
@@ -27,6 +28,8 @@ import (
 
 type Server struct {
 	deliveryMu            sync.Mutex
+	catalogOnce           sync.Once
+	catalog               *notify.Catalog
 	external              *externalFlows
 	lookupIdentity        func(string, map[string]bool) (auth.Identity, error)
 	ModuleClient          func(string) (*http.Client, error)

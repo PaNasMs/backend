@@ -126,6 +126,10 @@ type Event struct {
 	Object   string `json:"object"`
 	Route    string `json:"route"`
 	Resolved bool   `json:"resolved"`
+	// Job details; empty for other kinds and for deliveries queued before they existed.
+	Action string `json:"action,omitempty"`
+	Status string `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 type Message struct {
 	Title string `json:"title"`
@@ -134,7 +138,11 @@ type Message struct {
 	Tag   string `json:"tag"`
 }
 
-func (e Event) Message(lang string) Message {
+func (e Event) Message(lang string) Message { return e.Localized(lang, nil) }
+
+// Localized renders the message; the catalog translates operation names and
+// server errors and may be nil.
+func (e Event) Localized(lang string, c *Catalog) Message {
 	i := 0
 	if lang == "ru" {
 		i = 1
@@ -163,10 +171,13 @@ func (e Event) Message(lang string) Message {
 		t = texts["generic"]
 	}
 	body := t[i]
+	if e.Kind == "job" && e.Action != "" {
+		body = e.jobBody(i, c)
+	}
 	if e.Resolved {
 		body = [3]string{"Resolved: ", "Устранено: ", "Усунено: "}[i] + body
 	}
-	if e.Object != "" {
+	if e.Object != "" && !(e.Kind == "job" && e.Action != "") {
 		body += "\n" + e.Object
 	}
 	severity := e.Severity
@@ -174,6 +185,49 @@ func (e Event) Message(lang string) Message {
 		severity = "info"
 	}
 	return Message{Title: "PaNasMs · " + levels[severity][i], Body: body, URL: e.Route, Tag: e.ID}
+}
+
+var languages = [3]string{"en", "ru", "uk"}
+
+func (e Event) jobBody(i int, c *Catalog) string {
+	name := c.Action(languages[i], e.Action)
+	if name == "" {
+		name = e.Action
+	}
+	outcomes := map[string][3]string{
+		"failed":      {"Task “%s” failed.", "Задача «%s» завершилась с ошибкой.", "Завдання «%s» завершилося з помилкою."},
+		"interrupted": {"Task “%s” was interrupted.", "Задача «%s» прервана.", "Завдання «%s» перервано."},
+		"cancelled":   {"Task “%s” was cancelled.", "Задача «%s» отменена.", "Завдання «%s» скасовано."},
+	}
+	outcome, ok := outcomes[e.Status]
+	if !ok {
+		outcome = outcomes["failed"]
+	}
+	lines := []string{strings.Replace(outcome[i], "%s", name, 1)}
+	if e.Object != "" {
+		lines = append(lines, [3]string{"Object: ", "Объект: ", "Об’єкт: "}[i]+displayTarget(i, e.Object))
+	}
+	if detail := strings.TrimSpace(e.Detail); detail != "" {
+		lines = append(lines, [3]string{"Reason: ", "Причина: ", "Причина: "}[i]+limit(c.Text(languages[i], detail), 1000))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Files addresses cloud items as cloud:<grant id>/<path>; the grant ID means nothing to a person.
+func displayTarget(i int, target string) string {
+	if rest, ok := strings.CutPrefix(target, "cloud:"); ok {
+		_, path, _ := strings.Cut(rest, "/")
+		return [3]string{"Cloud", "Облако", "Хмара"}[i] + ": /" + path
+	}
+	return target
+}
+
+func limit(text string, runes int) string {
+	r := []rune(text)
+	if len(r) <= runes {
+		return text
+	}
+	return string(r[:runes]) + "…"
 }
 
 // Read legacy single-channel preferences without changing their delivery behavior.

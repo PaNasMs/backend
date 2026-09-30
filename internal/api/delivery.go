@@ -8,10 +8,12 @@ import (
 	"log"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/management"
 	"panasms.local/backend/internal/notify"
 	"panasms.local/backend/internal/store"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -195,7 +197,10 @@ func (s *Server) deliveryTest(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, 202, map[string]string{"status": "queued"})
 }
-func eventForAlert(a store.Alert) notify.Event {
+
+// jobs holds details of alerted jobs keyed by job ID; missing entries fall back
+// to the text stored in the alert.
+func eventForAlert(a store.Alert, jobs map[string]management.Job) notify.Event {
 	e := notify.Event{ID: a.ID, Revision: a.Updated, Severity: a.Severity, Kind: "generic", Route: "/?panel=notifications"}
 	if e.Severity == "success" {
 		e.Severity = "info"
@@ -225,6 +230,16 @@ func eventForAlert(a store.Alert) notify.Event {
 		e.Kind = "job"
 		e.Route = "/?panel=jobs"
 		e.Resolved = !a.Active
+		if j, ok := jobs[strings.TrimPrefix(a.ID, "job:")]; ok {
+			e.Action, e.Status, e.Object, e.Detail = j.Action, j.Status, j.Target, j.Stage
+		} else if rest, ok := strings.CutPrefix(a.Message, "Operation "); ok {
+			// Alerts are recorded as "Operation <action>: <stage>".
+			e.Action, e.Detail, _ = strings.Cut(rest, ": ")
+			e.Status = "failed"
+			if a.Severity == "warning" {
+				e.Status = "cancelled"
+			}
+		}
 	case strings.HasPrefix(a.ID, "update:"):
 		e.Kind = "update"
 		e.Route = "/settings/updates"
@@ -260,6 +275,7 @@ func (s *Server) runDelivery(ctx context.Context) {
 func (s *Server) deliveryCycle(ctx context.Context) error {
 	s.Store.PruneDeliveries()
 	visible := map[string]map[string]notify.Event{}
+	jobs := s.alertedJobs(ctx)
 	recipients, err := s.Store.Recipients()
 	if err != nil {
 		return err
@@ -275,10 +291,10 @@ func (s *Server) deliveryCycle(ctx context.Context) error {
 		}
 		visible[recipient.Username] = map[string]notify.Event{}
 		for _, a := range alerts {
-			visible[recipient.Username][a.ID] = eventForAlert(a)
+			visible[recipient.Username][a.ID] = eventForAlert(a, jobs)
 			stamp, err := time.Parse(time.RFC3339, a.Updated)
 			if err == nil {
-				if err = s.Store.ObserveNotification(recipient, eventForAlert(a), stamp); err != nil {
+				if err = s.Store.ObserveNotification(recipient, eventForAlert(a, jobs), stamp); err != nil {
 					return err
 				}
 			}
@@ -320,7 +336,7 @@ func (s *Server) deliveryCycle(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		m := d.Event.Message(p.Language)
+		m := d.Event.Localized(p.Language, s.notificationCatalog())
 		sendCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		switch d.Channel {
 		case "email":
@@ -364,6 +380,56 @@ func (s *Server) deliveryCycle(ctx context.Context) error {
 	}
 	s.Store.PruneDeliveries()
 	return nil
+}
+
+// alertedJobs returns details of jobs with active alerts. It is best effort:
+// without the agent, notifications keep the text stored in the alert.
+func (s *Server) alertedJobs(ctx context.Context) map[string]management.Job {
+	result := map[string]management.Job{}
+	alerts, err := s.Store.Alerts()
+	if err != nil {
+		return result
+	}
+	values := url.Values{}
+	for _, a := range alerts {
+		if a.Active && strings.HasPrefix(a.ID, "job:") {
+			values.Add("alert", strings.TrimPrefix(a.ID, "job:"))
+		}
+	}
+	if len(values) == 0 {
+		return result
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://agent/job-feed?"+values.Encode(), nil)
+	if err != nil {
+		return result
+	}
+	resp, err := s.Agent.Do(req)
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+	var jobs []management.Job
+	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&jobs) != nil {
+		return result
+	}
+	for _, j := range jobs {
+		result[j.ID] = j
+	}
+	return result
+}
+
+// notificationCatalog loads the translations shipped with the web interface
+// once; without them messages use English operation IDs and server text.
+func (s *Server) notificationCatalog() *notify.Catalog {
+	s.catalogOnce.Do(func() {
+		c, err := notify.LoadCatalog(filepath.Join(s.Static, "notification-catalog.json"))
+		if err != nil {
+			log.Print("Notification translations unavailable; using untranslated task details")
+			return
+		}
+		s.catalog = c
+	})
+	return s.catalog
 }
 
 func (s *Server) recipientAlerts(ctx context.Context, id auth.Identity) ([]store.Alert, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/go-chi/chi/v5"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,14 @@ func externalJSON(status int, body any) *http.Response {
 }
 func externalRequest(method, path, body string) *http.Request {
 	r := httptest.NewRequest(method, "http://nas/api/v1/external/"+path, strings.NewReader(body))
+	parts := strings.Split(path, "/")
+	provider := parts[0]
+	if provider == "settings" && len(parts) > 1 {
+		provider = parts[1]
+	}
+	route := chi.NewRouteContext()
+	route.URLParams.Add("provider", provider)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, route))
 	r.Header.Set("Origin", "http://nas")
 	r.Header.Set("X-PaNasMs-Request", "1")
 	return r
@@ -229,7 +238,7 @@ func TestExternalSettingsPreserveSecretAndInvalidateFlows(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	s.externalProviders(w, externalRequest("GET", "providers", ""))
-	if strings.TrimSpace(w.Body.String()) != `{"google":{"enabled":false}}` {
+	if strings.TrimSpace(w.Body.String()) != `{"dropbox":{"enabled":false,"login":false},"github":{"enabled":false,"login":true},"google":{"enabled":false,"login":true}}` {
 		t.Fatal(w.Body.String())
 	}
 }
@@ -246,5 +255,110 @@ func TestExternalPasswordProofChecksIdentity(t *testing.T) {
 	id.UID = 1001
 	if s.externalReauthenticate(r, id, "test-password") {
 		t.Fatal("wrong identity accepted")
+	}
+}
+
+func TestAdditionalProviderLinkingAndLogin(t *testing.T) {
+	for _, provider := range []string{"github", "dropbox"} {
+		t.Run(provider, func(t *testing.T) {
+			s, session := grantFixture(t)
+			if err := s.Store.SaveExternalConfig(provider, store.ExternalConfig{ClientID: "test", ClientSecret: "secret", Enabled: true, Revision: "v1"}); err != nil {
+				t.Fatal(err)
+			}
+			subject := "first"
+			s.external.exchangeProvider = func(_ context.Context, _ *http.Client, got, _, _, _, _, _ string) (external.Account, error) {
+				if got != provider {
+					t.Fatal(got)
+				}
+				return external.Account{Subject: subject, Name: "@alice"}, nil
+			}
+			run := func(purpose string, session *http.Cookie) *httptest.ResponseRecorder {
+				r := externalRequest("POST", provider+"/start", `{"purpose":"`+purpose+`","password":"test-password"}`)
+				if session != nil {
+					r.AddCookie(session)
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				if w.Code != 200 {
+					return w
+				}
+				r = externalRequest("POST", provider+"/poll", `{}`)
+				r.AddCookie(w.Result().Cookies()[0])
+				if session != nil {
+					r.AddCookie(session)
+				}
+				w = httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, r)
+				return w
+			}
+			for _, value := range []string{"first", "second"} {
+				subject = value
+				w := run("link", session)
+				if w.Code != 200 || !strings.Contains(w.Body.String(), "linked") {
+					t.Fatal(w.Code, w.Body.String())
+				}
+			}
+			list, err := s.Store.ExternalConnections("alice", 1000, "principal")
+			if err != nil || len(list) != 3 {
+				t.Fatal(list, err)
+			}
+			w := run("login", nil)
+			if provider == "github" {
+				if w.Code != 200 || !strings.Contains(w.Body.String(), "authenticated") {
+					t.Fatal(w.Code, w.Body.String())
+				}
+				subject = "unlinked"
+				w = run("login", nil)
+				if w.Code != 403 {
+					t.Fatal("unlinked identity accepted", w.Code)
+				}
+			} else if w.Code != 400 {
+				t.Fatal("Dropbox login accepted", w.Code)
+			}
+		})
+	}
+}
+
+func TestProviderIsolation(t *testing.T) {
+	s, cookie, flow := externalFixture(t)
+	for _, action := range []string{"poll", "cancel"} {
+		r := externalRequest("POST", "github/"+action, `{}`)
+		r.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != 409 || s.external.pending[externalDigest(cookie.Value)] != flow {
+			t.Fatal("provider mix-up", action, w.Code)
+		}
+	}
+	for _, provider := range []string{"github", "dropbox"} {
+		r := externalRequest("POST", provider+"/start", `{"purpose":"grant"}`)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != 400 {
+			t.Fatal("unsupported grant accepted", provider, w.Code)
+		}
+	}
+	if pollExternal(s, cookie).Code != 200 {
+		t.Fatal("other provider damaged original flow")
+	}
+}
+
+func TestProviderSettingsAreIndependent(t *testing.T) {
+	s, cookie, _ := externalFixture(t)
+	for _, provider := range []string{"github", "dropbox"} {
+		r := externalRequest("PUT", "settings/"+provider, `{"clientId":"example-client","clientSecret":"private-value","enabled":true}`)
+		r = r.WithContext(context.WithValue(r.Context(), identityKey{}, auth.Identity{Username: "alice", Role: "admin"}))
+		w := httptest.NewRecorder()
+		s.externalSettings(w, r)
+		if w.Code != 200 || strings.Contains(w.Body.String(), "private-value") {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		config, err := s.Store.ExternalConfig(provider)
+		if err != nil || config.ClientSecret != "private-value" {
+			t.Fatal(config, err)
+		}
+	}
+	if pollExternal(s, cookie).Code != 200 {
+		t.Fatal("saving other provider cancelled Google")
 	}
 }

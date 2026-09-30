@@ -20,9 +20,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /api/v1/external/settings/google:
+  /api/v1/external/settings/{provider}:
+    parameters:
+    - name: provider
+      in: path
+      required: true
+      schema: {type: string, enum: [google, github, dropbox]}
     get:
-      operationId: getExternalGoogleSettings
+      operationId: getExternalProviderSettings
       description: Administrator only. Returns a secretConfigured flag, never the secret.
       responses:
         '200':
@@ -30,7 +35,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ExternalGoogleSettings'
+                $ref: '#/components/schemas/ExternalProviderSettings'
         default:
           description: Failure; external.* error codes describe authorization failures.
           content:
@@ -38,7 +43,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
     put:
-      operationId: putExternalGoogleSettings
+      operationId: putExternalProviderSettings
       description: Administrator only. Saves encrypted client credentials and cancels
         pending OAuth flows.
       responses:
@@ -47,7 +52,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ExternalGoogleSettings'
+                $ref: '#/components/schemas/ExternalProviderSettings'
         default:
           description: Failure; external.* error codes describe authorization failures.
           content:
@@ -59,7 +64,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExternalGoogleSettingsInput'
+              $ref: '#/components/schemas/ExternalProviderSettingsInput'
       parameters:
       - name: X-PaNasMs-Request
         in: header
@@ -142,11 +147,16 @@ paths:
       responses:
         '204': {description: Revoked}
         default: {description: Authorization or storage error}
-  /api/v1/external/google/start:
+  /api/v1/external/{provider}/start:
+    parameters:
+    - name: provider
+      in: path
+      required: true
+      schema: {type: string, enum: [google, github, dropbox]}
     post:
-      operationId: startExternalGoogle
-      description: Starts browser-bound Google OIDC authorization through the fixed
-        HTTPS relay. Grant purpose adds the registered capability scope and offline consent,
+      operationId: startExternalProvider
+      description: Starts provider-bound OAuth authorization (Google OIDC) through the fixed
+        HTTPS relay. GitHub supports login/link; Dropbox supports link only. Grant is Google-only. Grant purpose adds the registered capability scope and offline consent,
         bound to connectionId and consumer. Linking and grants require the existing panel session and current Linux
         password.
       responses:
@@ -175,9 +185,14 @@ paths:
         schema:
           const: '1'
           type: string
-  /api/v1/external/google/poll:
+  /api/v1/external/{provider}/poll:
+    parameters:
+    - name: provider
+      in: path
+      required: true
+      schema: {type: string, enum: [google, github, dropbox]}
     post:
-      operationId: pollExternalGoogle
+      operationId: pollExternalProvider
       description: Requires the HttpOnly flow cookie from start. Poll at most once every
         three seconds. Expiration, cancellation, restart or settings changes require
         a new flow.
@@ -207,9 +222,14 @@ paths:
         schema:
           const: '1'
           type: string
-  /api/v1/external/google/cancel:
+  /api/v1/external/{provider}/cancel:
+    parameters:
+    - name: provider
+      in: path
+      required: true
+      schema: {type: string, enum: [google, github, dropbox]}
     post:
-      operationId: cancelExternalGoogle
+      operationId: cancelExternalProvider
       description: Cancels the flow belonging to the browser cookie.
       responses:
         '204':
@@ -1178,7 +1198,7 @@ components:
       required: [channel]
       properties:
         channel: {type: string, enum: [email, telegram, push]}
-    ExternalGoogleSettings:
+    ExternalProviderSettings:
       type: object
       required:
       - provider
@@ -1188,7 +1208,8 @@ components:
       - redirectUri
       properties:
         provider:
-          const: google
+          type: string
+          enum: [google, github, dropbox]
         clientId:
           type: string
         secretConfigured:
@@ -1197,7 +1218,7 @@ components:
           type: boolean
         redirectUri:
           type: string
-    ExternalGoogleSettingsInput:
+    ExternalProviderSettingsInput:
       type: object
       additionalProperties: false
       required:
@@ -1297,18 +1318,19 @@ components:
         grantId:
           type: string
           description: Present on successful grant; no tokens are returned to the browser.
+    ExternalProviderAvailability:
+      type: object
+      required: [enabled, login]
+      properties:
+        enabled: {type: boolean}
+        login: {type: boolean, description: Whether this provider supports panel login.}
     ExternalProviders:
       type: object
-      required:
-      - google
+      required: [google, github, dropbox]
       properties:
-        google:
-          type: object
-          required:
-          - enabled
-          properties:
-            enabled:
-              type: boolean
+        google: {$ref: '#/components/schemas/ExternalProviderAvailability'}
+        github: {$ref: '#/components/schemas/ExternalProviderAvailability'}
+        dropbox: {$ref: '#/components/schemas/ExternalProviderAvailability'}
     ExternalUnlink:
       type: object
       additionalProperties: false

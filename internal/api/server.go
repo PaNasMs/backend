@@ -167,9 +167,9 @@ func (s *Server) Handler() http.Handler {
 	r.Post("/api/v1/notification-telegram-relay", s.telegramLinkRelay)
 	r.Post("/api/v1/login", s.login)
 	r.Get("/api/v1/external/providers", s.externalProviders)
-	r.Post("/api/v1/external/google/start", s.externalStart)
-	r.Post("/api/v1/external/google/poll", s.externalPoll)
-	r.Post("/api/v1/external/google/cancel", s.externalCancel)
+	r.Post("/api/v1/external/{provider}/start", s.externalStart)
+	r.Post("/api/v1/external/{provider}/poll", s.externalPoll)
+	r.Post("/api/v1/external/{provider}/cancel", s.externalCancel)
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,8 +198,8 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/api/v1/notification-telegram-link", s.telegramLink)
 		r.Delete("/api/v1/notification-telegram-link", s.telegramLink)
 		r.Post("/api/v1/notification-retry", s.deliveryRetry)
-		r.Get("/api/v1/external/settings/google", s.externalSettings)
-		r.Put("/api/v1/external/settings/google", s.externalSettings)
+		r.Get("/api/v1/external/settings/{provider}", s.externalSettings)
+		r.Put("/api/v1/external/settings/{provider}", s.externalSettings)
 		r.Get("/api/v1/external/grants", s.externalGrants)
 		r.Delete("/api/v1/external/grants", s.externalGrants)
 		r.Get("/api/v1/external/connections", s.externalConnections)

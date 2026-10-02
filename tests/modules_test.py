@@ -14,6 +14,16 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_optional_detailed_descriptions(self):
+        item={'id':'example','version':'1.0.0','api':1,'core':'>=0.2.0','architecture':'all','title':'Example','files':{'ui/index.js':'0'*64}}
+        m.manifest(item)
+        item['longDescription']='First paragraph\n\nSecond paragraph'
+        item['translations']={'uk':{'longDescription':'Опис'}}
+        m.manifest(item)
+        for value in ([], 'x'*16001):
+            item['translations']['uk']['longDescription']=value
+            with self.assertRaisesRegex(Rejected,'detailed module description'): m.manifest(item)
+
     def test_upload_preserves_publisher_and_prevents_downgrade(self):
         installed = {'files': {'version': '1.2.0', 'signer': 'official'}}
         for candidate, message in [

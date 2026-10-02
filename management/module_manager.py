@@ -76,6 +76,14 @@ def manifest(m):
         isinstance(m.get("title"), str) and 0 < len(m["title"]) <= 100,
         'Invalid module title',
     )
+    descriptions = [m]
+    if 'translations' in m:
+        require(isinstance(m['translations'], dict), 'Invalid module translations')
+        descriptions += list(m['translations'].values())
+    for labels in descriptions:
+        require(isinstance(labels, dict), 'Invalid module translations')
+        if 'longDescription' in labels:
+            require(isinstance(labels['longDescription'], str) and len(labels['longDescription']) <= 16000, 'Invalid detailed module description')
     require(m.get("service") in (None, "bin/server"), 'Unknown service format')
     require(
         isinstance(m.get("dependencies", {}), dict) and len(m.get("dependencies", {})) <= 32,

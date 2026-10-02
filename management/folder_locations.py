@@ -8,10 +8,11 @@ def within(path, root):
 
 
 def inventory():
-    mounts = json_command(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE,OPTIONS,MAJ:MIN']).get('filesystems', [])
+    mounts = json_command(['findmnt', '--json', '--list', '--output', 'TARGET,FSTYPE,OPTIONS,MAJ:MIN,UUID']).get('filesystems', [])
     persistent = json_command(['findmnt', '--fstab', '--json', '--output', 'TARGET,OPTIONS']).get('filesystems', [])
-    devices = json_command(['lsblk', '--json', '--output', 'NAME,MAJ:MIN,TYPE,RM,TRAN']).get('blockdevices', [])
+    devices = json_command(['lsblk', '--json', '--output', 'NAME,MAJ:MIN,TYPE,RM,TRAN,FSTYPE,UUID']).get('blockdevices', [])
     removable, local = set(), set()
+    btrfs = {}
 
     def visit(rows, unsafe=False):
         for row in rows:
@@ -21,9 +22,17 @@ def inventory():
                 local.add(number)
                 if blocked:
                     removable.add(number)
+            if number and row.get('fstype') == 'btrfs' and row.get('uuid'):
+                btrfs.setdefault(row['uuid'], set()).add(number)
             visit(row.get('children', []), blocked)
 
     visit(devices)
+    for row in mounts:
+        members = btrfs.get(row.get('uuid'), set()) if row.get('fstype') == 'btrfs' else set()
+        if members and row.get('maj:min'):
+            local.add(row['maj:min'])
+            if members & removable:
+                removable.add(row['maj:min'])
     return mounts, persistent, local, removable
 
 
@@ -46,8 +55,15 @@ def destination(path):
     return home_volume(path.parent)
 
 
-def folders(target):
+def data_volume(path, state=None):
+    fs = home_volume(path, state)
+    require(fs['target'] not in ('/', '/boot', '/boot/firmware') and fs['fstype'] in ('ext4', 'xfs', 'btrfs'), 'Choose a mounted writable local data filesystem, not the system disk or a network share')
+    return fs
+
+
+def folders(target, data_only=False):
     state = inventory()
+    validate = data_volume if data_only else home_volume
     candidates = {'/home'} | {row['target'] for row in state[0] if row['target'].startswith(('/home/', '/srv/', '/mnt/'))}
     roots = []
     for value in sorted(candidates):
@@ -56,7 +72,7 @@ def folders(target):
             continue
         reason = ''
         try:
-            home_volume(path, state)
+            validate(path, state)
         except Rejected as error:
             reason = str(error)
         roots.append({'name': value, 'path': value, 'reason': reason})
@@ -65,7 +81,7 @@ def folders(target):
     path = clean_path(target)
     require(any(within(str(path), row['path']) and not row['reason'] for row in roots), 'Choose a folder on a supported home volume')
     require(path.is_dir() and not any(p.is_symlink() for p in [path, *path.parents]), 'Choose an existing folder without symbolic links')
-    home_volume(path, state)
+    validate(path, state)
     children = []
     with os.scandir(path) as entries:
         for entry in entries:
@@ -73,7 +89,7 @@ def folders(target):
                 continue
             reason = ''
             try:
-                home_volume(Path(entry.path), state)
+                validate(Path(entry.path), state)
             except Rejected as error:
                 reason = str(error)
             children.append({'name': entry.name, 'path': entry.path, 'reason': reason})

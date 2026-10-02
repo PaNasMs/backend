@@ -670,7 +670,7 @@ paths:
         schema:
           type: string
         description: 'Core views: job, jobs, accounts, account-details, account-sessions,
-          homes, homes-check, sharing, share-folders, home-folders, mount-folders, modules,
+          homes, homes-check, sharing, share-folders, home-folders, data-folders, mount-folders, modules,
           module-sources, module-catalog, web-access, system-updates, network, storage-options,
           raid-candidates, smart, services, journal, updates, nfs, power. Additional
           module queries require an enabled module.'
@@ -3413,6 +3413,8 @@ components:
         share-folders:
           $ref: '#/components/schemas/FolderLocations'
         home-folders:
+          $ref: '#/components/schemas/FolderLocations'
+        data-folders:
           $ref: '#/components/schemas/FolderLocations'
         mount-folders:
           $ref: '#/components/schemas/FolderLocations'

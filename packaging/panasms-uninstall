@@ -51,6 +51,8 @@ if automatic:
     subprocess.run(['apt-mark', 'manual'] + automatic, check=True)
 subprocess.run(['apt-get', '-y', 'purge' if mode == '--purge' else 'remove', 'panasms-prototype'], check=True)
 if mode == '--remove':
+    print('Panel configuration, databases and the module registry are kept for a later reinstall.')
+    print('This tool is removed with the package; to delete the kept state later, run: sudo apt-get purge panasms-prototype')
     sys.exit(0)
 remaining = [p for p in ['/etc/panasms', '/var/lib/panasms', '/var/lib/panasms-agent'] if Path(p).exists()]
 if remaining:

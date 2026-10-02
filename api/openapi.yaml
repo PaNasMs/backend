@@ -1818,6 +1818,13 @@ components:
       - status
       - available
       properties:
+        capabilities:
+          type: object
+          required: [cpu, disk]
+          description: Supported control interfaces, independent of controller service health. GPIO support does not prove a fan is wired.
+          properties:
+            cpu: {type: boolean}
+            disk: {type: boolean}
         config:
           $ref: '#/components/schemas/CoolingSettings'
         available:

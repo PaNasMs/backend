@@ -116,6 +116,7 @@ class PackagingTest(unittest.TestCase):
             report = inspect(root)
             self.assertEqual(report["fanControllers"][0]["attributes"]["fan1_input"], "3150")
             self.assertEqual(report["coolingControl"], "unchanged")
+            self.assertEqual(report["supportedCooling"], {"cpu": False, "disk": False})
             self.assertEqual((hw / "pwm1").read_text(), "75")
             self.assertFalse((chip / "export").exists())
             self.assertEqual(report["errors"], [])

@@ -386,3 +386,12 @@ contract. Live hardware and service-manager deployment remain separate checks.
 Google and GitHub account linking and optional panel sign-in, plus Dropbox account linking, use NAS-specific OAuth credentials. See the [architecture, setup and Cloud Sync handoff](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md).
 
 See [storage capabilities and recovery](docs/storage.md).
+
+Cooling settings use read-only hardware capability detection, separately from the
+controller heartbeat. CPU profiles require the supported writable active thermal
+trip points; disk-bay GPIO control currently requires Raspberry Pi 5 with RP1 GPIO.
+The installation hardware report includes `supportedCooling`; the cooling API
+rechecks capabilities at runtime. Temperature sensors alone do not enable fan
+controls. A supported GPIO controller does not prove that a fan is connected:
+new installations still default to no disk-bay cooling. SMART/temperature polling
+remains configurable on systems without supported fan control.

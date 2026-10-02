@@ -21,6 +21,13 @@ case "${1:-}" in
    chown root:panasms /etc/panasms/panasms.env
   fi
   printf '%s\n' /etc/panasms/panasms.env /etc/panasms/web.env /etc/panasms/tls.key /etc/panasms/tls.crt /etc/panasms/https.enabled /var/lib/panasms/state.db /var/lib/panasms/state.db-wal /var/lib/panasms/state.db-shm > /var/lib/panasms-installer/generated-files
+  report=$(mktemp /var/lib/panasms-installer/hardware.XXXXXX)
+  if /usr/sbin/panasms-inspect-hardware > "$report"; then
+   mv "$report" /var/lib/panasms-installer/hardware.json
+  else
+   rm -f "$report"
+   echo 'Hardware inspection unavailable; the panel will detect capabilities at runtime.' >&2
+  fi
   python3 /usr/lib/panasms/sharing-install.py
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
   systemctl daemon-reload

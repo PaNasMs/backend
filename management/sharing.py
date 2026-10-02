@@ -356,6 +356,12 @@ if __name__ == '__main__':
                 reload_services([])
         elif sys.argv[1:] == ['--recover'] and JOURNAL.exists():
             with locked(): recover()
+        elif sys.argv[1:] == ['--republish']:
+            # Package removal unpublishes the shares but keeps their definitions:
+            # publish them again on reinstall. Edited or partially present managed
+            # files are left for the explicit restore action in Shared folders.
+            with locked():
+                if read()['shares'] and not any(p.exists() for p in (SMB, EXPORTS, JOURNAL)): recover()
         print(json.dumps({}))
     except Exception:
         message = 'SMB password synchronization failed; see Users → Security' if sys.argv[1:] == ['--sync'] else 'Sharing operation failed; check Samba/NFS service logs and the recovery status in Shared folders'

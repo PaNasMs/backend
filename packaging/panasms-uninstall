@@ -25,6 +25,7 @@ print('Module services are stopped and disabled; purge also removes uploaded arc
 print('Shared folders published by the panel are unpublished (their SMB/NFS definitions are removed); the folders and files remain.')
 print('Storage and sharing tools stay installed and are marked as manually installed so that apt autoremove keeps them:', ', '.join(tools))
 print('Purge additionally removes:', ', '.join(owned))
+print('Purge keeps per-user module data under /var/lib/panasms-cloud-sync, the installer record in /var/lib/panasms-installer and the key protecting stored cloud authorizations in /var/lib/panasms; delete them by hand if the panel will not be reinstalled.')
 print('The independent panasms-cooling package/service is retained to keep the disks cooled.')
 print('Linux account expiry, login shells and /etc/ssh/sshd_config.d/60-panasms-users.conf are retained as OS access policy.')
 print('LUKS keys and crypttab entries are retained to preserve access to encrypted volumes.')

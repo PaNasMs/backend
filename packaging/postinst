@@ -7,9 +7,10 @@ case "${1:-}" in
    install -d -m 0750 /var/lib/panasms-installer
    touch /var/lib/panasms-installer/created-user
   else
-   entry=$(getent passwd panasms)
+   entry=$(getent passwd panasms | sed 's/:PaNasMs prototype service,*:/:PaNasMs prototype service:/')
    case "$entry" in *':PaNasMs prototype service:/nonexistent:/usr/sbin/nologin') ;; *) echo 'Existing panasms account is not owned by this installer' >&2; exit 1;; esac
   fi
+  usermod --comment 'PaNasMs prototype service' panasms
   install -d -o root -g panasms -m 0755 /var/lib/panasms-modules
   install -d -o root -g panasms -m 0750 /etc/panasms
   install -d -o panasms -g panasms -m 0700 /var/lib/panasms

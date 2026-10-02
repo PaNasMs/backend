@@ -62,26 +62,33 @@ func Validate(s Settings) error {
 	}
 	return nil
 }
-func Read() (any, error) {
-	raw, err := os.ReadFile(configPath)
-	if err != nil {
+func Read() (any, error) { return readState("/") }
+
+func readState(root string) (any, error) {
+	raw, err := os.ReadFile(filepath.Join(root, configPath))
+	configured := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	var cfg config
-	if err = json.Unmarshal(raw, &cfg); err != nil {
-		return nil, err
+	if configured {
+		if err = json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		cfg.Settings = Settings{CPUProfile: "balanced", Profile: "balanced", SampleSeconds: 60, HardwareMode: "none", ControlGPIO: 27}
 	}
 	cfg.Settings = normalize(cfg.Settings)
 	if cfg.CPUProfile == "" {
 		cfg.CPUProfile = "balanced"
 	}
-	raw, err = os.ReadFile("/run/panasms-cooling/status.json")
+	raw, err = os.ReadFile(filepath.Join(root, "/run/panasms-cooling/status.json"))
 	status := map[string]any{"dutyPercent": 0, "reason": "unavailable", "disks": []any{}, "observedAt": 0, "profile": cfg.Profile}
 	if err == nil {
 		_ = json.Unmarshal(raw, &status)
 	}
 	observed, _ := status["observedAt"].(float64)
-	return map[string]any{"config": cfg.Settings, "capabilities": DetectCapabilities("/"), "status": status, "available": time.Now().Unix()-int64(observed) < 5}, nil
+	return map[string]any{"config": cfg.Settings, "configured": configured, "capabilities": DetectCapabilities(root), "status": status, "available": configured && time.Now().Unix()-int64(observed) < 5}, nil
 }
 func Save(settings Settings) error {
 	if err := Validate(settings); err != nil {

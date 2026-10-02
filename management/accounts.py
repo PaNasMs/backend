@@ -298,7 +298,7 @@ def plan(action, p, actor):
                     for username in set(group.gr_mem) - set(members):
                         protect_admin(account(username), actor, True)
                     details += ['Membership in sudo grants administrative privileges in Linux']
-    state = {"passwd": Path("/etc/passwd").read_text(), "group": Path("/etc/group").read_text(), 'policy':account_policy.read(), 'shadow':Path('/etc/shadow').read_text()}
+    state = {"passwd": Path("/etc/passwd").read_text(), "group": Path("/etc/group").read_text(), 'policy':account_policy.read(), 'shadow':next((line for line in Path('/etc/shadow').read_text().splitlines() if line.startswith(target+':')), '')}
     if action.startswith('user.key.'): state['keys'] = key_operation(target, {'action':'list'})
     if action == 'user.session.end': state['sessions'] = account_sessions.sessions(target)
     return {

@@ -16,7 +16,7 @@ func TestDeviceEventsBaselineAndTransitions(t *testing.T) {
 	}
 	s.recordDevices(map[string]deviceSnapshot{}, nil)
 	alerts, _ = s.Store.Alerts()
-	if len(alerts) != 1 || !alerts[0].Active {
+	if len(alerts) != 1 || alerts[0].Active || alerts[0].Severity != "warning" {
 		t.Fatal("busy disconnect not warned")
 	}
 	s.recordDevices(map[string]deviceSnapshot{}, nil)

@@ -17,6 +17,7 @@ import (
 	"panasms.local/backend/internal/database"
 	"panasms.local/backend/internal/maintenance"
 	"panasms.local/backend/internal/systemops"
+	"strings"
 	"sync"
 	"time"
 )
@@ -55,6 +56,7 @@ type Manager struct {
 	db         *sql.DB
 	mu         sync.Mutex
 	fault      error
+	inspecting bool
 	closing    bool
 	queue      chan work
 	finished   chan struct{}
@@ -122,6 +124,9 @@ func runHelper(ctx context.Context, mode, user string, body any, executable []st
 			Percent     *float64 `json:"percent"`
 			Cancellable *bool    `json:"cancellable"`
 		}
+		if strings.HasPrefix(scanner.Text(), "Unexpected management error:") {
+			log.Printf("management diagnostic: %s", scanner.Text())
+		}
 		if json.Unmarshal(scanner.Bytes(), &update) == nil {
 			if update.Percent != nil && *update.Percent >= 0 && *update.Percent <= 100 {
 				if callback, ok := ctx.Value(percentKey{}).(func(float64)); ok {
@@ -148,6 +153,7 @@ func runHelper(ctx context.Context, mode, user string, body any, executable []st
 	e = cmd.Wait()
 	out := output.Bytes()
 	if e != nil {
+		log.Printf("management helper failed mode=%s: %v", mode, e)
 		return nil, errors.New("System handler unavailable")
 	}
 	if output.overflow || !json.Valid(out) {
@@ -249,6 +255,9 @@ func (m *Manager) execute(w work) {
 	} else if response.Cancelled {
 		status = "cancelled"
 		stage = "Cancelled at a safe point; inspect the result before starting another operation"
+		if response.NoChanges {
+			stage = "Cancelled before start"
+		}
 	} else if response.Error != "" {
 		status = "failed"
 		stage = response.Error
@@ -320,7 +329,7 @@ func (m *Manager) list(filter string, args ...any) ([]Job, error) {
 			return nil, e
 		}
 		j.Result = json.RawMessage(raw)
-		j.NeedsReview = (j.Status == "failed" || j.Status == "interrupted" || (j.Status == "cancelled" && j.Stage != "Cancelled before start")) && !reviewed
+		j.NeedsReview = (j.Status == "failed" || j.Status == "interrupted" || (j.Status == "cancelled" && !strings.HasPrefix(j.Stage, "Cancelled before start"))) && !reviewed
 		if recovery.Valid {
 			j.Recovery = json.RawMessage(recovery.String)
 		}
@@ -512,6 +521,10 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, id auth.Identity
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.inspecting {
+		reply(w, 409, map[string]string{"error": "Wait for recovery inspection to finish"})
+		return
+	}
 	if m.closing {
 		reply(w, 503, map[string]string{"error": "System agent is stopping; retry after restart"})
 		return
@@ -592,7 +605,7 @@ func (m *Manager) Drain() {
 	m.mu.Lock()
 	if !m.closing {
 		m.closing = true
-		if _, err := m.db.Exec("UPDATE jobs SET status='cancelled',stage='Cancelled before start: system agent is stopping',updated=? WHERE status='queued'", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if _, err := m.db.Exec("UPDATE jobs SET status='cancelled',stage='Cancelled before start',updated=? WHERE status='queued'", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			log.Printf("Cannot cancel pending jobs during shutdown: %v", err)
 		}
 		close(m.queue)

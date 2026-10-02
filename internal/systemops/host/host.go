@@ -21,7 +21,7 @@ import (
 )
 
 // serviceUnit matches host.py's service() unit-name rule.
-var serviceUnit = regexp.MustCompile(`^[a-zA-Z0-9_.@:-]+\.service$`)
+var serviceUnit = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.@:-]*\.service$`)
 
 // protectedPrefixes are unit-name prefixes host.py refuses to act on through
 // the panel, protecting the OS and PaNasMs itself from panel-driven changes.

@@ -86,3 +86,12 @@ func TestFingerprintExcludesAllSecretKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestFingerprintExcludesNestedSecrets(t *testing.T) {
+	a, _ := Fingerprint("wifi", map[string]any{"wifi": []any{map[string]any{"ssid": "home", "password": "one"}}}, nil)
+	b, _ := Fingerprint("wifi", map[string]any{"wifi": []any{map[string]any{"ssid": "home", "password": "two"}}}, nil)
+	c, _ := Fingerprint("wifi", map[string]any{"wifi": []any{map[string]any{"ssid": "changed", "password": "one"}}}, nil)
+	if a != b || a == c {
+		t.Fatal("nested secret exclusion changed public state")
+	}
+}

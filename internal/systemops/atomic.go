@@ -1,11 +1,15 @@
 package systemops
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -98,7 +102,13 @@ func backup(path, backupDir string) error {
 	if !info.Mode().IsRegular() {
 		return reject("Configuration is not a regular file")
 	}
-	saved := filepath.Join(backupDir, fmt.Sprintf("%s.%d", filepath.Base(path), time.Now().UnixNano()))
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(absolute)))
+	prefix := filepath.Base(path) + "." + digest[:16] + "."
+	saved := filepath.Join(backupDir, fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()))
 	target, err := os.OpenFile(saved, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
@@ -113,6 +123,9 @@ func backup(path, backupDir string) error {
 	if err := target.Close(); err != nil {
 		return err
 	}
+	if err := pruneBackups(backupDir, prefix); err != nil {
+		return err
+	}
 	return fsyncDir(backupDir)
 }
 
@@ -123,4 +136,32 @@ func fsyncDir(dir string) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+func pruneBackups(dir, prefix string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	type copy struct {
+		name      string
+		timestamp int64
+	}
+	copies := []copy{}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		stamp, err := strconv.ParseInt(strings.TrimPrefix(entry.Name(), prefix), 10, 64)
+		if err == nil {
+			copies = append(copies, copy{entry.Name(), stamp})
+		}
+	}
+	sort.Slice(copies, func(i, j int) bool { return copies[i].timestamp > copies[j].timestamp })
+	for i := 10; i < len(copies); i++ {
+		if err := os.Remove(filepath.Join(dir, copies[i].name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }

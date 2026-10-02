@@ -71,8 +71,8 @@ func (s *Store) EndSession(user, id string) error {
 	return nil
 }
 func (s *Store) Audit(user, actor, action, result string) {
-	s.db.Exec("INSERT INTO account_audit(username,actor,action,result,created) VALUES(?,?,?,?,?)", user, actor, action, result, time.Now().UTC().Format(time.RFC3339))
-	s.db.Exec("DELETE FROM account_audit WHERE id NOT IN(SELECT id FROM account_audit ORDER BY id DESC LIMIT 10000)")
+	s.logWrite("accounts.go", "INSERT INTO account_audit(username,actor,action,result,created) VALUES(?,?,?,?,?)", user, actor, action, result, time.Now().UTC().Format(time.RFC3339))
+	s.logWrite("accounts.go", "DELETE FROM account_audit WHERE id NOT IN(SELECT id FROM account_audit ORDER BY id DESC LIMIT 10000)")
 }
 func (s *Store) History(user string) ([]map[string]string, error) {
 	rows, err := s.db.Query("SELECT username,actor,action,result,created FROM account_audit WHERE username=? ORDER BY id DESC LIMIT 100", user)

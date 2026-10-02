@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"panasms.local/backend/internal/external"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -71,8 +73,14 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 	if !decode(w, r, &body) {
 		return
 	}
-	s.external.Lock()
-	defer s.external.Unlock()
+	initial, initialErr := s.Store.ExternalGrant(body.GrantID)
+	if initialErr != nil {
+		fail(w, 403, "external.grantUnavailable")
+		return
+	}
+	stripe := sha256.Sum256([]byte(initial.ConnectionID))
+	s.external.refresh[stripe[0]%32].Lock()
+	defer s.external.refresh[stripe[0]%32].Unlock()
 	g, err := s.Store.ExternalGrant(body.GrantID)
 	if err != nil || g.Consumer != consumer {
 		fail(w, 403, "external.grantUnavailable")
@@ -112,10 +120,19 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 	}
 	authorization, authorizationErr := s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
 	if errors.Is(authorizationErr, sql.ErrNoRows) && g.Token != nil {
-		authorizationErr = s.Store.SaveAccountAuthorization(g)
+		s.external.Lock()
+		latest, latestErr := s.Store.ExternalGrant(g.ID)
+		latestConfig, latestConfigErr := s.Store.ExternalConfig(owner.Provider)
+		if latestErr != nil || latestConfigErr != nil || latest.Status != "active" || latest.Epoch != g.Epoch || latest.Installation != g.Installation || latest.Revision != config.Revision || latestConfig.Revision != config.Revision || !latestConfig.Enabled {
+			s.external.Unlock()
+			fail(w, 403, "external.grantUnavailable")
+			return
+		}
+		authorizationErr = s.Store.SaveAccountAuthorization(latest)
 		if authorizationErr == nil {
 			authorization, authorizationErr = s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
 		}
+		s.external.Unlock()
 	}
 	if authorizationErr != nil {
 		fail(w, 503, "external.unavailable")
@@ -127,6 +144,22 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 	}
 	g.Token = authorization.Token
 	updated, err := external.RefreshProvider(r.Context(), s.external.client, owner.Provider, config.ClientID, config.ClientSecret, g.Token)
+	// Recheck dynamic authorization after the network call before releasing credentials.
+	_, currentInstallation, enabled := grantInstallation(consumer, g.Capability)
+	currentOwner, e := s.checkedExternalOwner(r.Context(), owner)
+	if !enabled || currentInstallation != installation || e != nil || currentOwner.Epoch != g.Epoch {
+		fail(w, 403, "external.grantUnavailable")
+		return
+	}
+	s.external.Lock()
+	defer s.external.Unlock()
+	currentGrant, grantErr := s.Store.ExternalGrant(g.ID)
+	currentConfig, configErr := s.Store.ExternalConfig(owner.Provider)
+	currentAuth, authErr := s.Store.AccountAuthorization(g.ConnectionID, g.Scope)
+	if grantErr != nil || configErr != nil || authErr != nil || currentGrant.Status != "active" || currentGrant.Installation != g.Installation || currentGrant.Revision != g.Revision || currentConfig.Revision != config.Revision || !currentConfig.Enabled || currentAuth.Status != "active" || currentAuth.Epoch != authorization.Epoch || currentAuth.Revision != authorization.Revision || currentGrant.Epoch != g.Epoch || !reflect.DeepEqual(currentAuth.Token, authorization.Token) {
+		fail(w, 403, "external.grantUnavailable")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, external.ErrReconnect) {
 			if s.Store.InvalidateAccountAuthorization(g.ConnectionID, g.Scope) != nil {
@@ -141,13 +174,6 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 		} else {
 			fail(w, 503, "external.refreshUnavailable")
 		}
-		return
-	}
-	// Recheck dynamic authorization after the network call before releasing credentials.
-	_, currentInstallation, enabled := grantInstallation(consumer, g.Capability)
-	currentOwner, e := s.checkedExternalOwner(r.Context(), owner)
-	if !enabled || currentInstallation != installation || e != nil || currentOwner.Epoch != g.Epoch {
-		fail(w, 403, "external.grantUnavailable")
 		return
 	}
 	g.Token = updated

@@ -112,3 +112,20 @@ func assertErrorResult(t *testing.T, data []byte, want string) {
 		t.Errorf("error = %q, want %q", res.Error, want)
 	}
 }
+
+func TestRunCancellationBeforeMutation(t *testing.T) {
+	var out bytes.Buffer
+	h := func(Mode, string, *Request, *Reporter) (json.RawMessage, error) {
+		return nil, BeforeMutation(ErrCancelled)
+	}
+	if err := Run(ModeExecute, "alice", strings.NewReader(`{"action":"test","params":{}}`), &out, nil, h); err != nil {
+		t.Fatal(err)
+	}
+	var res Result
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Cancelled || !res.NoChanges {
+		t.Fatalf("%+v", res)
+	}
+}

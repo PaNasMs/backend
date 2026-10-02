@@ -14,15 +14,6 @@ import (
 	"strings"
 )
 
-// secretKeys are the parameter names excluded from a fingerprint, matching the
-// Python common.fingerprint exclusion set. Their values never enter the hash so
-// a plan can be confirmed without the secret being pinned into the job record.
-var secretKeys = map[string]bool{
-	"password":        true,
-	"passphrase":      true,
-	"currentPassword": true,
-}
-
 // Fingerprint reproduces backend/management/common.fingerprint byte-for-byte:
 // sha256 over the canonical JSON of [action, publicParams, state], where
 // publicParams drops the secret keys, keys are sorted, separators are "," and
@@ -32,12 +23,7 @@ var secretKeys = map[string]bool{
 // large integers and the integer/boolean distinction survive; passing float64
 // values risks a mismatching hash for big sizes, UIDs or timestamps.
 func Fingerprint(action string, params map[string]any, state any) (string, error) {
-	public := make(map[string]any, len(params))
-	for k, v := range params {
-		if !secretKeys[k] {
-			public[k] = v
-		}
-	}
+	public := redactParams(params)
 	var buf bytes.Buffer
 	if err := canonical(&buf, []any{action, public, state}); err != nil {
 		return "", err
@@ -205,4 +191,27 @@ func Decode(data []byte, v any) error {
 		return fmt.Errorf("multiple JSON values")
 	}
 	return nil
+}
+
+func redactParams(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for key, item := range v {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "password") || strings.Contains(lower, "passphrase") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") {
+				continue
+			}
+			out[key] = redactParams(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = redactParams(item)
+		}
+		return out
+	default:
+		return value
+	}
 }

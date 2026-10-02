@@ -24,7 +24,7 @@ ACTIONS = {
 
 def service(value):
     require(
-        isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9_.@:-]+\.service", value),
+        isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.@:-]*\.service", value),
         'Select a systemd service',
     )
     require(
@@ -73,7 +73,7 @@ def query(view, target):
         if boot != "all":
             args += ["--boot", "0" if boot == "current" else "-1"]
         if target:
-            require(bool(re.fullmatch(r"[a-zA-Z0-9_.@:-]+\.service", target)), 'Invalid service')
+            require(bool(re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.@:-]*\.service", target)), 'Invalid service')
             args += ["--unit", target]
         rows = []
         for line in command(args).splitlines():

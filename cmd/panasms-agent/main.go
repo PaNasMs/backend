@@ -84,10 +84,12 @@ func main() {
 		}
 		json.NewEncoder(w).Encode(id)
 	})
+	var loginAttempts auth.AttemptLimiter
 	mux.HandleFunc("POST /authenticate", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 24000)
 		var body struct {
 			Username    string `json:"username"`
+			ProofOnly   bool   `json:"proofOnly"`
 			Password    string `json:"password"`
 			NewPassword string `json:"newPassword"`
 		}
@@ -97,12 +99,17 @@ func main() {
 			http.Error(w, "invalid request", 400)
 			return
 		}
+		if !loginAttempts.Permit(body.Username, time.Now()) {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "Too many attempts. Wait a minute.", 429)
+			return
+		}
 		id, err := auth.LookupPanel(body.Username, allowed)
+		authErr := auth.Authenticate(body.Username, body.Password)
 		if err != nil {
 			http.Error(w, "authentication failed", 401)
 			return
 		}
-		authErr := auth.Authenticate(body.Username, body.Password)
 		if errors.Is(authErr, auth.ErrPasswordExpired) || (authErr == nil && body.NewPassword != "") {
 			if body.NewPassword == "" {
 				w.Header().Set("Content-Type", "application/json")
@@ -126,9 +133,11 @@ func main() {
 		if body.NewPassword != "" {
 			password = body.NewPassword
 		}
-		if err := profile.SyncSMB(r.Context(), body.Username, password); err != nil {
-			id.SMBSyncWarning = true
-			log.Printf("SMB synchronization failed user=%s", body.Username)
+		if !body.ProofOnly || body.NewPassword != "" {
+			if err := profile.SyncSMB(r.Context(), body.Username, password); err != nil {
+				id.SMBSyncWarning = true
+				log.Printf("SMB synchronization failed user=%s", body.Username)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(id)

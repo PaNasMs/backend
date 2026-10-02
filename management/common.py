@@ -101,9 +101,13 @@ def atomic(path, text, mode=0o600):
     if path.exists():
         backup = Path("/var/lib/panasms-agent/backups")
         backup.mkdir(parents=True, exist_ok=True, mode=0o700)
-        saved = backup / (path.name + "." + str(time.time_ns()))
+        prefix = path.name + "." + hashlib.sha256(str(path.absolute()).encode()).hexdigest()[:16] + "."
+        saved = backup / (prefix + str(time.time_ns()))
         shutil.copyfile(path, saved)
         saved.chmod(0o600)
+        copies = sorted((p for p in backup.iterdir() if p.name.startswith(prefix) and p.name[len(prefix):].isdigit() and p.is_file() and not p.is_symlink()), key=lambda p: int(p.name[len(prefix):]), reverse=True)
+        for old in copies[10:]:
+            old.unlink(missing_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".panasms-", dir=path.parent)
     try:
         os.fchmod(fd, mode)
@@ -121,7 +125,13 @@ def atomic(path, text, mode=0o600):
 
 
 def fingerprint(action, params, state):
-    public = {k: v for k, v in params.items() if k not in ("password", "passphrase", "currentPassword")}
+    def redact(value):
+        if isinstance(value, dict):
+            return {k: redact(v) for k, v in value.items() if not any(secret in k.lower() for secret in ("password", "passphrase", "secret", "token"))}
+        if isinstance(value, list):
+            return [redact(v) for v in value]
+        return value
+    public = redact(params)
     return hashlib.sha256(
         json.dumps([action, public, state], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

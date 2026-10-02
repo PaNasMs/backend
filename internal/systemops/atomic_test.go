@@ -75,3 +75,20 @@ func TestAtomicWriteNoTempLeak(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupRetentionSeparatesSameNamedFiles(t *testing.T) {
+	root := t.TempDir()
+	backups := filepath.Join(root, "backups")
+	for _, folder := range []string{"one", "two"} {
+		path := filepath.Join(root, folder, "config.json")
+		for i := 0; i < 15; i++ {
+			if err := atomicWrite(path, folder, 0600, backups); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	entries, err := os.ReadDir(backups)
+	if err != nil || len(entries) != 20 {
+		t.Fatalf("retained %d: %v", len(entries), err)
+	}
+}

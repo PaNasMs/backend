@@ -89,7 +89,7 @@ func Run(mode Mode, user string, in io.Reader, out io.Writer, r *Reporter, h Han
 	result, err := h(mode, user, req, r)
 	if err != nil {
 		if errors.Is(err, ErrCancelled) {
-			return WriteResult(out, Result{Cancelled: true})
+			return WriteResult(out, Result{Cancelled: true, NoChanges: Unchanged(err)})
 		}
 		return WriteResult(out, Result{Error: messageFor(err), NoChanges: Unchanged(err)})
 	}

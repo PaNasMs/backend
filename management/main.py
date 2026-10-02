@@ -87,7 +87,16 @@ def dispatch(mode, user, request):
             return extensions[0].query(user, target)
         require(view != "files", 'File manager is not installed or is disabled')
         if view in ("storage-options", "raid-candidates", "smart"):
-            return storage.query(view, target)
+            result = storage.query(view, target)
+            if not admin:
+                def redact_device(value):
+                    if isinstance(value, dict):
+                        return {key: redact_device(item) for key, item in value.items() if key not in ('serial', 'wwn')}
+                    if isinstance(value, list):
+                        return [redact_device(item) for item in value]
+                    return value
+                result = redact_device(result)
+            return result
         return host.query(view, target)
     action = request.get("action")
     require(not system_updates.changing() or action == "system.update.rollback", "A system update is in progress; wait for the panel to reconnect")
@@ -140,10 +149,13 @@ if __name__ == "__main__":
         }
     except OSError as error:
         result = {"error": operation_error(error)}
-    except Exception:
+    except Exception as error:
+        import traceback
+        frames = traceback.extract_tb(error.__traceback__)
+        print("Unexpected management error: " + type(error).__name__ + " at " + " -> ".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}:{f.name}" for f in frames), file=sys.stderr)
         result = {
             "error": 'Could not process the operation. Check parameters, object availability and the system journal.'
         }
-    if isinstance(result, dict) and result.get("error") and not mutation_started:
+    if isinstance(result, dict) and (result.get("error") or result.get("cancelled")) and not mutation_started:
         result["noChanges"] = True
     print(json.dumps(result, ensure_ascii=False))

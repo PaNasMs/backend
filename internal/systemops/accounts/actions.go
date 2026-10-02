@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 
 	"panasms.local/backend/internal/systemops"
 )
@@ -152,6 +153,13 @@ func planState(ctx context.Context, action, target string) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
+	selectedShadow := ""
+	for _, line := range strings.Split(shadowText, "\n") {
+		if strings.HasPrefix(line, target+":") {
+			selectedShadow = line
+			break
+		}
+	}
 	db, err := readPolicy()
 	if err != nil {
 		return nil, err
@@ -160,7 +168,7 @@ func planState(ctx context.Context, action, target string) (map[string]any, erro
 		"passwd": passwd,
 		"group":  group,
 		"policy": db,
-		"shadow": shadowText,
+		"shadow": selectedShadow,
 	}
 	if action == "user.key.add" || action == "user.key.delete" {
 		keys, err := keyOperation(ctx, target, KeyRequest{Action: "list"})

@@ -366,3 +366,18 @@ func TestProviderSettingsAreIndependent(t *testing.T) {
 		t.Fatal("saving other provider cancelled Google")
 	}
 }
+
+func TestLoginFlowCapacityPreservesAuthenticatedAndBusyFlows(t *testing.T) {
+	s, _, _ := externalFixture(t)
+	s.external.pending = map[string]*externalFlow{}
+	for i := 0; i < 254; i++ {
+		s.external.pending[strings.Repeat("x", i+1)] = &externalFlow{Purpose: "login", Expires: time.Now().Add(time.Minute)}
+	}
+	s.external.pending["linked"] = &externalFlow{Purpose: "link", Expires: time.Now().Add(time.Minute)}
+	s.external.pending["busy"] = &externalFlow{Purpose: "login", Busy: true, Expires: time.Now().Add(time.Minute)}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, externalRequest("POST", "google/start", `{"purpose":"login"}`))
+	if w.Code != 200 || len(s.external.pending) != 256 || s.external.pending["linked"] == nil || s.external.pending["busy"] == nil {
+		t.Fatal(w.Code, w.Body.String(), len(s.external.pending))
+	}
+}

@@ -676,8 +676,12 @@ def load_operations(kind, name):
         path = ROOT / mid / "backend/operations.py"
         spec = importlib.util.spec_from_file_location("panasms_module_" + mid, path)
         module = importlib.util.module_from_spec(spec)
-        sys.path.insert(0, str(path.parent))
-        spec.loader.exec_module(module)
+        previous_path = sys.path[:]
+        try:
+            sys.path.insert(0, str(path.parent))
+            spec.loader.exec_module(module)
+        finally:
+            sys.path[:] = previous_path
         result.append(module)
     return result
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"panasms.local/backend/internal/cooling"
 	"panasms.local/backend/internal/management"
 	"panasms.local/backend/internal/system"
 	"strings"
@@ -18,7 +17,7 @@ import (
 func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	s.Store.Alert("cpu-hot", "CPU temperature ≥ 80 °C", m.CPUTemperature != nil && *m.CPUTemperature >= 80)
 	s.Store.Alert("system-full", "Less than 5% free space on the system drive", m.SystemTotal > 0 && float64(m.SystemAvailable)/float64(m.SystemTotal) < 0.05)
-	state, e := cooling.Read()
+	state, e := s.readCooling()
 	if e == nil {
 		raw, _ := json.Marshal(state)
 		var v struct {
@@ -152,10 +151,7 @@ func diskSnapshots(storage system.Storage) map[string]deviceSnapshot {
 }
 func (s *Server) deviceEvent(message string, warning bool) {
 	id := fmt.Sprintf("device:%d", time.Now().UnixNano())
-	s.Store.Alert(id, message, true)
-	if !warning {
-		s.Store.Alert(id, message, false)
-	}
+	s.Store.Inform(id, message)
 }
 func (s *Server) monitorDevices(ctx context.Context, jobs []management.Job) {
 	snapshot, err := system.StorageRead(ctx)

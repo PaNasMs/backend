@@ -32,6 +32,7 @@ type externalFlow struct {
 }
 type externalFlows struct {
 	sync.Mutex
+	refresh          [32]sync.Mutex
 	pending          map[string]*externalFlow
 	client           *http.Client
 	exchangeGrant    func(context.Context, *http.Client, string, string, string, string, string, string) (external.Authorization, error)
@@ -127,7 +128,7 @@ func (s *Server) externalReauthenticate(r *http.Request, id auth.Identity, passw
 	if len(password) == 0 || len(password) > 4096 || strings.ContainsAny(password, "\x00\r\n") || !s.permit("external-proof:"+id.Username) {
 		return false
 	}
-	raw, _ := json.Marshal(map[string]string{"username": id.Username, "password": password})
+	raw, _ := json.Marshal(map[string]any{"username": id.Username, "password": password, "proofOnly": true})
 	req, err := http.NewRequestWithContext(r.Context(), "POST", "http://agent/authenticate", bytes.NewReader(raw))
 	if err != nil {
 		return false
@@ -278,8 +279,17 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(s.external.pending) >= 256 {
-		fail(w, 429, "external.tooMany")
-		return
+		oldest := ""
+		for key, pending := range s.external.pending {
+			if pending.Purpose == "login" && !pending.Busy && (oldest == "" || pending.Expires.Before(s.external.pending[oldest].Expires)) {
+				oldest = key
+			}
+		}
+		if oldest == "" {
+			fail(w, 429, "external.tooMany")
+			return
+		}
+		delete(s.external.pending, oldest)
 	}
 	if old, err := r.Cookie("panasms_external_flow"); err == nil {
 		delete(s.external.pending, externalDigest(old.Value))

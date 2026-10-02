@@ -12,6 +12,8 @@ import (
 	"panasms.local/backend/internal/auth"
 )
 
+var wallpaperDecodes = make(chan struct{}, 1)
+
 func (s *Server) wallpaper(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(identityKey{}).(auth.Identity).Username
 	w.Header().Set("Cache-Control", "private, no-store")
@@ -19,6 +21,13 @@ func (s *Server) wallpaper(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch r.Method {
 	case http.MethodPut:
+		select {
+		case wallpaperDecodes <- struct{}{}:
+			defer func() { <-wallpaperDecodes }()
+		default:
+			fail(w, 429, "Too many attempts. Wait a minute.")
+			return
+		}
 		raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 		if readErr != nil {
 			fail(w, 413, "The image must not exceed 8 MiB")

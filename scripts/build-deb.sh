@@ -12,7 +12,7 @@ arch=$(dpkg --print-architecture)
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
 mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/panasms" "$stage/usr/share/panasms/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
-go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
+go build -buildvcs=false -trimpath -ldflags "-X panasms.local/backend/internal/api.BuildVersion=$version" -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
 for helper in panasms-system-helper panasms-keys; do
  go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/$helper" "./cmd/$helper"
 done

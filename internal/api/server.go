@@ -39,6 +39,10 @@ type Server struct {
 	Allowed               map[string]bool
 	Secure                bool
 	Static                string
+	coolingMu             sync.Mutex
+	coolingAt             time.Time
+	coolingState          any
+	coolingErr            error
 	metricsMu             sync.RWMutex
 	metrics               system.Metrics
 	metricsError          bool
@@ -140,6 +144,9 @@ func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
 	}
 	return id, nil
 }
+
+var BuildVersion = "development"
+
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
@@ -160,7 +167,7 @@ func (s *Server) Handler() http.Handler {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'"+healthConnectSource(r.Host)+"; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'"+healthConnectSource(r.Host)+"; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.Header().Set("Cache-Control", "no-store")
 			}
@@ -179,7 +186,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	r.Get("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		allowHealthProbe(w, r)
-		jsonResponse(w, 200, map[string]string{"status": "ok", "version": "0.2.9", "product": "PaNasMs"})
+		jsonResponse(w, 200, map[string]string{"status": "ok", "version": BuildVersion, "product": "PaNasMs"})
 	})
 	r.Post("/api/v1/notification-telegram-relay", s.telegramLinkRelay)
 	r.Post("/api/v1/login", s.login)
@@ -531,7 +538,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if coolingState, err := cooling.Read(); err == nil {
+			if coolingState, err := s.readCooling(); err == nil {
 				if send("cooling", coolingState) != nil {
 					return
 				}
@@ -696,9 +703,7 @@ func (s *Server) manage(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, io.LimitReader(resp.Body, 4<<20))
 }
 
-// tileSize даёт размер плитки в ячейках. Виджеты с постоянным составом
-// перечислены поимённо; у виджетов, которых столько же, сколько устройств,
-// проверяется семейство и ключ, а не полное имя.
+// Device widgets are identified by family and key rather than a fixed name.
 func tileSize(kind string) ([2]int, bool) {
 	sizes := map[string][2]int{"clock": {2, 1}, "cpu": {2, 2}, "hddCooling": {2, 2}, "memory": {2, 2}, "cooling": {2, 2}, "system": {2, 2}, "network": {2, 2}, "systemDisk": {2, 2}, "disks": {2, 2}, "users": {1, 1}, "storage": {1, 1}, "files": {1, 1}, "app-settings": {1, 1}, "app-terminal": {1, 1}, "app-system": {1, 1}, "app-sharing": {1, 1}, "app-history": {1, 1}, "app-modules": {1, 1}, "app-network": {1, 1}}
 	if size, ok := sizes[kind]; ok {
@@ -718,8 +723,7 @@ func tileSize(kind string) ([2]int, bool) {
 	return [2]int{}, false
 }
 
-// Ключ виджета устройства приходит от клиента, поэтому набор символов сужен до
-// того, что встречается в серийных номерах и именах блочных устройств.
+// Restrict client-supplied device keys to characters used in serials and block names.
 func validWidgetKey(key string) bool {
 	if len(key) == 0 || len(key) > 64 {
 		return false
@@ -792,4 +796,14 @@ func validFilePins(pins []string) bool {
 		seen[p] = true
 	}
 	return true
+}
+
+func (s *Server) readCooling() (any, error) {
+	s.coolingMu.Lock()
+	defer s.coolingMu.Unlock()
+	if time.Since(s.coolingAt) >= time.Second {
+		s.coolingState, s.coolingErr = cooling.Read()
+		s.coolingAt = time.Now()
+	}
+	return s.coolingState, s.coolingErr
 }

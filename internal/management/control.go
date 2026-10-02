@@ -63,7 +63,15 @@ func recoveryContext(req Request) string {
 }
 func (m *Manager) inspect(ctx context.Context, id, user string) (json.RawMessage, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			m.mu.Unlock()
+		}
+	}()
+	if m.inspecting {
+		return nil, errors.New("Wait for recovery inspection to finish")
+	}
 	var pending int
 	if err := m.db.QueryRow("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").Scan(&pending); err != nil {
 		return nil, err
@@ -86,6 +94,10 @@ func (m *Manager) inspect(ctx context.Context, id, user string) (json.RawMessage
 	if params["target"] == "" {
 		params["target"] = target
 	}
+	m.inspecting = true
+	m.mu.Unlock()
+	locked = false
+	defer func() { m.mu.Lock(); m.inspecting = false; m.mu.Unlock() }()
 	result, err := m.run(ctx, "recover", user, map[string]any{"action": action, "params": params})
 	if err != nil {
 		return nil, err

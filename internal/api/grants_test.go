@@ -324,3 +324,30 @@ func TestDropboxGrantBindingAndBroker(t *testing.T) {
 		})
 	}
 }
+
+func TestSlowRefreshDoesNotBlockOAuthAndCannotUndoRevocation(t *testing.T) {
+	s, session := grantFixture(t)
+	flow := startGrant(t, s, session)
+	w := finishGrant(s, session, flow)
+	var result map[string]string
+	json.Unmarshal(w.Body.Bytes(), &result)
+	g, err := s.Store.ExternalGrant(result["grantId"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Token.Expiry = time.Now().Add(-time.Hour)
+	s.Store.SaveAccountAuthorization(g)
+	s.external.client = &http.Client{Transport: externalTransport(func(*http.Request) (*http.Response, error) {
+		if !s.external.TryLock() {
+			t.Fatal("network refresh holds OAuth mutex")
+		}
+		defer s.external.Unlock()
+		if err := s.Store.SetGrantStatus(g.ID, "reconnect_required"); err != nil {
+			t.Fatal(err)
+		}
+		return externalJSON(200, map[string]any{"access_token": "fresh", "token_type": "Bearer", "expires_in": 3600}), nil
+	})}
+	if response := tokenGrant(s, g.ID, "cloud-sync", "alice"); response.Code != 403 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+}

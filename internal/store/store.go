@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	_ "github.com/mattn/go-sqlite3"
+	"log"
 	"panasms.local/backend/internal/database"
 	"strconv"
 	"strings"
@@ -187,14 +188,14 @@ func alertSeverity(id, message string) string {
 func (s *Store) Alert(id, message string, active bool) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if active {
-		s.db.Exec("INSERT INTO alerts VALUES(?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET message=excluded.message,active=1,updated=excluded.updated WHERE alerts.active=0 OR alerts.message!=excluded.message", id, message, now, now)
+		s.logWrite("store.go", "INSERT INTO alerts VALUES(?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET message=excluded.message,active=1,updated=excluded.updated WHERE alerts.active=0 OR alerts.message!=excluded.message", id, message, now, now)
 	} else {
-		s.db.Exec("UPDATE alerts SET active=0,updated=? WHERE id=? AND active=1", now, id)
+		s.logWrite("store.go", "UPDATE alerts SET active=0,updated=? WHERE id=? AND active=1", now, id)
 	}
 }
 func (s *Store) Inform(id, message string) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	s.db.Exec("INSERT INTO alerts VALUES(?,?,0,?,?) ON CONFLICT(id) DO NOTHING", id, message, now, now)
+	s.logWrite("store.go", "INSERT INTO alerts VALUES(?,?,0,?,?) ON CONFLICT(id) DO NOTHING", id, message, now, now)
 }
 func (s *Store) Alerts() ([]Alert, error) {
 	rows, e := s.db.Query("SELECT id,message,active,created,updated FROM alerts ORDER BY active DESC,updated DESC LIMIT 200")
@@ -214,8 +215,9 @@ func (s *Store) Alerts() ([]Alert, error) {
 	return data, rows.Err()
 }
 func (s *Store) PruneAlerts(before time.Time) {
-	s.db.Exec("DELETE FROM alerts WHERE active=0 AND updated<?", before.UTC().Format(time.RFC3339))
-	s.db.Exec("DELETE FROM dismissed_alerts WHERE id NOT IN (SELECT id FROM alerts)")
+	s.logWrite("resolve device events", "UPDATE alerts SET active=0 WHERE id LIKE 'device:%' AND active=1")
+	s.logWrite("store.go", "DELETE FROM alerts WHERE active=0 AND updated<?", before.UTC().Format(time.RFC3339))
+	s.logWrite("store.go", "DELETE FROM dismissed_alerts WHERE id NOT IN (SELECT id FROM alerts)")
 }
 
 func alertRevision(a Alert) string { return a.Updated + ":" + strconv.FormatBool(a.Active) }
@@ -281,4 +283,10 @@ func (s *Store) SaveWallpaper(user string, data []byte) (string, error) {
 	version := digest(string(data))
 	_, err := s.db.Exec("INSERT INTO wallpapers VALUES(?,?,?) ON CONFLICT(username) DO UPDATE SET version=excluded.version,image=excluded.image", user, version, data)
 	return version, err
+}
+
+func (s *Store) logWrite(operation, query string, args ...any) {
+	if _, err := s.db.Exec(query, args...); err != nil {
+		log.Printf("Store write failed (%s): %v", operation, err)
+	}
 }

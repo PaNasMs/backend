@@ -128,3 +128,31 @@ func TestValidationFailureDoesNotRequireRecovery(t *testing.T) {
 		t.Fatal("validation failure cannot be cleared")
 	}
 }
+
+func TestInspectionDoesNotHoldManagerMutex(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	defer m.Drain()
+	if _, err = m.db.Exec("INSERT INTO jobs VALUES('broken','alice','file.copy','/srv/a','interrupted','stage','now','now','{}')"); err != nil {
+		t.Fatal(err)
+	}
+	m.run = func(context.Context, string, string, any) (json.RawMessage, error) {
+		if !m.mu.TryLock() {
+			t.Fatal("recovery blocks the entire manager")
+		}
+		defer m.mu.Unlock()
+		if !m.inspecting {
+			t.Fatal("new mutations not guarded")
+		}
+		return json.RawMessage(`{"state":"unchanged"}`), nil
+	}
+	if _, err = m.inspect(context.Background(), "broken", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if m.inspecting {
+		t.Fatal("guard not released")
+	}
+}

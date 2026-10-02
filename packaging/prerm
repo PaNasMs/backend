@@ -45,10 +45,11 @@ CHECK
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' panasms-network-recovery.service || true
   systemctl disable panasms-network-recovery.service panasms-raid-recovery.service || true
-  systemctl stop 'panasms-module-*.service' || true
-  systemctl disable 'panasms-module-*.service' || true
-  systemctl stop 'panasms-smart-*.timer' || true
-  systemctl disable 'panasms-smart-*.timer' || true
+  # disable accepts no globs: enumerate the module services and SMART timers.
+  for unit in $(systemctl list-unit-files 'panasms-module-*.service' 'panasms-smart-*.timer' --no-legend 2>/dev/null | awk '{print $1}'); do
+   systemctl disable --now "$unit" || true
+  done
+  systemctl stop 'panasms-module-*.service' 'panasms-smart-*.timer' || true
   systemctl stop panasms-disk-sleep.timer panasms-disk-sleep.service || true
   systemctl disable panasms-disk-sleep.timer || true
   python3 /usr/lib/panasms/management/disk_sleep.py --disable || true

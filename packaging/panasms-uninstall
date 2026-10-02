@@ -15,14 +15,22 @@ if mode not in ('--plan', '--remove', '--purge'):
 owned = ['/etc/panasms/panasms.env', '/etc/panasms/web.env', '/var/lib/panasms-agent/web-access.json', '/etc/panasms/tls.key', '/etc/panasms/tls.crt', '/etc/panasms/https.enabled',
          '/var/lib/panasms-agent/jobs.db', '/var/lib/panasms-agent/jobs.db-wal', '/var/lib/panasms-agent/jobs.db-shm', '/var/lib/panasms-agent/jobs.db.initialized',
          '/var/lib/panasms/state.db', '/var/lib/panasms/state.db-wal', '/var/lib/panasms/state.db-shm', '/var/lib/panasms/state.db.initialized']
-print('PaNasMs services, binaries, UI and PAM service configuration will be removed.')
-print('Module services are stopped; purge also removes uploaded archives, module code and registry. User files remain.')
+# Dependencies that keep user storage and shares working after the panel is gone.
+# apt would otherwise offer them for autoremove.
+tools = ['mdadm', 'parted', 'e2fsprogs', 'dosfstools', 'exfatprogs', 'xfsprogs', 'btrfs-progs', 'cryptsetup-bin',
+         'cifs-utils', 'nfs-common', 'nfs-kernel-server', 'samba', 'samba-common-bin', 'smbclient', 'smartmontools',
+         'hdparm', 'rsync', 'acl', 'network-manager']
+print('PaNasMs services, binaries and UI will be removed; the PAM service file /etc/pam.d/panasms is removed on purge.')
+print('Module services are stopped and disabled; purge also removes uploaded archives, module code and registry. User files remain.')
+print('Shared folders published by the panel are unpublished (their SMB/NFS definitions are removed); the folders and files remain.')
+print('Storage and sharing tools stay installed and are marked as manually installed so that apt autoremove keeps them:', ', '.join(tools))
 print('Purge additionally removes:', ', '.join(owned))
 print('The independent panasms-cooling package/service is retained to keep the disks cooled.')
 print('Linux account expiry, login shells and /etc/ssh/sshd_config.d/60-panasms-users.conf are retained as OS access policy.')
 print('LUKS keys and crypttab entries are retained to preserve access to encrypted volumes.')
 print('RAID recovery files are retained; finish conversions before removing the panel.')
 print('Linux user data, RAID, filesystems, mounts, other packages and system journal are preserved.')
+sys.stdout.flush()
 if mode == '--plan':
     subprocess.run(['dpkg-query', '-L', 'panasms-prototype'], check=False)
     sys.exit(0)
@@ -38,6 +46,9 @@ except KeyError:
     account = None
 if account and (account.pw_gecos != 'PaNasMs prototype service' or account.pw_dir != '/nonexistent'):
     sys.exit('Service account identity differs from installer record; inspect manually.')
+automatic = subprocess.run(['apt-mark', 'showauto'] + tools, capture_output=True, text=True, check=False).stdout.split()
+if automatic:
+    subprocess.run(['apt-mark', 'manual'] + automatic, check=True)
 subprocess.run(['apt-get', '-y', 'purge' if mode == '--purge' else 'remove', 'panasms-prototype'], check=True)
 if mode == '--remove':
     sys.exit(0)

@@ -22,7 +22,7 @@ type Identity struct {
 	Created        string `json:"created"`
 }
 
-func Lookup(username string, allowed map[string]bool) (Identity, error) {
+func LookupPanel(username string, allowed map[string]bool) (Identity, error) {
 	if (allowed != nil && !allowed[username]) || username == "" || strings.HasPrefix(username, "-") {
 		return Identity{}, errors.New("access denied")
 	}

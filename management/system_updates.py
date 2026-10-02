@@ -2,17 +2,20 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import http.client
+import socket
 import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
+import ssl
 import subprocess
 import tempfile
 import time
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from common import Rejected, require, json, fingerprint
 
 ROOT = Path('/var/lib/panasms-updates')
@@ -23,6 +26,7 @@ ACTIVE = {'queued', 'checking', 'downloading', 'preparing', 'backing-up', 'insta
 CHANGING = {'preparing', 'backing-up', 'installing', 'verifying', 'rolling-back'}
 ACTIONS = {'system.update.settings', 'system.update.check', 'system.update.download', 'system.update.install', 'system.update.rollback'}
 PACKAGES = {'panasms-prototype'}
+MAINTENANCE = Path('/run/lock/panasms-maintenance.lock')
 
 
 def atomic(path, text):
@@ -91,6 +95,21 @@ def locked():
     with (ROOT/'lock').open('a') as f:
         fcntl.flock(f,fcntl.LOCK_EX)
         yield
+
+
+@contextmanager
+def maintenance():
+    fd = os.open(MAINTENANCE, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Rejected('Active requests or tasks prevent maintenance; wait and retry')
+        os.environ['PANASMS_MAINTENANCE'] = '1'
+        yield
+    finally:
+        os.environ.pop('PANASMS_MAINTENANCE', None)
+        os.close(fd)
 
 
 def query():
@@ -231,6 +250,25 @@ def preflight(version, worker=False):
         require(not rows,'Wait for active operations: '+', '.join(f'{a} ({t})' for a,t in rows))
 
 
+def module_idle():
+    registry=Path('/var/lib/panasms-modules/registry.json')
+    if not registry.exists():return
+    for mid, manifest in json.loads(registry.read_text()).items():
+        if not manifest.get('enabled') or not manifest.get('service'):continue
+        require(re.fullmatch(r'[a-z][a-z0-9-]{0,63}',mid),'Invalid installed module ID')
+        if subprocess.run(['systemctl','is-active','--quiet','panasms-module-'+mid+'.service']).returncode != 0:continue
+        conn=http.client.HTTPConnection('localhost',timeout=3)
+        conn.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);conn.sock.settimeout(3)
+        try:
+            conn.sock.connect('/run/panasms-modules/'+mid+'.sock')
+            conn.request('GET','/health');response=conn.getresponse()
+            require(response.status==200,'Cannot check active tasks in module '+mid)
+            data=json.loads(response.read(8192))
+            require(data.get('maintenanceVersion')==1,'Update module '+mid+' to a maintenance-aware version before updating the system')
+            require(data.get('active')==0,'Wait for active module tasks: '+mid)
+        finally:conn.close()
+
+
 def download(entry):
     phase('downloading',version=entry['version'])
     arch=run(['dpkg','--print-architecture']).strip();current=installed()
@@ -258,7 +296,7 @@ def download(entry):
 def apt_plan(paths):
     text=run(['apt-get','--simulate','--no-remove','install',*paths])
     require(not re.search(r'^Remv ',text,re.M),'The update would remove system packages')
-    changes=re.findall(r'^Inst (\S+) \[',text,re.M)
+    changes=re.findall(r'^Inst (\S+)',text,re.M)
     require(all(name.split(':')[0] in PACKAGES for name in changes),'Update system dependencies separately before installing this PaNasMs version: '+', '.join(changes))
 
 
@@ -281,16 +319,22 @@ def start(units):
 def healthy():
     port='80';p=Path('/etc/panasms/web.env')
     if p.exists():port=p.read_text().strip().removeprefix('PANASMS_HTTP_PORT=')
-    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    tls=Path('/etc/panasms/https.enabled').exists()
+    handlers=[urllib.request.ProxyHandler({})]
+    if tls:
+        context=ssl.create_default_context(cafile='/etc/panasms/tls.crt');context.check_hostname=False
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener=urllib.request.build_opener(*handlers)
+    base=f'{"https" if tls else "http"}://127.0.0.1:{port}'
     for _ in range(45):
         try:
-            with opener.open(f'http://127.0.0.1:{port}/api/v1/health',timeout=2) as r:
+            with opener.open(base+'/api/v1/health',timeout=2) as r:
                 good=json.load(r).get('status')=='ok'
-            with opener.open(f'http://127.0.0.1:{port}/',timeout=2) as r:html=r.read(65536)
+            with opener.open(base+'/',timeout=2) as r:html=r.read(65536)
             assets=re.findall(rb'(?:src|href)="(/assets/[^"]+\.(?:js|css))"',html)
             require(bool(assets),'UI assets are missing')
             for asset in assets:
-                with opener.open(f'http://127.0.0.1:{port}'+asset.decode(),timeout=2) as r:
+                with opener.open(base+asset.decode(),timeout=2) as r:
                     require('text/html' not in r.headers.get('Content-Type',''),'UI asset was replaced by an HTML error page')
             if good and b'<html' in html and all(subprocess.run(['systemctl','is-active','--quiet',u],check=False).returncode==0 for u in ('panasms-core','panasms-agent')):
                 for p in (Path('/var/lib/panasms/state.db'),Path('/var/lib/panasms-agent/jobs.db')):
@@ -338,13 +382,16 @@ def restore(boot=False):
 
 
 def work():
-    with locked():
+    with locked(), ExitStack() as guards:
         s=read('state.json',{})
         if s.get('phase')!='queued':return
         time.sleep(4)
         op=s['operation'];units=[];mutated=False
         try:
             if op=='rollback':
+                guards.enter_context(maintenance())
+                module_idle()
+                preflight(read('backup.json',{})['version'],worker=True)
                 mutated=True
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore();finish('rolled-back');return
             data=check()
@@ -358,6 +405,9 @@ def work():
             phase('preparing');preflight(entry['version'],worker=True)
             apt_plan(paths)
             run(['apt-get','--download-only','--yes','--no-remove','install',*paths],timeout=1800)
+            guards.enter_context(maintenance())
+            module_idle()
+            preflight(entry['version'],worker=True)
             units=services();save('active-units.json',units)
             stop(units);backup(units)
             phase('installing');mutated=True
@@ -382,7 +432,8 @@ def recover(boot=True):
         s=read('state.json',{})
         if s.get('phase') in ('installing','verifying','rolling-back'):
             try:
-                os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore(boot=boot)
+                os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
+                with maintenance():restore(boot=boot)
                 finish('rolled-back','Interrupted update restored during boot')
             except Exception as e:finish('recovery-required',str(e));raise
         elif s.get('phase') in ACTIVE:

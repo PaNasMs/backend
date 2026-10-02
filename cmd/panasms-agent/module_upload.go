@@ -14,7 +14,7 @@ import (
 
 func moduleUpload(allowed map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, e := auth.Lookup(r.URL.Query().Get("user"), allowed)
+		id, e := auth.LookupPanel(r.URL.Query().Get("user"), allowed)
 		if e != nil || id.Role != "admin" {
 			http.Error(w, "access denied", 403)
 			return

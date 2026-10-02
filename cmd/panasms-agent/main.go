@@ -54,6 +54,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer manager.Drain()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /update-feed", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := os.ReadFile("/var/lib/panasms-updates/public.json")
@@ -76,7 +77,7 @@ func main() {
 	mux.HandleFunc("POST /module-upload", moduleUpload(allowed))
 	mux.HandleFunc("/profile", profileHandler(allowed))
 	mux.HandleFunc("GET /account-check", func(w http.ResponseWriter, r *http.Request) {
-		id, err := auth.Lookup(r.URL.Query().Get("user"), allowed)
+		id, err := auth.LookupPanel(r.URL.Query().Get("user"), allowed)
 		if err != nil || auth.AccountAllowed(id.Username) != nil {
 			http.Error(w, "account unavailable", 403)
 			return
@@ -96,7 +97,7 @@ func main() {
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		id, err := auth.Lookup(body.Username, allowed)
+		id, err := auth.LookupPanel(body.Username, allowed)
 		if err != nil {
 			http.Error(w, "authentication failed", 401)
 			return
@@ -134,7 +135,7 @@ func main() {
 	})
 
 	mux.HandleFunc("/cooling", func(w http.ResponseWriter, r *http.Request) {
-		if id, err := auth.Lookup(r.URL.Query().Get("user"), allowed); err != nil || (r.Method != "GET" && id.Role != "admin") {
+		if id, err := auth.LookupPanel(r.URL.Query().Get("user"), allowed); err != nil || (r.Method != "GET" && id.Role != "admin") {
 			http.Error(w, "access denied", 403)
 			return
 		}

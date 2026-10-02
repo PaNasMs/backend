@@ -19,7 +19,7 @@ func TestBrowserHarness(t *testing.T) {
 	}
 	user := os.Getenv("USER")
 	allowed := map[string]bool{user: true}
-	if _, e := auth.Lookup(user, allowed); e != nil {
+	if _, e := auth.LookupPanel(user, allowed); e != nil {
 		t.Fatal(e)
 	}
 	db, e := store.Open(filepath.Join(t.TempDir(), "state.db"))

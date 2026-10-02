@@ -10,7 +10,7 @@ REGISTRY = ROOT / "registry.json"
 UPLOADS = Path("/var/lib/panasms-agent/module-uploads")
 KEYS = Path("/etc/panasms/module-keys")
 UNITS = Path("/etc/systemd/system")
-CORE = "0.2.9"
+CORE = "0.2.10"
 ACTIONS = {"module.recover", "module.install", "module.enable", "module.disable", "module.remove"}
 
 
@@ -242,6 +242,11 @@ def resolve(requested, available, installed):
             not constraint or satisfies(candidate["version"], constraint),
             'Incompatible dependency version for ' + mid + ': requires ' + str(constraint),
         )
+        if mid in available and mid in installed:
+            require(candidate.get('signer') == installed[mid].get('signer'),
+                    'Module publisher differs from the installed publisher: ' + mid)
+            require(version(candidate['version']) >= version(installed[mid]['version']),
+                    'Module downgrade is not supported: ' + mid)
         if mid in visited:
             return
         visiting.add(mid)
@@ -434,6 +439,7 @@ RuntimeDirectory=panasms-modules
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 KillMode=control-group
+Environment=PANASMS_MAINTENANCE_LOCK=/run/lock/panasms-maintenance.lock
 UMask=0077
 NoNewPrivileges={'no' if m.get('userShell') else 'yes'}
 PrivateTmp=yes

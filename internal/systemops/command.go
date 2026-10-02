@@ -59,7 +59,8 @@ type CommandOptions struct {
 	Input []byte
 	// Accepted lists exit codes treated as success. Empty means {0}.
 	Accepted []int
-	// Timeout overrides DefaultTimeout when non-zero.
+	// Timeout overrides DefaultTimeout for read-only commands. Mutations finish
+	// at domain safe points; this duration is a progress watchdog, not a kill deadline.
 	Timeout time.Duration
 	// Reporter, when set and Operation is true, receives the per-command stage
 	// before the command runs, matching PANASMS_OPERATION=1 behavior.
@@ -113,7 +114,19 @@ func Command(ctx context.Context, args []string, opts CommandOptions) ([]byte, e
 	cmd.Stdout = &stdout
 	cmd.Stderr = nil // discard: never surface raw command output
 
+	var watchdog *time.Timer
+	var watched chan struct{}
+	if opts.Operation && opts.Reporter != nil {
+		watched = make(chan struct{})
+		watchdog = time.AfterFunc(timeout, func() {
+			defer close(watched)
+			opts.Reporter.Stage(fmt.Sprintf("Command %s is taking longer than expected; waiting for a safe completion", filepath.Base(args[0])))
+		})
+	}
 	err := cmd.Run()
+	if watchdog != nil && !watchdog.Stop() {
+		<-watched
+	}
 	if stdout.overflow {
 		return nil, reject("Command output too large; check the operation result")
 	}

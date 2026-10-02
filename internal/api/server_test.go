@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
 	"path/filepath"
@@ -222,3 +224,62 @@ func TestNetworkTaskbarPreference(t *testing.T) {
 		t.Fatal("network shortcut rejected")
 	}
 }
+
+func TestLimiterCapacityDoesNotLockOutAllUsers(t *testing.T) {
+	s := testServer(t)
+	for i := 0; i < 1024; i++ {
+		if !s.permit(fmt.Sprint(i)) {
+			t.Fatal("initial request rejected")
+		}
+	}
+	if !s.permit("new-user") {
+		t.Fatal("full map blocked a new user")
+	}
+	if len(s.attempts) != 1024 {
+		t.Fatalf("unbounded limiter: %d", len(s.attempts))
+	}
+	for i := 0; i < 4; i++ {
+		if !s.permit("new-user") {
+			t.Fatal("early rejection")
+		}
+	}
+	if s.permit("new-user") {
+		t.Fatal("per-key limit bypassed")
+	}
+	if !s.permit("another-user") {
+		t.Fatal("one user's limit blocks others")
+	}
+}
+
+func TestIdentityUsesAgentAndChecksSessionEpoch(t *testing.T) {
+	s := testServer(t)
+	token, err := s.Store.Session("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.SessionDetails(token, 1000, "epoch", "", "test"); err != nil {
+		t.Fatal(err)
+	}
+	s.lookupIdentity = func(string, map[string]bool) (auth.Identity, error) {
+		t.Fatal("duplicate OS lookup")
+		return auth.Identity{}, nil
+	}
+	epoch := "epoch"
+	s.Agent = &http.Client{Transport: identityTransport(func(r *http.Request) (*http.Response, error) {
+		raw := fmt.Sprintf(`{"username":"alice","uid":1000,"role":"user","epoch":%q}`, epoch)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw)), Header: http.Header{}}, nil
+	})}
+	req := httptest.NewRequest("GET", "/api/v1/session", nil)
+	req.AddCookie(&http.Cookie{Name: "panasms_session", Value: token})
+	if _, err := s.Identity(req); err != nil {
+		t.Fatal(err)
+	}
+	epoch = "revoked"
+	if _, err := s.Identity(req); err == nil {
+		t.Fatal("revoked session accepted")
+	}
+}
+
+type identityTransport func(*http.Request) (*http.Response, error)
+
+func (f identityTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

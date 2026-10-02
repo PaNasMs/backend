@@ -127,7 +127,7 @@ func main() {
 					if e != nil {
 						continue
 					}
-					id, e := auth.Lookup(account.Username, allowed)
+					id, e := auth.LookupPanel(account.Username, allowed)
 					if e == nil && id.Role == "admin" {
 						startWorker(account)
 					}
@@ -136,7 +136,7 @@ func main() {
 			}
 		}()
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			identity, e := auth.Lookup(r.URL.Query().Get("user"), allowed)
+			identity, e := auth.LookupPanel(r.URL.Query().Get("user"), allowed)
 			if e != nil || identity.Role != "admin" {
 				respond(w, 403, "Administrator permissions required")
 				return

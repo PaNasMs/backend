@@ -14,6 +14,7 @@ import (
 	"os"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/cooling"
+	"panasms.local/backend/internal/maintenance"
 	"panasms.local/backend/internal/modules"
 	"panasms.local/backend/internal/notify"
 	"panasms.local/backend/internal/store"
@@ -54,7 +55,7 @@ func New(db *store.Store, socket, static string, allowed map[string]bool, secure
 	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
-	return &Server{external: newExternalFlows(), lookupIdentity: auth.Lookup, ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
+	return &Server{external: newExternalFlows(), lookupIdentity: auth.LookupPanel, ModuleClient: modules.Client, Store: db, Agent: &http.Client{Transport: t, Timeout: 15 * time.Second}, Allowed: allowed, Secure: secure, Static: static, attempts: map[string][]time.Time{}}
 }
 func (s *Server) Run(ctx context.Context) {
 	go s.runDelivery(ctx)
@@ -118,13 +119,6 @@ func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
 	if e != nil {
 		return auth.Identity{}, e
 	}
-	id, err := s.lookupIdentity(username, s.Allowed)
-	if err != nil {
-		return auth.Identity{}, err
-	}
-	if !s.Store.SessionMatches(cookie.Value, id.UID, id.Epoch) {
-		return auth.Identity{}, fmt.Errorf("session revoked")
-	}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", "http://agent/account-check?user="+url.QueryEscape(username), nil)
 	if err != nil {
 		return auth.Identity{}, err
@@ -137,10 +131,30 @@ func (s *Server) Identity(r *http.Request) (auth.Identity, error) {
 	if response.StatusCode != 200 {
 		return auth.Identity{}, fmt.Errorf("account unavailable")
 	}
+	var id auth.Identity
+	if json.NewDecoder(io.LimitReader(response.Body, 16384)).Decode(&id) != nil || id.Username != username || (id.Role != "admin" && id.Role != "user") {
+		return auth.Identity{}, fmt.Errorf("invalid account identity")
+	}
+	if !s.Store.SessionMatches(cookie.Value, id.UID, id.Epoch) {
+		return auth.Identity{}, fmt.Errorf("session revoked")
+	}
 	return id, nil
 }
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/health" && r.URL.Path != "/api/v1/events" {
+				release, err := maintenance.Acquire()
+				if err != nil {
+					fail(w, 503, err.Error())
+					return
+				}
+				defer release()
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -400,19 +414,24 @@ func (s *Server) permit(address string) bool {
 			s.attempts[k] = kept
 		}
 	}
-	if len(s.attempts) >= 1024 || len(s.attempts[address]) >= 5 {
+	if len(s.attempts[address]) >= 5 {
 		return false
+	}
+	if _, exists := s.attempts[address]; !exists && len(s.attempts) >= 1024 {
+		var oldest string
+		var last time.Time
+		for key, entries := range s.attempts {
+			recent := entries[len(entries)-1]
+			if last.IsZero() || recent.Before(last) {
+				oldest, last = key, recent
+			}
+		}
+		delete(s.attempts, oldest)
 	}
 	s.attempts[address] = append(s.attempts[address], now)
 	return true
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	addr, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if !s.permit(addr) {
-		w.Header().Set("Retry-After", "60")
-		fail(w, 429, "Too many attempts. Wait a minute.")
-		return
-	}
 	var body struct {
 		Username    string `json:"username"`
 		Password    string `json:"password"`
@@ -423,6 +442,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.NewPassword) > 4096 || strings.ContainsAny(body.NewPassword, "\x00\r\n") || len(body.Username) > 64 || len(body.Password) > 4096 || body.Password == "" || strings.ContainsRune(body.Password, 0) || strings.ContainsRune(body.Username, 0) {
 		fail(w, 400, "Check your username and password")
+		return
+	}
+	addr, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !s.permit("login:" + addr + ":" + body.Username) {
+		w.Header().Set("Retry-After", "60")
+		fail(w, 429, "Too many attempts. Wait a minute.")
 		return
 	}
 	b, _ := json.Marshal(body)

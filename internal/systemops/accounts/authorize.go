@@ -3,7 +3,7 @@ package accounts
 import "panasms.local/backend/internal/auth"
 
 func Authorize(username string) (auth.Identity, error) {
-	id, err := auth.Lookup(username, nil)
+	id, err := auth.LookupPanel(username, nil)
 	if err != nil {
 		return id, reject("Panel access is disabled or the Linux account is unavailable")
 	}

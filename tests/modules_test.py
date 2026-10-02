@@ -14,6 +14,16 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_upload_preserves_publisher_and_prevents_downgrade(self):
+        installed = {'files': {'version': '1.2.0', 'signer': 'official'}}
+        for candidate, message in [
+            ({'version': '1.3.0', 'signer': 'third-party'}, 'publisher'),
+            ({'version': '1.1.0', 'signer': 'official'}, 'downgrade'),
+        ]:
+            with self.assertRaisesRegex(Rejected, message):
+                m.resolve('files', {'files': candidate}, installed)
+        self.assertEqual(m.resolve('files', {'files': {'version': '1.3.0', 'signer': 'official'}}, installed), ['files'])
+
     def test_service_can_drop_to_user_without_privilege_escalation(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(m,'UNITS',Path(folder)), patch.object(m,'atomic',side_effect=lambda path,text,mode: path.write_text(text)):
             m.write_unit({'id':'files','service':'bin/server'})

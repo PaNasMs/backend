@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +18,13 @@ func TestLanguagePreferenceValidationAndLegacyClient(t *testing.T) {
 	}
 	s := testServer(t)
 	s.Allowed[current.Username] = true
-	id, err := auth.Lookup(current.Username, s.Allowed)
+	id, err := auth.LookupPanel(current.Username, s.Allowed)
 	if err != nil {
 		t.Skip("requires a normal sudo test runner", err)
 	}
+	rawIdentity, _ := json.Marshal(id)
 	s.Agent = &http.Client{Transport: accountTestTransport(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(rawIdentity))), Header: make(http.Header)}, nil
 	})}
 	token, err := s.Store.Session(current.Username)
 	if err != nil {

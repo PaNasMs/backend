@@ -2,6 +2,7 @@ package webaccess
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -174,5 +175,23 @@ func TestHealthRejectsErrorStatus(t *testing.T) {
 	port, _ := strconv.Atoi(text)
 	if healthy(port) {
 		t.Fatal("accepted HTTP error as healthy")
+	}
+}
+
+func TestHTTPSHealthChecksPinnedLocalCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"status":"ok"}`)) }))
+	defer server.Close()
+	_, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	dir := t.TempDir()
+	enabled, cert := filepath.Join(dir, "enabled"), filepath.Join(dir, "cert")
+	os.WriteFile(enabled, nil, 0600)
+	os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600)
+	if !healthWithTLS(port, enabled, cert) {
+		t.Fatal("valid HTTPS health rejected")
+	}
+	os.WriteFile(cert, []byte("not a certificate"), 0600)
+	if healthWithTLS(port, enabled, cert) {
+		t.Fatal("invalid certificate accepted")
 	}
 }

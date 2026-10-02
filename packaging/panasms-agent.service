@@ -3,6 +3,7 @@ Description=PaNasMs restricted system authentication agent
 After=local-fs.target
 
 [Service]
+Environment=PANASMS_MAINTENANCE_LOCK=/run/lock/panasms-maintenance.lock
 User=root
 Group=panasms
 EnvironmentFile=/etc/panasms/panasms.env
@@ -11,6 +12,8 @@ ExecStartPre=-/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/bin/python3 /usr/l
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/module_manager.py --recover
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing.py --recover
 ExecStart=/usr/lib/panasms/start-agent
+KillMode=mixed
+TimeoutStopSec=30min
 Restart=on-failure
 RestartSec=3
 StateDirectory=panasms-agent

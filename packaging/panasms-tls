@@ -1,0 +1,54 @@
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import socket
+import ipaddress
+import subprocess
+import sys
+import tempfile
+sys.path.insert(0, '/usr/lib/panasms/management')
+import system_updates as updates
+
+if os.geteuid() != 0 or len(sys.argv) not in (2, 4) or sys.argv[1] not in ('enable', 'disable'):
+    raise SystemExit('Usage: sudo panasms-tls enable [CERTIFICATE KEY] | disable')
+root = Path('/etc/panasms')
+with updates.maintenance():
+    updates.module_idle()
+    updates.preflight(updates.installed()['panasms-prototype'], worker=True)
+    paths=[root/'tls.crt',root/'tls.key',root/'https.enabled']
+    previous={path:(path.read_bytes(),path.stat().st_mode & 0o777,path.stat().st_uid,path.stat().st_gid) if path.exists() else None for path in paths}
+    try:
+        if sys.argv[1] == 'enable':
+            with tempfile.TemporaryDirectory(dir=root) as folder:
+                cert, key = Path(folder)/'tls.crt', Path(folder)/'tls.key'
+                if len(sys.argv) == 4:
+                    cert.write_bytes(Path(sys.argv[2]).read_bytes()); key.write_bytes(Path(sys.argv[3]).read_bytes())
+                else:
+                    host = socket.gethostname()
+                    if not all(c.isalnum() or c in '.-' for c in host):raise SystemExit('Invalid hostname')
+                    addresses=subprocess.check_output(['hostname','-I'],text=True).split()
+                    sans=[f'DNS:{host}',f'DNS:{host}.local','IP:127.0.0.1']
+                    for address in addresses:sans.append('IP:'+str(ipaddress.ip_address(address)))
+                    subprocess.run(['openssl','req','-x509','-newkey','rsa:3072','-nodes','-days','365','-subj','/CN='+host,
+                                    '-addext','subjectAltName='+','.join(sans),
+                                    '-keyout',str(key),'-out',str(cert)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                pub = subprocess.check_output(['openssl','x509','-in',str(cert),'-pubkey','-noout'])
+                require_pub = subprocess.check_output(['openssl','pkey','-in',str(key),'-pubout'])
+                if pub != require_pub:raise SystemExit('Certificate and private key do not match')
+                subprocess.run(['openssl','x509','-checkend','0','-noout','-in',str(cert)],check=True)
+                import grp
+                for path in (cert,key):os.chown(path,0,grp.getgrnam('panasms').gr_gid);os.chmod(path,0o640)
+                cert.replace(root/'tls.crt');key.replace(root/'tls.key')
+            (root/'https.enabled').touch(mode=0o644)
+        else:
+            (root/'https.enabled').unlink(missing_ok=True)
+        subprocess.run(['systemctl','restart','panasms-core'],check=True)
+        updates.healthy()
+    except BaseException:
+        for path, saved in previous.items():
+            if saved is None:path.unlink(missing_ok=True)
+            else:
+                data,mode,uid,gid=saved;path.write_bytes(data);os.chmod(path,mode);os.chown(path,uid,gid)
+        subprocess.run(['systemctl','restart','panasms-core'],check=False)
+        raise
+print('Protocol changed. Open the same NAS address and port using '+('https' if sys.argv[1]=='enable' else 'http')+'.')

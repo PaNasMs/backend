@@ -53,7 +53,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
-	if target, err := auth.Lookup(user, s.Allowed); err != nil {
+	if target, err := auth.LookupPanel(user, s.Allowed); err != nil {
 		s.Store.RevokeUser(user)
 	} else {
 		s.Store.PruneSessions(user, target.UID, target.Epoch)

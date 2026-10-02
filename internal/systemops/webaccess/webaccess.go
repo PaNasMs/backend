@@ -2,7 +2,10 @@ package webaccess
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -313,8 +316,39 @@ func available(port int) error {
 	return nil
 }
 func healthy(port int) bool {
-	client := http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", port))
+	return healthWithTLS(port, "/etc/panasms/https.enabled", "/etc/panasms/tls.crt")
+}
+func healthWithTLS(port int, enabled, certificate string) bool {
+	scheme := "http"
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
+	if _, err := os.Stat(enabled); err == nil {
+		raw, err := os.ReadFile(certificate)
+		if err != nil {
+			return false
+		}
+		block, _ := pem.Decode(raw)
+		if block == nil {
+			return false
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return false
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(raw) {
+			return false
+		}
+		name := "127.0.0.1"
+		if len(cert.DNSNames) > 0 {
+			name = cert.DNSNames[0]
+		} else if len(cert.IPAddresses) > 0 {
+			name = cert.IPAddresses[0].String()
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, ServerName: name, MinVersion: tls.VersionTLS12}
+		scheme = "https"
+	}
+	client := http.Client{Timeout: time.Second, Transport: transport}
+	resp, err := client.Get(fmt.Sprintf("%s://127.0.0.1:%d/api/v1/health", scheme, port))
 	if err != nil {
 		return false
 	}

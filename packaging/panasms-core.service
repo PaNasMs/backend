@@ -4,12 +4,13 @@ After=network.target panasms-agent.service
 Requires=panasms-agent.service
 
 [Service]
+Environment=PANASMS_MAINTENANCE_LOCK=/run/lock/panasms-maintenance.lock
 User=panasms
 Group=panasms
 EnvironmentFile=/etc/panasms/panasms.env
 Environment=PANASMS_HTTP_PORT=80
 EnvironmentFile=-/etc/panasms/web.env
-ExecStart=/usr/lib/panasms/panasms-core -listen :${PANASMS_HTTP_PORT} -allow-http
+ExecStart=/usr/lib/panasms/start-core
 Restart=on-failure
 RestartSec=3
 RuntimeDirectory=panasms-core

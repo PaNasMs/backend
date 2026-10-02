@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+if [ -f /etc/panasms/https.enabled ]; then
+ exec /usr/lib/panasms/panasms-core -listen ":${PANASMS_HTTP_PORT:-80}" -cert /etc/panasms/tls.crt -key /etc/panasms/tls.key
+fi
+exec /usr/lib/panasms/panasms-core -listen ":${PANASMS_HTTP_PORT:-80}" -allow-http

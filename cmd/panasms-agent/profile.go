@@ -12,7 +12,7 @@ import (
 
 func profileHandler(allowed map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := auth.Lookup(r.URL.Query().Get("user"), allowed)
+		id, err := auth.LookupPanel(r.URL.Query().Get("user"), allowed)
 		if err != nil {
 			http.Error(w, "access denied", 403)
 			return

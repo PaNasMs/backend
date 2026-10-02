@@ -1,4 +1,6 @@
 import datetime as dt
+import fcntl
+import os
 import importlib
 import json
 from pathlib import Path
@@ -15,9 +17,22 @@ class Updates(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
+        (self.root/'maintenance.lock').touch()
+        guard=patch.object(u,'MAINTENANCE',self.root/'maintenance.lock');guard.start();self.addCleanup(guard.stop)
         for obj,name,value in [(u,'ROOT',self.root),(u,'CONFIG',self.root/'config.json'),(u,'installed',lambda:{'panasms-prototype':'0.2.5'}),(u.time,'sleep',lambda _:None)]:
             p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
         u.save('state.json',{'id':'test','phase':'queued','operation':'install','version':'0.2.6'})
+    def test_maintenance_excludes_active_operation_and_new_submissions(self):
+        with u.MAINTENANCE.open() as operation:
+            fcntl.flock(operation, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(Rejected, 'Active requests'):
+                with u.maintenance():pass
+        with u.maintenance():
+            self.assertEqual(os.environ.get('PANASMS_MAINTENANCE'), '1')
+            with u.MAINTENANCE.open() as operation:
+                with self.assertRaises(BlockingIOError):fcntl.flock(operation,fcntl.LOCK_SH|fcntl.LOCK_NB)
+        self.assertNotIn('PANASMS_MAINTENANCE',os.environ)
+
     def test_channel_and_compatibility(self):
         with self.assertRaises(Rejected):u.settings({'channel':'other','mode':'auto','hour':3})
         self.assertTrue(u.constraints('0.2.6~dev.123','>=0.2.0,<0.3.0'))
@@ -27,7 +42,7 @@ class Updates(unittest.TestCase):
     def test_dependency_replacement_and_removal_blocked(self):
         for text in ('Inst libc6 [2.1] (2.2 repo)','Remv samba [1.0]'):
             with patch.object(u,'run',return_value=text),self.assertRaises(Rejected):u.apt_plan(['/a.deb'])
-        with patch.object(u,'run',return_value='Inst panasms-prototype [0.2.5] (0.2.6 local)\nInst new-dependency (1.0 repo)'):u.apt_plan(['/a.deb'])
+        with patch.object(u,'run',return_value='Inst panasms-prototype [0.2.5] (0.2.6 local)\nInst new-dependency (1.0 repo)'),self.assertRaises(Rejected):u.apt_plan(['/a.deb'])
     def transaction(self, failure=False):
         events=[];version=['0.2.5']
         def run(args,**kw):
@@ -60,7 +75,8 @@ class Updates(unittest.TestCase):
         self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
     def test_failed_manual_restore_keeps_recovery_required(self):
         u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.5'})
-        with patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
+        u.save('backup.json',{'version':'0.2.5'})
+        with patch.object(u,'preflight'), patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
         self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
         self.assertTrue(u.changing())
 

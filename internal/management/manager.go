@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/database"
+	"panasms.local/backend/internal/maintenance"
 	"panasms.local/backend/internal/systemops"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ type Manager struct {
 	db         *sql.DB
 	mu         sync.Mutex
 	fault      error
+	closing    bool
 	queue      chan work
 	finished   chan struct{}
 	wake       chan struct{}
@@ -74,7 +76,7 @@ func helperArgs(mode, user string, executable []string) []string {
 
 func runHelper(ctx context.Context, mode, user string, body any, executable []string) (json.RawMessage, error) {
 	if req, ok := body.(Request); ok && req.actor != nil {
-		current, err := auth.Lookup(user, nil)
+		current, err := auth.LookupPanel(user, nil)
 		if err != nil || current.UID != req.actor.UID || current.Epoch != req.actor.Epoch || current.Principal != req.actor.Principal {
 			return json.RawMessage(`{"error":"Account identity or access has changed; request a new operation plan","noChanges":true}`), nil
 		}
@@ -191,7 +193,7 @@ func Open(path string) (*Manager, error) {
 }
 func (m *Manager) execute(w work) {
 	m.mu.Lock()
-	if m.fault != nil {
+	if m.fault != nil || m.closing {
 		m.mu.Unlock()
 		return
 	}
@@ -223,7 +225,12 @@ func (m *Manager) execute(w work) {
 			m.fail(err)
 		}
 	})
-	result, err := m.run(ctx, "execute", w.Job.User, w.Request)
+	var result json.RawMessage
+	release, err := maintenance.Acquire()
+	if err == nil {
+		defer release()
+		result, err = m.run(ctx, "execute", w.Job.User, w.Request)
+	}
 	status := "succeeded"
 	stage := "Done"
 	var response struct {
@@ -363,7 +370,7 @@ func reply(w http.ResponseWriter, status int, v any) {
 func (m *Manager) Handler(allowed map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := r.URL.Query().Get("user")
-		id, e := auth.Lookup(user, allowed)
+		id, e := auth.LookupPanel(user, allowed)
 		if e != nil {
 			reply(w, 403, map[string]string{"error": "Access denied"})
 			return
@@ -505,6 +512,10 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, id auth.Identity
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closing {
+		reply(w, 503, map[string]string{"error": "System agent is stopping; retry after restart"})
+		return
+	}
 	if m.fault != nil {
 		reply(w, 503, map[string]string{"error": "Task journal unavailable. Restore database access and restart the agent; inspect interrupted operations before retrying."})
 		return
@@ -574,4 +585,18 @@ func ownsJob(id auth.Identity, username, created string) bool {
 	}
 	when, e := time.Parse(time.RFC3339Nano, created)
 	return e == nil && !when.Before(since)
+}
+
+// Drain preserves active mutations during an orderly service stop.
+func (m *Manager) Drain() {
+	m.mu.Lock()
+	if !m.closing {
+		m.closing = true
+		if _, err := m.db.Exec("UPDATE jobs SET status='cancelled',stage='Cancelled before start: system agent is stopping',updated=? WHERE status='queued'", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			log.Printf("Cannot cancel pending jobs during shutdown: %v", err)
+		}
+		close(m.queue)
+	}
+	m.mu.Unlock()
+	<-m.finished
 }

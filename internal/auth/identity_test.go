@@ -4,7 +4,7 @@ import "testing"
 
 func TestDenyUnlistedAndRoot(t *testing.T) {
 	for _, name := range []string{"root", "nobody", "-u", "unlisted"} {
-		if _, e := Lookup(name, map[string]bool{"root": true, "nobody": true, "-u": true}); e == nil {
+		if _, e := LookupPanel(name, map[string]bool{"root": true, "nobody": true, "-u": true}); e == nil {
 			t.Fatal("unexpected authorization", name)
 		}
 	}
@@ -16,7 +16,7 @@ func TestAccessPolicy(t *testing.T) {
 		t.Fatal("sudo policy must use live group membership", err)
 	}
 	for _, name := range []string{"root", "nobody", "-u", ""} {
-		if _, err := Lookup(name, p); err == nil {
+		if _, err := LookupPanel(name, p); err == nil {
 			t.Fatal("protected or non-admin account accepted", name)
 		}
 	}

@@ -4,10 +4,15 @@ set -eu
 if [ "$#" != 0 ]; then
  [ "$#" = 2 ] && [ "$1" = --port ] || { echo 'Usage: panasms-configure [--port PORT]' >&2; exit 1; }
 fi
+if [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
+ exec /usr/sbin/panasms-maintenance /usr/sbin/panasms-configure "$@"
+fi
 /usr/lib/panasms/panasms-system-helper check-admin
 port=$(/usr/lib/panasms/panasms-system-helper web-access --configure "$@")
 udevadm control --reload-rules
 systemctl enable panasms-network-sharing.service panasms-network-recovery.service panasms-agent.service panasms-core.service
 systemctl restart panasms-network-sharing.service
 systemctl restart panasms-agent.service panasms-core.service
-printf 'PaNasMs: http://panasms.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$port"
+scheme=http
+[ ! -f /etc/panasms/https.enabled ] || scheme=https
+printf 'PaNasMs: %s://panasms.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$scheme" "$port"

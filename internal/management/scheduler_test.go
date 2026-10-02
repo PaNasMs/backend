@@ -125,3 +125,47 @@ func TestQueuedExclusiveWorkRunsBeforeLaterReaders(t *testing.T) {
 		t.Fatal("exclusive queue order lost")
 	}
 }
+
+func TestDrainWaitsForMutationAndCancelsQueuedWork(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	started, release := make(chan struct{}), make(chan struct{})
+	m.run = func(context.Context, string, string, any) (json.RawMessage, error) {
+		close(started)
+		<-release
+		return json.RawMessage(`{}`), nil
+	}
+	for _, id := range []string{"active", "pending"} {
+		_, err := m.db.Exec("INSERT INTO jobs VALUES(?,'alice','disk.prepare','target','queued','stage','now','now','{}')", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.queue <- work{Job: Job{ID: id, User: "alice"}, Request: Request{ID: id, Action: "disk.prepare"}}
+		if id == "active" {
+			<-started
+		}
+	}
+	stopped := make(chan struct{})
+	go func() { m.Drain(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("shutdown interrupted mutation")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown failed to drain")
+	}
+	for id, want := range map[string]string{"active": "succeeded", "pending": "cancelled"} {
+		var status string
+		m.db.QueryRow("SELECT status FROM jobs WHERE id=?", id).Scan(&status)
+		if status != want {
+			t.Fatalf("%s: %s", id, status)
+		}
+	}
+}

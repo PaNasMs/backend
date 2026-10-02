@@ -17,7 +17,7 @@ var thumbnailSlots = make(chan struct{}, 2)
 
 func filesHandler(allowed map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, e := auth.Lookup(r.URL.Query().Get("user"), allowed)
+		id, e := auth.LookupPanel(r.URL.Query().Get("user"), allowed)
 		if e != nil {
 			http.Error(w, "access denied", 403)
 			return

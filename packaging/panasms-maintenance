@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+import os
+import subprocess
+import sys
+sys.path.insert(0, '/usr/lib/panasms/management')
+import system_updates as updates
+
+if os.geteuid() != 0 or len(sys.argv) < 2:
+    raise SystemExit('Usage: sudo panasms-maintenance COMMAND [ARGUMENTS...]')
+with updates.maintenance():
+    updates.module_idle()
+    current = updates.installed().get('panasms-prototype')
+    if current:
+        updates.preflight(current, worker=True)
+    raise SystemExit(subprocess.call(sys.argv[1:]))

@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 case "${1:-}" in remove|upgrade|deconfigure)
+ if [ "$1" = upgrade ] && [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
+  echo 'Package replacement requires exclusive maintenance. Use the panel updater or panasms-maintenance.' >&2
+  exit 1
+ fi
  python3 - <<'CHECK'
 import sqlite3, json, os
 from pathlib import Path

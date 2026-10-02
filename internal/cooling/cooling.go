@@ -81,7 +81,7 @@ func Read() (any, error) {
 		_ = json.Unmarshal(raw, &status)
 	}
 	observed, _ := status["observedAt"].(float64)
-	return map[string]any{"config": cfg.Settings, "status": status, "available": time.Now().Unix()-int64(observed) < 5}, nil
+	return map[string]any{"config": cfg.Settings, "capabilities": DetectCapabilities("/"), "status": status, "available": time.Now().Unix()-int64(observed) < 5}, nil
 }
 func Save(settings Settings) error {
 	if err := Validate(settings); err != nil {
@@ -101,6 +101,9 @@ func Save(settings Settings) error {
 	old := normalize(cfg.Settings)
 	if settings.HardwareMode == "" {
 		settings.HardwareMode, settings.ControlGPIO, settings.TachGPIO = old.HardwareMode, old.ControlGPIO, old.TachGPIO
+	}
+	if err := validateCapabilities(old, settings, DetectCapabilities("/")); err != nil {
+		return err
 	}
 	cfg.Settings = settings
 	raw, err = json.MarshalIndent(cfg, "", "  ")

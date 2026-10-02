@@ -35,9 +35,23 @@ def inspect(root=Path('/sys')):
         if device_class and device_class.startswith('0x0106'):
             sata.append({'path': str(p.resolve()), 'vendor': read(p/'vendor'), 'device': read(p/'device'),
                          'driver': (p/'driver').resolve().name if (p/'driver').exists() else None})
+    zone = root/'class/thermal/thermal_zone0'
+    def text(path):
+        try:
+            return path.read_text().strip().strip('\0')
+        except OSError:
+            return ''
+    cpu_control = text(zone/'type') == 'cpu-thermal' and all(
+        text(zone/f'trip_point_{i}_type') == 'active' and
+        (zone/f'trip_point_{i}_temp').exists() and
+        (zone/f'trip_point_{i}_temp').stat().st_mode & 0o200
+        for i in range(1, 5))
+    disk_control = text(root/'firmware/devicetree/base/model').startswith('Raspberry Pi 5 Model') and any(
+        text(p) == 'pinctrl-rp1' for p in (root/'class/gpio').glob('gpiochip*/label')) and any(Path('/dev').glob('gpiochip*'))
     return {'version': 1, 'observedAt': datetime.now(timezone.utc).isoformat(),
             'fanControllers': fans, 'thermalCoolingDevices': cooling, 'pwmControllers': pwm,
             'temperatureSensors': temperatures, 'sataControllers': sata, 'errors': errors,
+            'supportedCooling': {'cpu': bool(cpu_control), 'disk': bool(disk_control)},
             'coolingControl': 'unchanged', 'fanAssignment': 'requires physical verification',
             'note': 'Read-only detection. PWM presence does not prove a connected fan. No PWM export, GPIO, I2C probes or driver changes are performed.'}
 

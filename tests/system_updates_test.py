@@ -33,6 +33,11 @@ class Updates(unittest.TestCase):
                 with self.assertRaises(BlockingIOError):fcntl.flock(operation,fcntl.LOCK_SH|fcntl.LOCK_NB)
         self.assertNotIn('PANASMS_MAINTENANCE',os.environ)
 
+    def test_supported_os_requires_explicit_distribution_version_and_arch(self):
+        for distro, version, arch, expected in [('debian','13','amd64',True), ('raspbian','13','arm64',True), ('ubuntu','24.04','amd64',True), ('ubuntu','24.04','arm64',False), ('ubuntu','22.04','amd64',False), ('other','13','amd64',False)]:
+            with self.subTest(distro=distro,version=version,arch=arch):
+                self.assertEqual(u.supported_os(f'ID={distro}\nVERSION_ID="{version}"\n',arch), expected)
+
     def test_channel_and_compatibility(self):
         with self.assertRaises(Rejected):u.settings({'channel':'other','mode':'auto','hour':3})
         self.assertTrue(u.constraints('0.2.6~dev.123','>=0.2.0,<0.3.0'))

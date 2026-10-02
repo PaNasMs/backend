@@ -229,10 +229,17 @@ def constraints(actual, required):
     return True
 
 
+def supported_os(info, arch):
+    values = dict(line.split('=', 1) for line in info.splitlines() if '=' in line)
+    distro = values.get('ID', '').strip('"')
+    version = values.get('VERSION_ID', '').strip('"')
+    return (distro in ('debian', 'raspbian') and version == '13' and arch in ('arm64', 'amd64')) or (distro == 'ubuntu' and version == '24.04' and arch == 'amd64')
+
+
 def preflight(version, worker=False):
     require(run(['dpkg','--audit']).strip()=='','Repair the interrupted Debian package operation before updating PaNasMs')
     require(shutil.disk_usage(ROOT if ROOT.exists() else ROOT.parent).free>1024**3,'At least 1 GiB of free space is required for update and rollback')
-    require(Path('/etc/os-release').read_text().find('VERSION_ID="13"')>=0 or '\nVERSION_ID=13\n' in Path('/etc/os-release').read_text(),'Updates require Debian 13 or Raspberry Pi OS based on Debian 13')
+    require(supported_os(Path('/etc/os-release').read_text(), run(['dpkg','--print-architecture']).strip()),'Updates require Debian 13 / Raspberry Pi OS 13, or Ubuntu 24.04 LTS AMD64')
     registry=Path('/var/lib/panasms-modules/registry.json')
     if registry.exists():
         incompatible=[m.get('title',mid) for mid,m in json.loads(registry.read_text()).items() if not constraints(version,m.get('core','>=0.0.0'))]

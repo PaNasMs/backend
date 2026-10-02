@@ -79,3 +79,39 @@ func TestUnsupportedControlChanges(t *testing.T) {
 		t.Fatal("cannot disable missing hardware", err)
 	}
 }
+
+func TestReadWithoutOptionalController(t *testing.T) {
+	state, err := readState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := state.(map[string]any)
+	if data["configured"] != false || data["available"] != false {
+		t.Fatal(data)
+	}
+	if caps := data["capabilities"].(Capabilities); caps.CPU || caps.Disk {
+		t.Fatal(caps)
+	}
+	if settings := data["config"].(Settings); settings.HardwareMode != "none" {
+		t.Fatal(settings)
+	}
+}
+
+func TestReadPreservesLegacyWiring(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, configPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"profile":"balanced","sampleSeconds":60}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := state.(map[string]any)["config"].(Settings)
+	if cfg.HardwareMode != "external-pwm" || cfg.ControlGPIO != 27 {
+		t.Fatal(cfg)
+	}
+}

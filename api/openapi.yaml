@@ -1818,6 +1818,9 @@ components:
       - status
       - available
       properties:
+        configured:
+          type: boolean
+          description: Whether the optional cooling/telemetry controller has a configuration on this host.
         capabilities:
           type: object
           required: [cpu, disk]

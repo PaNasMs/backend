@@ -73,7 +73,7 @@ CLEAN
  rmdir /var/lib/panasms-agent 2>/dev/null || true
  rmdir /etc/panasms /var/lib/panasms 2>/dev/null || true
  if [ -f /var/lib/panasms-installer/created-user ]; then
-  echo 'Dedicated locked service account panasms retained. Use panasms-uninstall --purge for checked account cleanup, or keep it for reinstall.'
+  echo 'Dedicated locked service account panasms retained for a later reinstall. To remove it, check that no files are owned by it (find / -xdev -user panasms) and run: sudo deluser --system panasms'
  fi
  echo 'User data, Linux users, RAID, mounts and system journal preserved.'
 fi

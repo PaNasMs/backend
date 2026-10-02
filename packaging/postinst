@@ -29,6 +29,7 @@ case "${1:-}" in
    echo 'Hardware inspection unavailable; the panel will detect capabilities at runtime.' >&2
   fi
   python3 /usr/lib/panasms/sharing-install.py
+  python3 /usr/lib/panasms/management/sharing.py --republish >/dev/null || echo 'Shared folders kept from the previous installation were not republished; use Restore in Shared folders.' >&2
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
   systemctl daemon-reload
   udevadm control --reload-rules

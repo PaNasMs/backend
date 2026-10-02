@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -33,6 +35,36 @@ func TestProtectedEndpoints(t *testing.T) {
 		s.Handler().ServeHTTP(w, r)
 		if w.Code != 401 {
 			t.Fatalf("%s: %d", p, w.Code)
+		}
+	}
+}
+func TestMaintenanceAllowsPassiveEventsButBlocksOperations(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "maintenance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	t.Setenv("PANASMS_MAINTENANCE_LOCK", file.Name())
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t)
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{"GET", "events", 401},
+		{"GET", "module-api/containers/events", 401},
+		{"POST", "module-api/containers/events", 503},
+		{"GET", "module-api/containers/jobs", 503},
+		{"POST", "module-api/containers/action", 503},
+		{"GET", "module-api/other/events", 503},
+		{"GET", "terminal", 503},
+	} {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(tc.method, "/api/v1/"+tc.path, nil))
+		if w.Code != tc.status {
+			t.Errorf("%s %s: got %d, want %d", tc.method, tc.path, w.Code, tc.status)
 		}
 	}
 }

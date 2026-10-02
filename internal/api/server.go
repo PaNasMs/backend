@@ -151,7 +151,8 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/health" && r.URL.Path != "/api/v1/events" {
+			passive := r.Method == http.MethodGet && (r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/module-api/containers/events")
+			if strings.HasPrefix(r.URL.Path, "/api/") && !passive {
 				release, err := maintenance.Acquire()
 				if err != nil {
 					fail(w, 503, err.Error())

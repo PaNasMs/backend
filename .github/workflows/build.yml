@@ -15,3 +15,4 @@ jobs:
     with:
       build_ref: 148c1ce89a194a4f50aef2b699be3b717b026572
       backend_ref: ${{ github.sha }}
+      frontend_ref: 87ee7515196f4c448e60aeb9177837b748871c0a

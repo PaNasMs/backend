@@ -10,6 +10,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingTest(unittest.TestCase):
+    def test_upgrade_accepts_empty_gecos_fields_but_rejects_other_accounts(self):
+        script = (ROOT / "packaging/postinst").read_text()
+        check = script.split('  install -d -o root -g panasms', 1)[0] + ' ;;\nesac\n'
+        for gecos, home, shell, expected in [
+            ("PaNasMs prototype service", "/nonexistent", "/usr/sbin/nologin", 0),
+            ("PaNasMs prototype service,,,", "/nonexistent", "/usr/sbin/nologin", 0),
+            ("PaNasMs prototype service,,,,", "/nonexistent", "/usr/sbin/nologin", 0),
+            ("PaNasMs prototype service,Other", "/nonexistent", "/usr/sbin/nologin", 1),
+            ("Other account", "/nonexistent", "/usr/sbin/nologin", 1),
+            ("PaNasMs prototype service", "/home/panasms", "/usr/sbin/nologin", 1),
+            ("PaNasMs prototype service", "/nonexistent", "/bin/bash", 1),
+        ]:
+            with self.subTest(gecos=gecos, home=home, shell=shell), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                for name, body in {
+                    "getent": '#!/bin/sh\nprintf "%s\\n" "$TEST_ACCOUNT"\n',
+                    "usermod": '#!/bin/sh\nprintf "%s\\n" "$*" > "$TEST_NORMALIZED"\n',
+                }.items():
+                    command = root / name
+                    command.write_text(body)
+                    command.chmod(0o755)
+                normalized = root / "normalized"
+                result = subprocess.run(["sh", "-c", check, "postinst", "configure"],
+                    env=dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"],
+                        TEST_ACCOUNT=f"panasms:x:111:112:{gecos}:{home}:{shell}", TEST_NORMALIZED=str(normalized)), capture_output=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected == 0:
+                    self.assertEqual(normalized.read_text().strip(), "--comment PaNasMs prototype service panasms")
+                else:
+                    self.assertFalse(normalized.exists())
+
     def test_invalid_ci_versions_fail_before_building(self):
         with tempfile.TemporaryDirectory() as folder:
             assets = Path(folder)

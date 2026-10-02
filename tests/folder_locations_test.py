@@ -52,5 +52,27 @@ class FolderLocationsTest(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, 'parent folder'):
             locations.destination(Path('/nonexistent-home-policy-test/homes'))
 
+    def test_data_policy_rejects_system_disk_but_accepts_data_volume(self):
+        with self.assertRaisesRegex(Rejected, 'system disk'):
+            locations.data_volume(Path('/home/docker'), self.state())
+        self.assertEqual(locations.data_volume(Path('/srv/data/docker'), self.state())['target'], '/srv/data')
+
+    def test_btrfs_pseudo_device_uses_uuid_and_preserves_removable_rejection(self):
+        for usb in (False, True):
+            responses = [
+                {'filesystems': [{'target': '/srv/data', 'fstype': 'btrfs', 'options': 'rw', 'maj:min': '0:46', 'uuid': 'test-fs'}]},
+                {'filesystems': [{'target': '/srv/data', 'options': 'defaults'}]},
+                {'blockdevices': [{'name': 'sda', 'maj:min': '8:0', 'type': 'disk', 'tran': 'sata', 'children': [
+                    {'name': 'sda1', 'maj:min': '8:1', 'type': 'part', 'fstype': 'btrfs', 'uuid': 'test-fs'}]},
+                    {'name': 'sdb', 'maj:min': '8:16', 'type': 'disk', 'tran': 'usb' if usb else 'sata', 'fstype': 'btrfs', 'uuid': 'test-fs'}]},
+            ]
+            with self.subTest(usb=usb), patch.object(locations, 'json_command', side_effect=responses):
+                state = locations.inventory()
+            if usb:
+                with self.assertRaisesRegex(Rejected, 'USB'):
+                    locations.data_volume(Path('/srv/data/docker'), state)
+            else:
+                self.assertEqual(locations.data_volume(Path('/srv/data/docker'), state)['maj:min'], '0:46')
+
 if __name__ == '__main__':
     unittest.main()

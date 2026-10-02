@@ -41,6 +41,7 @@ var queryViews = map[string]impl{
 	"sharing":           legacy,
 	"share-folders":     legacy,
 	"home-folders":      legacy,
+	"data-folders":      legacy,
 	"mount-folders":     legacy,
 	"network":           legacy,
 	"homes-check":       legacy,

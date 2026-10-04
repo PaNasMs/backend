@@ -706,7 +706,7 @@ func (s *Server) manage(w http.ResponseWriter, r *http.Request) {
 
 // Device widgets are identified by family and key rather than a fixed name.
 func tileSize(kind string) ([2]int, bool) {
-	sizes := map[string][2]int{"clock": {2, 1}, "cpu": {2, 2}, "hddCooling": {2, 2}, "memory": {2, 2}, "cooling": {2, 2}, "system": {2, 2}, "network": {2, 2}, "systemDisk": {2, 2}, "disks": {2, 2}, "users": {1, 1}, "storage": {1, 1}, "files": {1, 1}, "app-settings": {1, 1}, "app-terminal": {1, 1}, "app-system": {1, 1}, "app-sharing": {1, 1}, "app-history": {1, 1}, "app-modules": {1, 1}, "app-network": {1, 1}}
+	sizes := map[string][2]int{"clock": {2, 1}, "cpu": {2, 2}, "hddCooling": {2, 2}, "arrays": {2, 2}, "memory": {2, 2}, "cooling": {2, 2}, "system": {2, 2}, "network": {2, 2}, "systemDisk": {2, 2}, "disks": {2, 2}, "users": {1, 1}, "storage": {1, 1}, "files": {1, 1}, "app-settings": {1, 1}, "app-terminal": {1, 1}, "app-system": {1, 1}, "app-sharing": {1, 1}, "app-history": {1, 1}, "app-modules": {1, 1}, "app-network": {1, 1}}
 	if size, ok := sizes[kind]; ok {
 		return size, true
 	}

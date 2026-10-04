@@ -33,6 +33,38 @@ class Updates(unittest.TestCase):
                 with self.assertRaises(BlockingIOError):fcntl.flock(operation,fcntl.LOCK_SH|fcntl.LOCK_NB)
         self.assertNotIn('PANASMS_MAINTENANCE',os.environ)
 
+    def test_terminal_stop_releases_shared_lock_before_maintenance(self):
+        with u.MAINTENANCE.open() as terminal:
+            fcntl.flock(terminal,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            def stop(units):
+                self.assertEqual(units,['panasms-module-terminal.service'])
+                fcntl.flock(terminal,fcntl.LOCK_UN)
+            with patch.object(u,'stop',side_effect=stop):
+                u.stop_terminals(['core','panasms-module-terminal.service'])
+            with u.maintenance(drain=True):
+                with u.MAINTENANCE.open() as new_request:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(new_request,fcntl.LOCK_SH|fcntl.LOCK_NB)
+
+    def test_other_active_work_still_blocks_and_terminal_service_is_restored(self):
+        with u.MAINTENANCE.open() as operation:
+            fcntl.flock(operation,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            events=self.transaction()
+        self.assertEqual(u.read('state.json',{})['phase'],'failed')
+        self.assertIn('terminal-stop',events)
+        self.assertIn('start',events)
+        self.assertNotIn('backup',events)
+        self.assertNotIn('install',events)
+
+    def test_manual_rollback_stops_terminals_before_restore(self):
+        u.save('state.json',{'id':'test','phase':'queued','operation':'rollback'})
+        u.save('backup.json',{'version':'0.2.5'})
+        events=[]
+        with patch.object(u,'preflight'), patch.object(u,'module_idle'), patch.object(u,'services',return_value=['core','panasms-module-terminal.service']), patch.object(u,'stop',side_effect=lambda units:events.append(('stop',units))), patch.object(u,'restore',side_effect=lambda:events.append(('restore',None))):
+            u.work()
+        self.assertEqual(events,[('stop',['panasms-module-terminal.service']),('restore',None)])
+        self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
+
     def test_supported_os_requires_explicit_distribution_version_and_arch(self):
         for distro, version, arch, expected in [('debian','13','amd64',True), ('raspbian','13','arm64',True), ('ubuntu','24.04','amd64',True), ('ubuntu','24.04','arm64',False), ('ubuntu','22.04','amd64',False), ('other','13','amd64',False)]:
             with self.subTest(distro=distro,version=version,arch=arch):
@@ -60,8 +92,8 @@ class Updates(unittest.TestCase):
         patches={
             'check':lambda:{'releases':[{'version':'0.2.6','rollbackCompatible':True}]},
             'download':lambda e:['/new.deb'], 'preflight':lambda *a,**k:events.append('preflight'),
-            'apt_plan':lambda p:events.append('apt-plan'), 'services':lambda:['core'],
-            'stop':lambda p:events.append('stop'), 'backup':lambda p:events.append('backup'),
+            'apt_plan':lambda p:events.append('apt-plan'), 'services':lambda:['core','panasms-module-terminal.service'],
+            'stop':lambda p:events.append('terminal-stop' if p==['panasms-module-terminal.service'] else 'stop'), 'backup':lambda p:events.append('backup'),
             'start':lambda p:events.append('start'), 'healthy':health,
             'restore':lambda:events.append('restore'), 'run':run,
             'installed':lambda:{'panasms-prototype':version[0]},
@@ -70,6 +102,8 @@ class Updates(unittest.TestCase):
         return events
     def test_success_orders_backup_before_install(self):
         events=self.transaction()
+        self.assertLess(events.index('terminal-stop'),events.index('stop'))
+        self.assertIn('panasms-module-terminal.service',u.read('active-units.json',[]))
         self.assertLess(events.index('stop'),events.index('backup'))
         self.assertLess(events.index('backup'),events.index('install'))
         self.assertEqual(u.read('state.json',{})['phase'],'complete')
@@ -81,7 +115,7 @@ class Updates(unittest.TestCase):
     def test_failed_manual_restore_keeps_recovery_required(self):
         u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.5'})
         u.save('backup.json',{'version':'0.2.5'})
-        with patch.object(u,'preflight'), patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
+        with patch.object(u,'preflight'), patch.object(u,'services',return_value=[]), patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
         self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
         self.assertTrue(u.changing())
 

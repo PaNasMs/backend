@@ -98,13 +98,17 @@ def locked():
 
 
 @contextmanager
-def maintenance():
+def maintenance(drain=False):
     fd = os.open(MAINTENANCE, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Rejected('Active requests or tasks prevent maintenance; wait and retry')
+        for attempt in range(21 if drain else 1):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if not drain or attempt == 20:
+                    raise Rejected('Active requests or tasks prevent maintenance; wait and retry')
+                time.sleep(0.1)
         os.environ['PANASMS_MAINTENANCE'] = '1'
         yield
     finally:
@@ -314,6 +318,13 @@ def services():
     return [u for u in units if subprocess.run(['systemctl','is-active','--quiet',u],check=False).returncode==0]
 
 
+def stop_terminals(units):
+    terminal='panasms-module-terminal.service'
+    if terminal in units:
+        # systemd stops the whole cgroup, including shell children, before backup.
+        stop([terminal])
+
+
 def stop(units):
     if units:run(['systemctl','stop',*units],timeout=90)
 
@@ -396,7 +407,10 @@ def work():
         op=s['operation'];units=[];mutated=False
         try:
             if op=='rollback':
-                guards.enter_context(maintenance())
+                preflight(read('backup.json',{})['version'],worker=True)
+                units=services();save('active-units.json',units)
+                stop_terminals(units)
+                guards.enter_context(maintenance(drain=True))
                 module_idle()
                 preflight(read('backup.json',{})['version'],worker=True)
                 mutated=True
@@ -412,10 +426,11 @@ def work():
             phase('preparing');preflight(entry['version'],worker=True)
             apt_plan(paths)
             run(['apt-get','--download-only','--yes','--no-remove','install',*paths],timeout=1800)
-            guards.enter_context(maintenance())
+            units=services();save('active-units.json',units)
+            stop_terminals(units)
+            guards.enter_context(maintenance(drain=True))
             module_idle()
             preflight(entry['version'],worker=True)
-            units=services();save('active-units.json',units)
             stop(units);backup(units)
             phase('installing');mutated=True
             os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']

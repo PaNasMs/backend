@@ -79,7 +79,7 @@ def inventory(a, rows):
     used = {name: g['id'] for g in groups for name in [g['source'], *g['outputs']]}
     for row in rows:
         row['sharingGroup'] = used.get(row['name'])
-        if a and row['kind'] in ('ethernet', 'wifi'):
+        if a and not row.get('system') and row['kind'] in ('ethernet', 'wifi'):
             try:
                 _, props = a.device(row['name'])
                 row['sharing'] = capabilities(a, row['name'], props)
@@ -171,6 +171,7 @@ def review(a, params, old=None):
     require(isinstance(params.get('wifi', {}), dict), 'Invalid network option')
     snapshot = []
     for name in names:
+        require(not n.system_interface(name), 'System interfaces cannot be used for connection sharing')
         path, props = a.device(name)
         require(int(props['DeviceType']) in (1, 2) and (props['Managed'] or int(props['DeviceType']) == 2 and n.wifi.disabled(a, name)), 'Select a managed Ethernet or Wi-Fi interface')
         cap = capabilities(a, name, props)
@@ -292,6 +293,7 @@ def restore(a, previous):
 
 
 def activate(a, g, allow_missing=False):
+    require(not any(n.system_interface(name) for name in [g['source'], *g['outputs']]), 'System interfaces cannot be used for connection sharing')
     saved = profiles(a)
     if g['mode'] == 'nat': routing(g)
     active_ids = {str(a.properties(path, n.NM + '.Connection.Active')['Uuid']) for path in a.properties(n.NM_PATH, n.NM)['ActiveConnections']}

@@ -285,6 +285,14 @@ def pending_info(state):
     return {k: state[k] for k in ('id', 'interface', 'user', 'status', 'deadline', 'addresses')}
 
 
+def system_interface(name):
+    require(isinstance(name, str) and re.fullmatch(r'[a-zA-Z0-9_.:-]{1,15}', name), 'Invalid network interface')
+    path = Path('/sys/class/net') / name
+    if name == 'lo' or name == 'docker0' or re.fullmatch(r'br-[0-9a-f]{12}', name) or name.startswith('veth'):
+        return True
+    return path.resolve().is_relative_to('/sys/devices/virtual/net') and not (path / 'phy80211').exists()
+
+
 def query():
     links = json_command(['ip', '-j', 'address', 'show'])
     routes = []
@@ -319,6 +327,8 @@ def query():
                     if row['editable']: row['config'] = config(profile)
             except (Rejected, adapter.dbus.DBusException):
                 row['editable'] = False
+        row['system'] = system_interface(row['name'])
+        if row['system']: row['editable'] = False
         rows.append(row)
     with locked():
         state = current(adapter) if adapter else read_state()

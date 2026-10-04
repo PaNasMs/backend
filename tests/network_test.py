@@ -2,6 +2,7 @@ from pathlib import Path
 import copy
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network as n
@@ -13,6 +14,18 @@ class NetworkValidation(unittest.TestCase):
                             'ignoreAutoDns': False, 'neverDefault': False, 'metric': -1, 'routes': []}
                        for key in ('ipv4', 'ipv6')}
         self.config['mtu'] = 0
+
+    def test_system_interfaces_use_kernel_topology_not_only_names(self):
+        for name in ('lo', 'docker0', 'br-0123456789ab', 'veth1234'):
+            self.assertTrue(n.system_interface(name))
+        for resolved, wireless, expected in (
+            ('/sys/devices/virtual/net/custom-bridge', False, True),
+            ('/sys/devices/virtual/net/wlan0', True, False),
+            ('/sys/devices/pci0000:00/virtio0/net/ens18', False, False),
+            ('/sys/devices/platform/usb/net/enx123', False, False),
+        ):
+            with self.subTest(resolved=resolved), patch.object(Path, 'resolve', return_value=Path(resolved)), patch.object(Path, 'exists', return_value=wireless):
+                self.assertEqual(n.system_interface('custom-name'), expected)
 
     def test_static_address_requires_family_and_prefix(self):
         self.config['ipv4']['method'] = 'manual'

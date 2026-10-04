@@ -7,6 +7,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network_sharing as s
 
 class SharingTests(unittest.TestCase):
+    def test_system_interfaces_rejected_as_source_and_destination(self):
+        for source, output in (('docker0', 'eth1'), ('eth0', 'veth1234')):
+            adapter = Mock()
+            with patch.object(s, 'load', return_value=[]), patch.object(s.n, 'system_interface', side_effect=lambda name: name == source if source == 'docker0' else name == output), patch.object(s, 'capabilities', return_value={'phy': ''}):
+                adapter.device.return_value = ('/device', {'DeviceType': 1, 'Managed': True, 'ActiveConnection': '/', 'State': 100})
+                with self.assertRaisesRegex(s.Rejected, 'System interfaces'):
+                    s.review(adapter, {'source': source, 'outputs': [output], 'mode': 'nat'})
+
+    def test_activation_rejects_system_interfaces_before_any_network_change(self):
+        adapter = Mock()
+        with self.assertRaisesRegex(s.Rejected, 'System interfaces'):
+            s.activate(adapter, {'source': 'docker0', 'outputs': ['eth1']})
+        self.assertFalse(adapter.mock_calls)
+
     def test_explicit_channel_must_be_permitted_for_selected_band(self):
         self.assertEqual(s.selected_channel({}, [36, 44]), 36)
         self.assertEqual(s.selected_channel({'channel': 44}, [36, 44]), 44)

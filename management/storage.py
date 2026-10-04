@@ -1004,6 +1004,10 @@ def execute_unlocked(action, p, user=None):
             ],
             timeout=300,
         )
+        # Members that belonged to a deleted array still carry its data: without this
+        # the new array would present the old file system as its own.
+        command(["udevadm", "settle"])
+        command(["wipefs", "--all", "--", target])
         add = command(["mdadm", "--detail", "--scan", target])
         conf = Path("/etc/mdadm/mdadm.conf")
         atomic(conf, conf.read_text() + "\n" + add, 0o644)

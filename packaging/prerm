@@ -28,6 +28,8 @@ if p.exists():
 CHECK
  if [ "$1" = remove ]; then
   python3 /usr/lib/panasms/management/storage_reshape.py --check-removal
+  systemctl disable --now panasms-network-access.service
+  /usr/lib/panasms/panasms-system-helper network-access remove
  fi
  systemctl stop 'panasms-fs-check@*.service' || true
  systemctl stop panasms-core.service panasms-agent.service

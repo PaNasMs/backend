@@ -1,0 +1,14 @@
+[Unit]
+Description=PaNasMs direct USB access and fallback Wi-Fi
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/panasms/panasms-system-helper network-access run
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

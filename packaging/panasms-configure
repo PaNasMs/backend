@@ -16,3 +16,6 @@ systemctl restart panasms-agent.service panasms-core.service
 scheme=http
 [ ! -f /etc/panasms/https.enabled ] || scheme=https
 printf 'PaNasMs: %s://panasms.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$scheme" "$port"
+if [ -t 1 ]; then
+ /usr/lib/panasms/panasms-system-helper network-access credentials
+fi

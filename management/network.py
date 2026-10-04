@@ -293,6 +293,13 @@ def system_interface(name):
     return path.resolve().is_relative_to('/sys/devices/virtual/net') and not (path / 'phy80211').exists()
 
 
+def access_interface(name):
+    state = Path('/run/panasms-network-access.json')
+    current = json.loads(state.read_text()) if state.exists() else {}
+    path = str((Path('/sys/class/net') / str(name)).resolve())
+    return bool(name) and (name == current.get('interface') or ('/gadget/net/' in path and Path('/etc/modules-load.d/panasms-usb.conf').exists()))
+
+
 def query():
     links = json_command(['ip', '-j', 'address', 'show'])
     routes = []
@@ -327,6 +334,8 @@ def query():
                     if row['editable']: row['config'] = config(profile)
             except (Rejected, adapter.dbus.DBusException):
                 row['editable'] = False
+        row['accessManaged'] = access_interface(row['name'])
+        if row['accessManaged']: row['editable'] = False
         row['system'] = system_interface(row['name'])
         if row['system']: row['editable'] = False
         rows.append(row)
@@ -340,6 +349,8 @@ def plan(action, params, user=None):
     adapter = Adapter()
     with locked():
         state = current(adapter)
+        if action == 'network.configure' or action in wifi.ACTIONS:
+            require(not access_interface(params.get('interface')), 'Manage this connection in Network access settings')
         if action in sharing.ACTIONS:
             return sharing.plan(adapter, action, params, user)
         if action == 'network.configure':
@@ -363,6 +374,8 @@ def execute(action, params, user=None):
     adapter = Adapter()
     with locked():
         state = current(adapter)
+        if action == 'network.configure' or action in wifi.ACTIONS:
+            require(not access_interface(params.get('interface')), 'Manage this connection in Network access settings')
         if action in sharing.ACTIONS:
             return sharing.execute(adapter, action, params, user)
         if action in wifi.ACTIONS:

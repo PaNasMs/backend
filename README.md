@@ -395,3 +395,37 @@ rechecks capabilities at runtime. Temperature sensors alone do not enable fan
 controls. A supported GPIO controller does not prove that a fan is connected:
 new installations still default to no disk-bay cooling. SMART/temperature polling
 remains configurable on systems without supported fan control.
+
+### Portable access
+
+`panasms-network-access.service` is a Go controller for fallback Wi-Fi and direct
+USB Ethernet. Configure it under **Settings → Network**. New installations enable
+fallback Wi-Fi when an AP-capable adapter is found, with a random SSID/password and
+90-second wait. Local Ethernet, Wi-Fi or USB connectivity is sufficient; internet
+reachability is not tested. Docker interfaces do not count. An active fallback AP
+is retained while clients are connected, even after another link returns. Saved
+Wi-Fi connections are not deleted. Stop the fallback network before selecting a
+saved network manually. Connection-sharing adapters are excluded.
+
+Save the generated Wi-Fi credentials before taking the NAS offline. They are
+available in the settings and, for a local administrator, through
+`sudo /usr/lib/panasms/panasms-system-helper network-access credentials`.
+An interactive `panasms-configure` also prints them. Keep this output private.
+Manual Stop suppresses fallback until reboot or applying settings again.
+
+USB networking is enabled on supported Pi 4/5 USB-C and Pi Zero data ports, or a
+single already enabled, unused Linux USB device controller. Pi boot configuration
+changes require a reboot. Other boards requiring a board-specific overlay are
+reported as unsupported, not modified speculatively. Multiple/busy controllers
+are left alone. The installer owns only its marked boot block and PaNasMs profiles.
+A data cable and the NAS's normal independent power supply are required. This
+exposes Ethernet, **not raw storage**: use the web panel or existing shared folders.
+Linux/macOS use the gadget network directly; Windows may need an RNDIS driver.
+Use the NAS address displayed in Network; direct USB DHCP uses an unused private
+subnet. The configured web port and authentication still apply.
+
+Controller configuration is root-only at
+`/var/lib/panasms-agent/network-access/config.json`; transient state is under
+`/run` and polling does not write to data disks. The service cooperates with
+network rollback and package-maintenance locks. Removal stops only its own
+profiles and removes its own USB configuration; boot changes take effect on reboot.

@@ -33,7 +33,7 @@ if cache.is_dir() and not cache.is_symlink():
         if p.is_file() and not p.is_symlink() and p.stat().st_uid==0:p.unlink()
     try:cache.rmdir()
     except OSError:pass
-for folder, names in (('/var/lib/panasms-agent/network-sharing', ('pending.json', 'groups.json', 'boot')), ('/var/lib/panasms-agent/network-wifi', ('pending.json',)), ('/run/panasms-network', ('change.json', 'lock'))):
+for folder, names in (('/var/lib/panasms-agent/network-access', ('config.json', 'lock')), ('/var/lib/panasms-agent/network-sharing', ('pending.json', 'groups.json', 'boot')), ('/var/lib/panasms-agent/network-wifi', ('pending.json',)), ('/run/panasms-network', ('change.json', 'lock'))):
     directory=Path(folder)
     if directory.is_dir() and not directory.is_symlink():
         for name in names:

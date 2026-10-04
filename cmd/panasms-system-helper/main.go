@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"panasms.local/backend/internal/systemops/accounts"
+	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"panasms.local/backend/internal/systemops/worker"
 
@@ -22,6 +23,30 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "network-access" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		var err error
+		switch os.Args[2] {
+		case "initialize":
+			err = networkaccess.Initialize()
+		case "credentials":
+			err = networkaccess.Credentials()
+		case "run":
+			err = networkaccess.Run()
+		case "remove":
+			err = networkaccess.Remove()
+		default:
+			err = fmt.Errorf("unknown network access command")
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// `routes` emits the explicit Go/legacy routing inventory as JSON for the
 	// API contract test and for audit. It touches no host state.
 	if len(os.Args) == 2 && os.Args[1] == "routes" {

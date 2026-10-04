@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"panasms.local/backend/internal/systemops/networkaccess"
+	"strings"
 
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/systemops"
@@ -145,6 +147,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "network-access":
+		return networkaccess.Query()
 	case "accounts":
 		return accounts.Query(ctx, "")
 	case "account-details":
@@ -157,6 +161,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if strings.HasPrefix(action, "network.access.") {
+		return networkaccess.Plan(action, p)
+	}
 	if accounts.IsNative(action) {
 		return accounts.Plan(ctx, action, p, user)
 	}
@@ -166,6 +173,9 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if strings.HasPrefix(action, "network.access.") {
+		return networkaccess.Execute(action, p)
+	}
 	if accounts.IsNative(action) {
 		return accounts.Execute(ctx, action, p, r)
 	}

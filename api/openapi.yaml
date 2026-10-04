@@ -3365,9 +3365,64 @@ components:
       required:
       - json_format_version
       - smartctl
+    NetworkAccess:
+      type: object
+      required: [config, devices, state, usb]
+      properties:
+        config:
+          type: object
+          required: [enabled, adapter, ssid, password, band, delay, onLoss, usb]
+          properties:
+            enabled: {type: boolean}
+            adapter: {type: string}
+            ssid: {type: string}
+            password: {type: string}
+            band: {type: string, enum: [auto, bg, a]}
+            delay: {type: integer}
+            onLoss: {type: boolean}
+            usb: {type: boolean}
+        devices:
+          type: array
+          items:
+            type: object
+            required: [name, mac, kind, connected, profile, ap, bands, addresses, clients, usable, reserved]
+            properties:
+              name: {type: string}
+              mac: {type: string}
+              kind: {type: string}
+              connected: {type: boolean}
+              profile: {type: string}
+              ap: {type: boolean}
+              bands: {type: [array, 'null'], items: {type: string}}
+              addresses: {type: [array, 'null'], items: {type: string}}
+              clients: {type: integer}
+              usable: {type: boolean}
+              reserved: {type: boolean}
+        state:
+          type: object
+          required: [phase, hadNetwork, suppressed, clients, usbState]
+          properties:
+            phase: {type: string}
+            interface: {type: string}
+            since: {type: integer}
+            hadNetwork: {type: boolean}
+            suppressed: {type: boolean}
+            clients: {type: integer}
+            error: {type: string}
+            usbState: {type: string}
+        usb:
+          type: object
+          required: [available, port, reason, reboot]
+          properties:
+            available: {type: boolean}
+            port: {type: string}
+            reason: {type: string}
+            reboot: {type: boolean}
     ManagementViews:
       type: object
       properties:
+        network-access:
+          $ref: '#/components/schemas/NetworkAccess'
         storage-luks:
           type: object
           properties:

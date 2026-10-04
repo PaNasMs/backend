@@ -229,18 +229,50 @@ def stale_block_mount(point):
     )
 
 
-def nfs_exports():
+def managed_shares():
+    import sharing
+    return [s for s in sharing.read()["shares"] if s["smb"] or s["nfs"]]
+
+
+def etab_exports():
     path = Path("/var/lib/nfs/etab")
     raw = path.read_text() if path.exists() else ""
-    import sharing
-    managed = [s["path"] for s in sharing.read()["shares"] if s["smb"] or s["nfs"]]
-    return sorted(
-        set(managed) | {
-            re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[0])
-            for line in raw.splitlines()
-            if line.split()
-        }
-    )
+    return {
+        re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[0])
+        for line in raw.splitlines()
+        if line.split()
+    }
+
+
+def nfs_exports():
+    return sorted({s["path"] for s in managed_shares()} | etab_exports())
+
+
+def inside(path, point):
+    return path == point or path.startswith(point.rstrip("/") + "/")
+
+
+def array_shares(target, inv):
+    """Panel-managed published shares located on the volumes mounted from target."""
+    points = sorted({point for _, point in mounted_rows(target, inv)})
+    return [s for s in managed_shares() if any(inside(s["path"], point) for point in points)]
+
+
+def share_label(share):
+    return f'{share["name"]} ({share["path"]})'
+
+
+def release_shares(target, inv):
+    """Stop publishing the panel-managed shares on target before it is unmounted.
+
+    Runs under the sharing module's lock and transaction. A failure raises
+    before any storage change; afterwards every blocker is checked again.
+    """
+    shares = array_shares(target, inv)
+    if shares:
+        import sharing
+        sharing.remove_shares([s["name"] for s in shares])
+    mount_blockers(target, inv)
 
 
 def process_label(pid):
@@ -259,10 +291,12 @@ def process_label(pid):
         return f'PID {pid} (process already exited)'
 
 
-def mount_blockers(target, inv):
+def mount_blockers(target, inv, remove_shares=False, offer_removal=False):
     problems = []
     targets = mount_targets()
     exports = nfs_exports()
+    managed = {s["path"]: s for s in managed_shares()}
+    etab = etab_exports()
     for _, point in sorted(set(mounted_rows(target, inv))):
         mountpoint(point)
         result = subprocess.run(
@@ -296,10 +330,23 @@ def mount_blockers(target, inv):
                 + '. Unmount these nested mounts first.'
             )
         shared = [p for p in exports if p == point or p.startswith(point + "/")]
-        if shared:
+        panel = [share_label(managed[p]) for p in shared if p in managed]
+        # An export the panel's Shared folders do not own cannot be removed here.
+        foreign = [p for p in shared if p not in managed or (not managed[p]["nfs"] and p in etab)]
+        if panel and not remove_shares:
+            problems.append(
+                'Shared folders on this volume: '
+                + ", ".join(panel)
+                + (
+                    '. Select “Also stop sharing folders on this array” in the delete dialog, or remove their shares in Shared folders first.'
+                    if offer_removal
+                    else '. Remove their shares in Shared folders first.'
+                )
+            )
+        if foreign:
             problems.append(
                 'Folders shared via NFS: '
-                + ", ".join(shared)
+                + ", ".join(foreign)
                 + '. Remove their shares in Shared folders first.'
             )
     require(not problems, 'Operation on ' + target + ' has not started. ' + " ".join(problems))
@@ -454,6 +501,7 @@ def plan(action, p):
     details = []
     growth = None
     partition_state = None
+    released = []
     if action == "raid.create":
         raid_name(p.get("name"))
         require(p.get("level") in ("0", "1", "5", "6", "10"), 'RAID0/1/5/6/10 are supported')
@@ -541,7 +589,19 @@ def plan(action, p):
                         'ARRAY DATA WILL BECOME INACCESSIBLE',
                         'Volumes will be unmounted and member RAID metadata removed',
                     ]
-                    mount_blockers(target, inv)
+                    remove_shares = p.get("removeShares", False)
+                    require(type(remove_shares) is bool, 'Choose whether to stop sharing folders on this array')
+                    mount_blockers(target, inv, remove_shares=remove_shares, offer_removal=True)
+                    if remove_shares:
+                        released = array_shares(target, inv)
+                        if released:
+                            import sharing
+                            require(not sharing.JOURNAL.exists(), 'Interrupted sharing update requires recovery')
+                            require(
+                                not sharing.drift(sharing.read()),
+                                'Sharing configuration was edited outside the panel. Restore the managed configuration before continuing.',
+                            )
+                        details += ['Sharing will be removed: ' + share_label(s) for s in released]
                 elif action in ("raid.check", "raid.check-stop"):
                     require(
                         (md / "reshape_position").read_text().strip() == "none",
@@ -773,6 +833,8 @@ def plan(action, p):
         "disk.prepare",
     ) or (action == "mount.open" and p.get("mode") in ("repair", "repair-only")):
         exports = nfs_exports()
+        if released:
+            exports = [e for e in exports if e not in {s["path"] for s in released}]
         for dev in paths:
             for _, point in mounted_rows(dev, inv):
                 shared = [p for p in exports if p == point or p.startswith(point + "/")]
@@ -791,6 +853,8 @@ def plan(action, p):
         state["raid_growth"] = growth
     if action == "partition.create":
         state["partition_table"] = partition_state
+    if released:
+        state["released_shares"] = [[s["name"], s["path"]] for s in released]
     state["fstab"] = Path("/etc/fstab").read_text()
     return {
         "target": target,
@@ -948,6 +1012,8 @@ def execute_unlocked(action, p, user=None):
         md = Path("/sys/class/block") / inv[target]["kname"] / "md"
         uuid = (md / "uuid").read_text().strip()
         members = sorted("/dev/" + x.name for x in (md.parent / "slaves").iterdir())
+        if p.get("removeShares") is True:
+            release_shares(target, inv)
         for dev, point in sorted(mounted_rows(target, inv), key=lambda row: len(row[1]), reverse=True):
             command(["umount", "--", point])
         command(["mdadm", "--stop", target])

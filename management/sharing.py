@@ -214,6 +214,22 @@ def execute(action,p,user=None):
     return {'message':'Shared folder settings updated'}
 
 
+def remove_shares(names):
+    """Stop publishing the named shares in one transaction; files and other shares are untouched."""
+    names = set(names)
+    with locked():
+        require(not JOURNAL.exists(), 'Interrupted sharing update requires recovery')
+        state = read()
+        require(not drift(state), 'Sharing configuration was edited outside the panel. Restore the managed configuration before continuing.')
+        removed = [s for s in state['shares'] if s['name'] in names]
+        if not removed: return []
+        state['shares'] = [s for s in state['shares'] if s['name'] not in names]
+        if shutil.which('smbcontrol'):
+            for s in removed: command(['smbcontrol','smbd','close-share',s['name']],accepted=(0,1))
+        apply(state)
+    return removed
+
+
 def disconnect(username):
     if not shutil.which('smbstatus'): return
     if command(['systemctl','is-active','smbd'],accepted=(0,3,4)).strip() != 'active': return

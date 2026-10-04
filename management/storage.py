@@ -493,6 +493,14 @@ def growth_state(md):
     return state
 
 
+def growth_capacity(growth):
+    """Usable capacity in MiB before and after adding one member (md reports component_size in KiB)."""
+    count = int(growth["raid_disks"])
+    parity = 1 if growth["level"] == "raid5" else 2
+    size = int(growth["component_size"])
+    return size * (count - parity) // 1024, size * (count + 1 - parity) // 1024
+
+
 def plan(action, p):
     require(action in ACTIONS, 'Unknown storage operation')
     inv = inventory()
@@ -637,11 +645,10 @@ def plan(action, p):
                             'Select an unused disk or partition',
                         )
                         count = int(growth["raid_disks"])
-                        parity = 1 if growth["level"] == "raid5" else 2
-                        size = int(growth["component_size"]) * 512
+                        before, after = growth_capacity(growth)
                         details += [
                             f'Members: {count} → {count + 1}',
-                            f'Array capacity: approximately {size * (count - parity) // 1048576} → {size * (count + 1 - parity) // 1048576} MiB',
+                            f'Array capacity: approximately {before} → {after} MiB',
                             'The selected disk will become an active array member. Data will be reshaped in the background.',
                             'Partitions and file systems keep their current sizes. Expand them separately in Partitions and mounts.',
                         ]
@@ -709,7 +716,10 @@ def plan(action, p):
                     not inv[target].get("fstype") == "linux_raid_member",
                     'Cannot format a RAID member',
                 )
-                details = [target, 'FORMATTING WILL DESTROY DATA']
+                details = [target, 'New file system: ' + p["format"]]
+                if inv[target].get("fstype"):
+                    details.append('Current file system: ' + inv[target]["fstype"])
+                details.append('FORMATTING WILL DESTROY DATA')
             elif action == "filesystem.resize":
                 fs = inv[target].get("fstype")
                 require(fs in ("ext2", "ext3", "ext4", "btrfs", "xfs"), 'Resizing is not supported')

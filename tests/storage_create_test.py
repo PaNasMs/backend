@@ -33,6 +33,13 @@ class CreateArray(unittest.TestCase):
             self.assertEqual(calls[2], ["wipefs", "--all", "--", "/dev/md/data"])
             self.assertIn("ARRAY /dev/md/data", conf.read_text())
 
+    def test_growth_capacity_uses_kibibyte_component_size(self):
+        # Three 16 GiB members in RAID5 hold about 32 GiB; a fourth makes it about 48 GiB.
+        growth = {"raid_disks": "3", "level": "raid5", "component_size": "16759808"}
+        self.assertEqual(storage.growth_capacity(growth), (32734, 49101))
+        growth = {"raid_disks": "4", "level": "raid6", "component_size": "16759808"}
+        self.assertEqual(storage.growth_capacity(growth), (32734, 49101))
+
 
 if __name__ == "__main__":
     unittest.main()

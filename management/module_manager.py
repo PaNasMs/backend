@@ -694,10 +694,35 @@ def load_operations(kind, name):
     return result
 
 
+def resume():
+    # Package removal disables module services but keeps the registry; a later
+    # reinstall must start the modules it still lists as enabled. Modules the
+    # reinstalled core no longer supports stay stopped until updated in Modules.
+    failed = []
+    for mid, m in registry().items():
+        if not m.get("enabled") or not m.get("service"):
+            continue
+        try:
+            require(m.get("api") == 1 and satisfies(CORE, m.get("core")), 'Module is incompatible with PaNasMs core ' + CORE)
+            require((ROOT / mid / m["service"]).is_file(), 'Module files are missing')
+            write_unit(m)
+            command(["systemctl", "daemon-reload"])
+            command(["systemctl", "enable", "--now", unit(mid)])
+        except Exception:
+            failed.append(mid)
+    return failed
+
+
 if __name__ == "__main__":
-    require(sys.argv[1:] == ["--recover"], 'Unknown command')
+    require(sys.argv[1:] in (["--recover"], ["--resume"]), 'Unknown command')
     ROOT.mkdir(parents=True, exist_ok=True)
     ROOT.chmod(0o755)
     with (ROOT / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        recover()
+        if sys.argv[1] == "--resume":
+            failed = resume()
+            if failed:
+                print('Modules not started: ' + ', '.join(failed) + '. Open Modules to update or reinstall them.', file=sys.stderr)
+                sys.exit(1)
+        else:
+            recover()

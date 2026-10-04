@@ -34,6 +34,20 @@ class Modules(unittest.TestCase):
                 m.resolve('files', {'files': candidate}, installed)
         self.assertEqual(m.resolve('files', {'files': {'version': '1.3.0', 'signer': 'official'}}, installed), ['files'])
 
+    def test_resume_starts_only_enabled_compatible_services(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/'modules';units=Path(folder)/'units';units.mkdir()
+            for mid in ('files','terminal','old'):
+                (root/mid/'bin').mkdir(parents=True);(root/mid/'bin/server').write_text('')
+            entry=lambda mid,**extra:{'id':mid,'version':'1.0.0','api':1,'core':'>=0.2.0','service':'bin/server','enabled':True,**extra}
+            registry={'files':entry('files'),'terminal':entry('terminal',enabled=False),'old':entry('old',core='<0.1.0'),
+                      'gone':entry('gone'),'theme':{'id':'theme','version':'1.0.0','api':1,'core':'>=0.2.0','enabled':True}}
+            with patch.object(m,'ROOT',root), patch.object(m,'UNITS',units), patch.object(m,'registry',return_value=registry), \
+                 patch.object(m,'atomic',side_effect=lambda path,text,mode: path.write_text(text)), patch.object(m,'command') as command:
+                self.assertEqual(m.resume(),['old','gone'])
+            self.assertEqual([p.name for p in units.iterdir()],['panasms-module-files.service'])
+            self.assertEqual([c.args[0] for c in command.call_args_list],[['systemctl','daemon-reload'],['systemctl','enable','--now','panasms-module-files.service']])
+
     def test_service_can_drop_to_user_without_privilege_escalation(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(m,'UNITS',Path(folder)), patch.object(m,'atomic',side_effect=lambda path,text,mode: path.write_text(text)):
             m.write_unit({'id':'files','service':'bin/server'})

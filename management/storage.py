@@ -723,6 +723,14 @@ def plan(action, p):
             elif action == "filesystem.resize":
                 fs = inv[target].get("fstype")
                 require(fs in ("ext2", "ext3", "ext4", "btrfs", "xfs"), 'Resizing is not supported')
+                device_mib = inv[target]["size"] // 1048576
+                requested = p.get("sizeMiB")
+                details = [
+                    target,
+                    f'File system {fs} will use the whole device: {device_mib} MiB'
+                    if requested in (None, 0)
+                    else f'New file system size: {requested} of {device_mib} MiB',
+                ]
                 if fs.startswith("ext"):
                     unused(target, inv)
                     integer(p.get("sizeMiB"), 16, inv[target]["size"] // 1048576)

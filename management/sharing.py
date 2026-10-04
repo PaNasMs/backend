@@ -176,6 +176,17 @@ def recover():
         reload_services(state['shares'])
 
 
+def republish():
+    # Package removal unpublishes the shares but keeps their definitions:
+    # publish them again on reinstall. The installer recreates an empty managed
+    # Samba include before this runs, so empty files count as unpublished.
+    # Edited managed files are left for the explicit restore action in Shared folders.
+    if read()['shares'] and not JOURNAL.exists() and all(not p.exists() or text(p) == HEADER for p in (SMB, EXPORTS)):
+        recover()
+        return True
+    return False
+
+
 def execute(action,p,user=None):
     with locked():
         plan(action,p,user)
@@ -357,11 +368,7 @@ if __name__ == '__main__':
         elif sys.argv[1:] == ['--recover'] and JOURNAL.exists():
             with locked(): recover()
         elif sys.argv[1:] == ['--republish']:
-            # Package removal unpublishes the shares but keeps their definitions:
-            # publish them again on reinstall. Edited or partially present managed
-            # files are left for the explicit restore action in Shared folders.
-            with locked():
-                if read()['shares'] and not any(p.exists() for p in (SMB, EXPORTS, JOURNAL)): recover()
+            with locked(): republish()
         print(json.dumps({}))
     except Exception:
         message = 'SMB password synchronization failed; see Users → Security' if sys.argv[1:] == ['--sync'] else 'Sharing operation failed; check Samba/NFS service logs and the recovery status in Shared folders'

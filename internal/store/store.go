@@ -80,6 +80,7 @@ type Preferences struct {
 	FilePins          []string                 `json:"filePins,omitempty"`
 	Language          string                   `json:"language"`
 	Taskbar           *[]string                `json:"taskbar,omitempty"`
+	TaskbarMobile     *[]string                `json:"taskbarMobile,omitempty"`
 	DesktopLayouts    map[string][]DesktopTile `json:"desktopLayouts,omitempty"`
 	SmartCrcBaselines map[string]uint64        `json:"smartCrcBaselines,omitempty"`
 	Theme             string                   `json:"theme"`

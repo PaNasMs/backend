@@ -1610,6 +1610,13 @@ components:
             type: string
           maxItems: 8
           uniqueItems: true
+        taskbarMobile:
+          type: array
+          description: Sections pinned to the phone taskbar; kept separately from the computer set.
+          items:
+            type: string
+          maxItems: 3
+          uniqueItems: true
         desktopLayouts:
           type: object
           additionalProperties:
@@ -1640,6 +1647,8 @@ components:
           enum:
           - dark
           - light
+          - dark-glass
+          - light-glass
         layouts:
           type: object
           additionalProperties:

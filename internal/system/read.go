@@ -456,7 +456,7 @@ func ValidatePreferences(theme string, layouts map[string][]string) error {
 	if layouts == nil {
 		return errors.New("layouts must be an object")
 	}
-	if theme != "dark" && theme != "light" {
+	if theme != "dark" && theme != "light" && theme != "dark-glass" && theme != "light-glass" {
 		return fmt.Errorf("unknown theme")
 	}
 	allowed := map[string]bool{"cpu": true, "memory": true, "cooling": true, "system": true, "users": true, "storage": true}

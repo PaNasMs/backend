@@ -13,6 +13,19 @@ func TestInvalidLayouts(t *testing.T) {
 	}
 }
 
+func TestThemes(t *testing.T) {
+	for _, theme := range []string{"dark", "light", "dark-glass", "light-glass"} {
+		if ValidatePreferences(theme, map[string][]string{}) != nil {
+			t.Fatal("valid theme rejected", theme)
+		}
+	}
+	for _, theme := range []string{"", "glass", "Dark", "light-solid"} {
+		if ValidatePreferences(theme, map[string][]string{}) == nil {
+			t.Fatal("unknown theme accepted", theme)
+		}
+	}
+}
+
 func TestHostMountsReplacePrivateNamespaceMounts(t *testing.T) {
 	child := map[string]any{"maj:min": "179:2", "mountpoints": []string{"/", "/var/lib/panasms", "/var/tmp"}}
 	disk := map[string]any{"maj:min": "179:0", "children": []any{child}}

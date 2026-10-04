@@ -341,7 +341,7 @@ func (s *Server) Handler() http.Handler {
 				fail(w, 400, "Invalid settings")
 				return
 			}
-			if !validTaskbar(p.Taskbar) || !validDesktop(p.DesktopLayouts) || !validFilePins(p.FilePins) {
+			if !validTaskbar(p.Taskbar) || !validTaskbar(p.TaskbarMobile) || (p.TaskbarMobile != nil && len(*p.TaskbarMobile) > 3) || !validDesktop(p.DesktopLayouts) || !validFilePins(p.FilePins) {
 				fail(w, 400, "Invalid layout")
 				return
 			}

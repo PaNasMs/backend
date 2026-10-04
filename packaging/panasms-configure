@@ -13,6 +13,8 @@ udevadm control --reload-rules
 systemctl enable panasms-network-sharing.service panasms-network-recovery.service panasms-agent.service panasms-core.service
 systemctl restart panasms-network-sharing.service
 systemctl restart panasms-agent.service panasms-core.service
+# Modules kept from a removed installation are still registered as enabled.
+python3 -B /usr/lib/panasms/management/module_manager.py --resume || true
 scheme=http
 [ ! -f /etc/panasms/https.enabled ] || scheme=https
 printf 'PaNasMs: %s://panasms.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$scheme" "$port"

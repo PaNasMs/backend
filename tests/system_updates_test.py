@@ -86,10 +86,24 @@ class Updates(unittest.TestCase):
         self.assertTrue(u.changing())
 
     def test_power_loss_recovery_only_restores_after_mutation(self):
+        u.save('backup.json',{'units':['core','agent']})
+        u.save('active-units.json',['core','agent'])
         for phase in ('queued','backing-up','installing','verifying','rolling-back'):
             u.save('state.json',{'id':'test','phase':phase})
-            with patch.object(u,'restore') as restore:u.recover()
+            with patch.object(u,'restore') as restore, patch.object(u,'start') as start:u.recover()
             self.assertEqual(restore.called,phase in ('installing','verifying','rolling-back'))
+            start.assert_called_once_with(['core','agent'],boot=True)
+
+    def test_boot_restart_does_not_wait_for_units_ordered_after_recovery(self):
+        with patch.object(u,'run') as run:u.start(['core','agent'],boot=True)
+        self.assertEqual(run.call_args_list[-1].args[0],['systemctl','start','--no-block','core','agent'])
+
+    def test_boot_restart_failure_remains_actionable(self):
+        u.save('state.json',{'id':'test','phase':'verifying'})
+        u.save('backup.json',{'units':['core']})
+        with patch.object(u,'restore'), patch.object(u,'start',side_effect=Rejected('cannot queue services')):
+            with self.assertRaisesRegex(Rejected,'cannot queue services'):u.recover()
+        self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
     def test_tampered_and_expired_signed_catalog_are_rejected(self):
         home=self.root/'gpg';home.mkdir(mode=0o700)
         def gpg(*a):return subprocess.check_output(['gpg','--batch','--homedir',str(home),*a],stderr=subprocess.DEVNULL)

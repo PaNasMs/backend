@@ -318,9 +318,9 @@ def stop(units):
     if units:run(['systemctl','stop',*units],timeout=90)
 
 
-def start(units):
+def start(units, boot=False):
     run(['systemctl','daemon-reload'],timeout=30)
-    if units:run(['systemctl','start',*units],timeout=90)
+    if units:run(['systemctl','start',*(['--no-block'] if boot else []),*units],timeout=90)
 
 
 def healthy():
@@ -441,10 +441,12 @@ def recover(boot=True):
             try:
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
                 with maintenance():restore(boot=boot)
+                # Package removal cancels boot jobs; queue them again without waiting on this unit.
+                if boot:start(read('backup.json',{})['units'],boot=True)
                 finish('rolled-back','Interrupted update restored during boot')
             except Exception as e:finish('recovery-required',str(e));raise
         elif s.get('phase') in ACTIVE:
-            if not boot:start(read('active-units.json',[]))
+            start(read('active-units.json',[]),boot=boot)
             finish('failed','Update interrupted before package installation; previous version retained')
 
 

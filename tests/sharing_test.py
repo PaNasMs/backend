@@ -55,6 +55,25 @@ class SharingTest(unittest.TestCase):
         with patch.object(sharing,'reload_services',side_effect=Rejected('failed')):
             with self.assertRaisesRegex(Rejected,'rollback needs recovery'):sharing.apply({'shares':[self.share],'accounts':{}})
         self.assertTrue(sharing.JOURNAL.exists())
+    def test_reinstall_republishes_kept_shares(self):
+        state={'shares':[self.share],'accounts':{}}
+        sharing.STATE.write_text(sharing.json.dumps(state))
+        # The installer recreates the empty managed Samba include before republishing.
+        sharing.SMB.write_text(sharing.HEADER)
+        with patch.object(sharing,'reload_services') as reload:self.assertTrue(sharing.republish())
+        reload.assert_called_once_with([self.share])
+        self.assertEqual((sharing.text(sharing.SMB),sharing.text(sharing.EXPORTS)),sharing.config([self.share]))
+        self.assertFalse(sharing.drift(state))
+    def test_republish_keeps_edited_or_pending_configuration(self):
+        sharing.STATE.write_text(sharing.json.dumps({'shares':[self.share],'accounts':{}}))
+        sharing.SMB.write_text('outside edit')
+        with patch.object(sharing,'reload_services') as reload:self.assertFalse(sharing.republish())
+        self.assertEqual(sharing.SMB.read_text(),'outside edit')
+        sharing.SMB.unlink();sharing.JOURNAL.write_text('{}')
+        with patch.object(sharing,'reload_services'):self.assertFalse(sharing.republish())
+        sharing.JOURNAL.unlink();sharing.STATE.write_text(sharing.json.dumps({'shares':[],'accounts':{}}))
+        with patch.object(sharing,'reload_services'):self.assertFalse(sharing.republish())
+        reload.assert_not_called();self.assertFalse(sharing.EXPORTS.exists())
     def test_external_edits_detected(self):
         sharing.SMB.write_text('outside edit')
         self.assertTrue(sharing.drift({'shares':[]}))

@@ -7,6 +7,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network_sharing as s
 
 class SharingTests(unittest.TestCase):
+    def setUp(self):
+        # Synthetic adapters must not inherit the CI container's eth0 topology.
+        patcher = patch.object(s.n, 'system_interface', side_effect=lambda name: name in {'docker0', 'veth1234'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_system_interfaces_rejected_as_source_and_destination(self):
         for source, output in (('docker0', 'eth1'), ('eth0', 'veth1234')):
             adapter = Mock()
@@ -145,6 +151,12 @@ class ActivationTests(unittest.TestCase):
 
 
 class PortLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        # Synthetic adapters must not inherit the CI container's eth0 topology.
+        patcher = patch.object(s.n, 'system_interface', side_effect=lambda name: name in {'docker0', 'veth1234'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def group(self):
         return {'id': 'group', 'source': 'eth0', 'outputs': ['wlan0', 'wlan1'], 'mode': 'bridge',
                 'bridge': 'bridge', 'enabled': True, 'wifi': {'wlan0': {}, 'wlan1': {}},

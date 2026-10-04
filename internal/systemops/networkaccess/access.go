@@ -655,7 +655,10 @@ func networkLock() (func(), error) {
 
 func Run() error {
 	if e := Initialize(); e != nil {
-		return e
+		if _, configError := load(); configError != nil {
+			return e
+		}
+		fmt.Fprintln(os.Stderr, "network access initialization:", e)
 	}
 	for {
 		if e := tickGuarded(); e != nil {

@@ -215,6 +215,10 @@ class PackagingTest(unittest.TestCase):
             )
             wifi = root / "wifi.py"
             wifi.write_text("")
+            helper = root / "panasms-system-helper"
+            helper.write_text('#!/bin/sh\necho "helper $@" >> "' + str(log) + '"\n')
+            helper.chmod(0o755)
+            script = script.replace("/usr/lib/panasms/panasms-system-helper", str(helper))
             script = script.replace("/usr/lib/panasms/management/storage_reshape.py", str(wifi)).replace("/usr/lib/panasms/management/wifi.py", str(wifi)).replace("/usr/lib/panasms/management/sharing.py", str(wifi)).replace("/usr/lib/panasms/sharing-install.py", str(wifi))
             path = root / "prerm"
             path.write_text(script)
@@ -227,6 +231,7 @@ class PackagingTest(unittest.TestCase):
             db.close()
             subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
             self.assertIn("stop panasms-core.service panasms-agent.service", log.read_text())
+            self.assertIn("helper network-access remove", log.read_text())
 
     def test_purge_refuses_symlink_parent(self):
         with tempfile.TemporaryDirectory() as d:

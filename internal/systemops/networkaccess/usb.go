@@ -131,6 +131,9 @@ func usbStatus(c Config, rows []Device) string {
 	if !cap.Available {
 		return cap.Reason
 	}
+	if e := configureUSB(true); e != nil {
+		return "error"
+	}
 	if cap.Reboot {
 		return "reboot"
 	}

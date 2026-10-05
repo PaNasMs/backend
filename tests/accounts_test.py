@@ -46,6 +46,27 @@ class AccountsTest(unittest.TestCase):
         self.assertFalse(account_policy.password_inactive({'lastChange':0,'maxDays':5,'inactiveDays':1}))
         self.assertFalse(account_policy.password_inactive({'lastChange':today-10,'maxDays':5,'inactiveDays':-1}))
 
+    def test_group_review_lists_membership_changes(self):
+        users=[SimpleNamespace(pw_name=n,pw_uid=1200+i,pw_gid=1200+i) for i,n in enumerate(['alice','bob','carol'])]
+        users[2].pw_gid=1500
+        group=SimpleNamespace(gr_name='family',gr_gid=1500,gr_mem=['alice'])
+        with tempfile.TemporaryDirectory() as d:
+            for file in ('passwd','group','shadow'): (Path(d)/file).write_text('')
+            real=Path
+            with patch.object(accounts,'Path',side_effect=lambda value: real(d)/real(value).name), \
+                 patch.object(accounts.pwd,'getpwall',return_value=users), \
+                 patch.object(accounts.grp,'getgrall',return_value=[group]), \
+                 patch.object(accounts.grp,'getgrnam',return_value=group), \
+                 patch.object(accounts,'bounds',return_value=(1000,60000)), \
+                 patch.object(accounts,'account',side_effect=lambda value: value), \
+                 patch.object(account_policy,'read',return_value={}):
+                edit=lambda members: accounts.plan('group.edit',{'target':'family','members':members},'admin')['details']
+                self.assertEqual(edit(['bob','carol']),['family','Members to add: bob','Members to remove: alice'])
+                self.assertEqual(edit(['carol','alice']),['family','Group membership will not change'])
+                self.assertEqual(edit(['alice','bob','carol']),['family','Members to add: bob'])
+                with self.assertRaisesRegex(Rejected,'primary'): edit(['alice'])
+                self.assertEqual(accounts.plan('group.create',{'target':'guests'},'admin')['details'],['guests','A new group without members will be created'])
+
     def test_expiry_validation(self):
         self.assertEqual(account_policy.expiry(''),-1)
         with self.assertRaises(Rejected):account_policy.expiry('not a date')

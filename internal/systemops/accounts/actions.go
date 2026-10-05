@@ -53,6 +53,7 @@ func Plan(ctx context.Context, action string, params map[string]any, actor strin
 		if _, ok := getgrnam(groups, target); ok {
 			return nil, reject("Group already exists")
 		}
+		details = append(details, "A new group without members will be created")
 	case "group.delete":
 		g, ok := getgrnam(groups, target)
 		if !ok {

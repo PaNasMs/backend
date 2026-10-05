@@ -19,6 +19,7 @@ class PresentationQueriesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'media').mkdir()
+            (root / 'lost+found').mkdir()
             (root / 'file').write_text('x')
             (root / 'link').symlink_to('/etc', target_is_directory=True)
             rows = {'filesystems': [

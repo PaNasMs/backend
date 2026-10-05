@@ -138,6 +138,69 @@ class DeleteArrayWithShares(unittest.TestCase):
             with self.assertRaisesRegex(Rejected, "is busy: bash"):
                 storage.plan("raid.delete", {"target": TARGET, "removeShares": True})
 
+    def test_smb_server_does_not_block_the_plan_when_its_shares_will_be_removed(self):
+        self.publish(share("c05share", POINT + "/c05share"))
+        self.fuser.return_value = subprocess.CompletedProcess([], 0, "123 124", "")
+        with patch.object(storage, "process_name", return_value="smbd"):
+            plan = storage.plan("raid.delete", {"target": TARGET, "removeShares": True})
+            self.assertIn("Sharing will be removed: c05share (/srv/md9/c05share)", plan["details"])
+            # Without the option the connected client is still reported.
+            with patch.object(storage, "process_label", return_value="smbd (PID 123, user root)"):
+                with self.assertRaisesRegex(Rejected, "is busy: smbd"):
+                    storage.mount_blockers(TARGET, self.inv)
+        # Another process next to smbd keeps blocking and is the only one named.
+        names = {123: "smbd", 124: "bash"}
+        with (
+            patch.object(storage, "process_name", side_effect=names.get),
+            patch.object(storage, "process_label", side_effect=lambda pid: f"{names[pid]} (PID {pid})"),
+        ):
+            with self.assertRaises(Rejected) as caught:
+                storage.plan("raid.delete", {"target": TARGET, "removeShares": True})
+        self.assertIn("is busy: bash (PID 124).", str(caught.exception))
+        self.assertNotIn("smbd", str(caught.exception))
+
+    def test_smb_server_blocks_the_plan_without_a_panel_smb_share_on_the_volume(self):
+        self.fuser.return_value = subprocess.CompletedProcess([], 0, "123", "")
+        for shares in ([], [share("media", POINT + "/media", smb=False, nfs=True)], [share("elsewhere", "/srv/other/docs")]):
+            self.publish(*shares)
+            with (
+                patch.object(storage, "process_name", return_value="smbd"),
+                patch.object(storage, "process_label", return_value="smbd (PID 123, user root)"),
+            ):
+                with self.assertRaisesRegex(Rejected, "is busy: smbd"):
+                    storage.plan("raid.delete", {"target": TARGET, "removeShares": True})
+
+    def test_execution_checks_smb_server_strictly_after_closing_shares(self):
+        self.publish(share("c05share", POINT + "/c05share"))
+        self.fuser.return_value = subprocess.CompletedProcess([], 0, "123", "")
+        with (
+            patch.object(storage, "process_name", return_value="smbd"),
+            patch.object(storage, "process_label", return_value="smbd (PID 123, user root)"),
+            patch.object(storage, "command") as command,
+        ):
+            with self.assertRaisesRegex(Rejected, "is busy: smbd"):
+                storage.execute("raid.delete", {"target": TARGET, "removeShares": True})
+        command.assert_not_called()
+        self.assertEqual(sharing.read()["shares"], [])
+
+    def test_review_names_a_mapped_volume_by_its_mapper_path(self):
+        inv = {
+            "/dev/dm-0": {"kname": "dm-0", "name": "e03secure", "type": "crypt"},
+            "/dev/sde": {"kname": "sde", "name": "sde", "type": "disk"},
+        }
+        self.assertEqual(storage.friendly_path("/dev/dm-0", inv), "/dev/mapper/e03secure")
+        self.assertEqual(storage.friendly_path("/dev/sde", inv), "/dev/sde")
+        self.assertEqual(storage.friendly_path("New file system: ext4", inv), "New file system: ext4")
+        self.inv["/dev/dm-0"] = {
+            "kname": "dm-0", "name": "e03secure", "type": "crypt", "fstype": "ext4",
+            "mountpoints": ["/srv/secure"], "parent": None,
+        }
+        with patch.object(storage, "mount_targets", return_value={"/srv/secure"}), patch.object(storage, "mountpoint"):
+            plan = storage.plan("mount.detach", {"target": "/dev/dm-0"})
+        self.assertEqual(plan["details"][0], "/dev/mapper/e03secure")
+        self.assertEqual(plan["target"], "/dev/dm-0")
+        self.assertEqual(plan["confirmation"], "/dev/dm-0")
+
     def test_interrupted_or_edited_sharing_configuration_blocks_the_plan(self):
         self.publish(share("c05share", POINT + "/c05share"))
         sharing.SMB.write_text("edited")

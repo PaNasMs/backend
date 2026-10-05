@@ -359,7 +359,8 @@ def folders(target, user=None):
     children = []
     with os.scandir(path) as entries:
         for entry in entries:
-            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.'):
+            # lost+found is the file system's own recovery directory, never a folder to share.
+            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name != 'lost+found':
                 children.append({'name': entry.name, 'path': entry.path})
                 if len(children) >= 1000:
                     break

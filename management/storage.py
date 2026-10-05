@@ -99,6 +99,14 @@ def device(value, inv):
     return path
 
 
+def friendly_path(path, inv):
+    """Path shown to people: a device-mapper node by its mapper name, not /dev/dm-N."""
+    row = inv.get(path) if isinstance(path, str) else None
+    if row and str(row.get("kname", "")).startswith("dm-") and row.get("name"):
+        return "/dev/mapper/" + row["name"]
+    return path
+
+
 def protected(dev, inv):
     protected_roots = set()
     for path, d in inv.items():
@@ -275,6 +283,13 @@ def release_shares(target, inv):
     mount_blockers(target, inv)
 
 
+def process_name(pid):
+    try:
+        return (Path("/proc") / str(pid) / "comm").read_text().strip()
+    except OSError:
+        return ""
+
+
 def process_label(pid):
     import pwd
 
@@ -292,6 +307,12 @@ def process_label(pid):
 
 
 def mount_blockers(target, inv, remove_shares=False, offer_removal=False):
+    """Reject while something still uses the volumes mounted from target.
+
+    With remove_shares (the reviewed plan will stop the panel's shares first), Samba
+    processes serving a panel-managed SMB share on the volume are not counted: closing
+    those shares disconnects them. release_shares() repeats the strict check afterwards.
+    """
     problems = []
     targets = mount_targets()
     exports = nfs_exports()
@@ -312,6 +333,9 @@ def mount_blockers(target, inv, remove_shares=False, offer_removal=False):
         )
         if result.returncode == 0:
             pids = sorted({int(pid) for pid in result.stdout.split() if pid.isdigit()})
+            if remove_shares and any(s["smb"] and inside(path, point) for path, s in managed.items()):
+                pids = [pid for pid in pids if process_name(pid) != "smbd"]
+        if result.returncode == 0 and pids:
             processes = ", ".join(process_label(pid) for pid in pids[:20]) or 'process list unavailable'
             if len(pids) > 20:
                 processes += f', {len(pids) - 20} more'
@@ -876,7 +900,8 @@ def plan(action, p):
     state["fstab"] = Path("/etc/fstab").read_text()
     return {
         "target": target,
-        "details": details or [target],
+        # Operations keep the canonical node; the review names the volume as the user knows it.
+        "details": [friendly_path(d, inv) for d in details or [target]],
         "confirmation": target,
         "fingerprint": fingerprint(action, p, state),
     }
@@ -1467,7 +1492,9 @@ def query(view, target):
                 row["protectedReason"]
                 or row["busyReason"]
                 or (
-                    'The disk contains a file system. Prepare it in Partitions and mounts.'
+                    'The disk holds the metadata of a former array. Wipe it in Partitions and mounts before reuse.'
+                    if d.get("fstype") == "linux_raid_member"
+                    else 'The disk contains a file system. Prepare it in Partitions and mounts.'
                     if d.get("fstype")
                     else ""
                 )

@@ -60,3 +60,26 @@ func TestExitedProcessesDoNotHoldHomeFiles(t *testing.T) {
 		t.Fatal("live process ignored")
 	}
 }
+
+func TestMembershipChangesNameAddedAndRemovedMembers(t *testing.T) {
+	for _, c := range []struct {
+		current, members []string
+		want             string
+	}{
+		{[]string{"alice", "carol"}, []string{"carol", "bob"}, "Members to add: bob|Members to remove: alice"},
+		{[]string{"alice", "carol", "carol"}, []string{"carol", "alice"}, "Group membership will not change"},
+		{[]string{"alice"}, []string{"dave", "alice", "bob"}, "Members to add: bob, dave"},
+		{[]string{"alice"}, nil, "Members to remove: alice"},
+	} {
+		got := ""
+		for i, detail := range membershipChanges(c.current, c.members) {
+			if i > 0 {
+				got += "|"
+			}
+			got += detail.(string)
+		}
+		if got != c.want {
+			t.Fatalf("%v -> %v: %q", c.current, c.members, got)
+		}
+	}
+}

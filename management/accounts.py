@@ -278,6 +278,7 @@ def plan(action, p, actor):
     else:
         if action == "group.create":
             require(not any(g.gr_name == target for g in grp.getgrall()), 'Group already exists')
+            details += ['A new group without members will be created']
         else:
             group = grp.getgrnam(target)
             lo, hi = bounds("GID")
@@ -294,6 +295,14 @@ def plan(action, p, actor):
                     account(member)
                 primary = {u.pw_name for u in pwd.getpwall() if u.pw_gid == group.gr_gid}
                 require(primary.issubset(set(members)), 'Change the primary group before removing a primary member')
+                current = set(group.gr_mem) | primary
+                added, removed = sorted(set(members) - current), sorted(current - set(members))
+                if added:
+                    details += ['Members to add: ' + ', '.join(added)]
+                if removed:
+                    details += ['Members to remove: ' + ', '.join(removed)]
+                if not added and not removed:
+                    details += ['Group membership will not change']
                 if target == 'sudo':
                     for username in set(group.gr_mem) - set(members):
                         protect_admin(account(username), actor, True)

@@ -41,6 +41,19 @@ class PackagingTest(unittest.TestCase):
                 else:
                     self.assertFalse(normalized.exists())
 
+    def test_manual_start_hint_is_skipped_under_the_public_installer(self):
+        script = (ROOT / "packaging/postinst").read_text()
+        start = script.index('  if [ "${PANASMS_INSTALLER:-}" != 1 ]; then')
+        hint = "set -eu\n" + script[start:script.index("  fi\n", start) + len("  fi\n")]
+        self.assertIn("Installed, not started.", hint)
+        environment = {key: value for key, value in os.environ.items() if key != "PANASMS_INSTALLER"}
+        for value, shown in [(None, True), ("0", True), ("1", False)]:
+            with self.subTest(value=value):
+                env = dict(environment) if value is None else dict(environment, PANASMS_INSTALLER=value)
+                result = subprocess.run(["sh", "-c", hint], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual("Installed, not started." in result.stdout, shown)
+
     def test_invalid_ci_versions_fail_before_building(self):
         with tempfile.TemporaryDirectory() as folder:
             assets = Path(folder)

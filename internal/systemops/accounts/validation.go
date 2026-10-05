@@ -198,6 +198,13 @@ func validateAccount(action string, p map[string]any, actor, target string, user
 				return nil, reject("Change the primary group before removing a primary member")
 			}
 		}
+		current := append([]string{}, g.Members...)
+		for _, u := range users {
+			if u.GID == g.GID {
+				current = append(current, u.Name)
+			}
+		}
+		details = append(details, membershipChanges(current, members)...)
 		if target == "sudo" {
 			for _, old := range g.Members {
 				if !contains(members, old) {
@@ -348,4 +355,32 @@ func validateAccount(action string, p map[string]any, actor, target string, user
 		details = append(details, "Files in shared folders will be preserved")
 	}
 	return details, nil
+}
+
+// membershipChanges describes a reviewed member edit: who joins and who leaves the group.
+func membershipChanges(current, members []string) []any {
+	difference := func(from, without []string) []string {
+		seen := map[string]bool{}
+		var names []string
+		for _, name := range from {
+			if !seen[name] && !contains(without, name) {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names
+	}
+	added, removed := difference(members, current), difference(current, members)
+	var details []any
+	if len(added) > 0 {
+		details = append(details, "Members to add: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		details = append(details, "Members to remove: "+strings.Join(removed, ", "))
+	}
+	if len(details) == 0 {
+		details = append(details, "Group membership will not change")
+	}
+	return details
 }

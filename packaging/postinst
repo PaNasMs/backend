@@ -41,6 +41,9 @@ case "${1:-}" in
   systemctl enable panasms-update-recover.service
   systemctl enable --now panasms-update-check.timer
   systemctl enable --now panasms-sharing.timer
-  echo 'Installed, not started. Run sudo panasms-configure to enable HTTP on port 80.'
+  # The public installer configures and starts the panel itself right after this script.
+  if [ "${PANASMS_INSTALLER:-}" != 1 ]; then
+   echo 'Installed, not started. Run sudo panasms-configure to enable HTTP on port 80.'
+  fi
  ;;
 esac

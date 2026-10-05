@@ -315,3 +315,29 @@ func TestIdentityUsesAgentAndChecksSessionEpoch(t *testing.T) {
 type identityTransport func(*http.Request) (*http.Response, error)
 
 func (f identityTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestInterfacePageIsRevalidatedAndAssetsAreCached(t *testing.T) {
+	s := testServer(t)
+	s.Static = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(s.Static, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"index.html": "<html></html>", "assets/index-abc.js": "x"} {
+		if err := os.WriteFile(filepath.Join(s.Static, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := s.Handler()
+	for path, want := range map[string]string{
+		"/":                    "no-cache",
+		"/storage/disks":       "no-cache",
+		"/index.html":          "no-cache",
+		"/assets/index-abc.js": "public, max-age=31536000, immutable",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if got := w.Header().Get("Cache-Control"); got != want {
+			t.Errorf("%s: Cache-Control %q, want %q", path, got, want)
+		}
+	}
+}

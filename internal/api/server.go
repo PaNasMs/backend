@@ -391,8 +391,16 @@ func (s *Server) Handler() http.Handler {
 		name := filepath.Join(s.Static, filepath.Clean("/"+r.URL.Path))
 		info, e := os.Stat(name)
 		if e != nil || info.IsDir() {
+			// The page names the current hashed bundles: a cached copy would keep
+			// the previous interface running after an update.
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, filepath.Join(s.Static, "index.html"))
 			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
 		}
 		http.ServeFile(w, r, name)
 	}))

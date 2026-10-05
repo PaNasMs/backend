@@ -390,6 +390,19 @@ func (s *Server) Handler() http.Handler {
 		}
 		name := filepath.Join(s.Static, filepath.Clean("/"+r.URL.Path))
 		info, e := os.Stat(name)
+		if (e != nil || info.IsDir()) && strings.HasPrefix(r.URL.Path, "/assets/") {
+			// A page cached from the previous version asks for a bundle that no longer
+			// exists. Answering with the page itself would leave a blank screen: make that
+			// stale page reload itself once, which fetches the current page.
+			w.Header().Set("Cache-Control", "no-store")
+			if strings.HasSuffix(r.URL.Path, ".js") {
+				w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+				_, _ = io.WriteString(w, staleBundleScript)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		if e != nil || info.IsDir() {
 			// The page names the current hashed bundles: a cached copy would keep
 			// the previous interface running after an update.
@@ -816,3 +829,8 @@ func (s *Server) readCooling() (any, error) {
 	}
 	return s.coolingState, s.coolingErr
 }
+
+// staleBundleScript reloads a page that was cached from an earlier version. The marker keeps a
+// genuinely missing file from causing a reload loop.
+const staleBundleScript = `(function(){var k="panasms-stale-bundle",n=(document.currentScript&&document.currentScript.src)||location.href;try{if(sessionStorage.getItem(k)===n)return;sessionStorage.setItem(k,n)}catch(e){return}location.reload()})();
+`

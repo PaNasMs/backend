@@ -1194,6 +1194,9 @@ def execute_unlocked(action, p, user=None):
             "vfat": ["mkfs.vfat"],
         }[fs]
         command([*args, target], timeout=86400)
+        # udev does not always re-read an md array after mkfs; without the new
+        # signature in its database the volume stays invisible in the panel.
+        command(["udevadm", "trigger", "--action=change", "--settle", target], accepted=(0, 1), timeout=60)
         if inv[target].get("uuid"):
             fstab_change(inv[target]["uuid"])
     elif action == "filesystem.resize":

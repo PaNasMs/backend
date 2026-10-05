@@ -85,3 +85,41 @@ func TestUploadForwardsReplacementRevisionWithAuthenticatedIdentity(t *testing.T
 		}
 	}
 }
+
+func TestCloudDownloadRedirectsOnlyToATrustedProviderLink(t *testing.T) {
+	target := "cloud:0123456789abcdef0123456789abcdef/a.bin"
+	for name, tc := range map[string]struct {
+		reply, contentType string
+		wantCode           int
+		wantLocation       string
+	}{
+		"dropbox link":       {`{"url":"https://uc1.dl.dropboxusercontent.com/cd/0/get/x"}`, "application/json", 302, "https://uc1.dl.dropboxusercontent.com/cd/0/get/x"},
+		"foreign link":       {`{"url":"https://evil.example/x"}`, "application/json", 200, ""},
+		"older module sends": {"file-data", "application/octet-stream", 200, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := testServer(t)
+			s.ModuleClient = func(string) (*http.Client, error) { return s.Agent, nil }
+			s.Agent = &http.Client{Transport: thumbnailTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Query().Get("user") != "alice" || r.URL.Query().Get("target") != target {
+					t.Fatalf("incorrect agent request: %s", r.URL)
+				}
+				if r.URL.Query().Get("direct") == "1" {
+					h := http.Header{"Content-Type": {tc.contentType}}
+					return &http.Response{StatusCode: 200, ContentLength: int64(len(tc.reply)), Header: h, Body: io.NopCloser(strings.NewReader(tc.reply))}, nil
+				}
+				return &http.Response{StatusCode: 200, ContentLength: 9, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("file-data"))}, nil
+			})}
+			req := httptest.NewRequest("GET", "/api/v1/files/content?target="+target, nil)
+			req = req.WithContext(context.WithValue(req.Context(), identityKey{}, auth.Identity{Username: "alice"}))
+			out := httptest.NewRecorder()
+			s.files(out, req)
+			if out.Code != tc.wantCode || out.Header().Get("Location") != tc.wantLocation {
+				t.Fatalf("code %d location %q", out.Code, out.Header().Get("Location"))
+			}
+			if tc.wantCode == 200 && out.Body.String() != "file-data" {
+				t.Fatalf("body %q", out.Body.String())
+			}
+		})
+	}
+}

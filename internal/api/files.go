@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
@@ -10,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 )
 
 func (s *Server) files(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +40,14 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		v.Set("thumbnail", "1")
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == "GET" && !thumbnail && strings.HasPrefix(v.Get("target"), "cloud:") {
+		if link := directLink(r.Context(), moduleClient, v); link != "" {
+			// The browser fetches the file from the provider; nothing passes through the NAS.
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			http.Redirect(w, r, link, http.StatusFound)
+			return
+		}
+	}
 	req, e := http.NewRequestWithContext(r.Context(), r.Method, "http://agent/files?"+v.Encode(), r.Body)
 	if e != nil {
 		fail(w, 400, "Invalid request")
@@ -73,4 +85,42 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 	if err != nil || (r.Method == "GET" && n != resp.ContentLength) {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// directLink asks the Files module for a short-lived provider link to a cloud file. It returns ""
+// when the provider has none or the module predates the feature; the caller then streams the file.
+func directLink(ctx context.Context, moduleClient *http.Client, v url.Values) string {
+	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	query := url.Values{"user": v["user"], "target": v["target"], "direct": {"1"}}
+	req, e := http.NewRequestWithContext(ctx, "GET", "http://agent/files?"+query.Encode(), nil)
+	if e != nil {
+		return ""
+	}
+	resp, e := moduleClient.Do(req)
+	if e != nil {
+		return ""
+	}
+	// An older module ignores direct=1 and starts sending the file: drop that response unread.
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		return ""
+	}
+	var reply struct {
+		URL string `json:"url"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&reply) != nil || !trustedDownloadLink(reply.URL) {
+		return ""
+	}
+	return reply.URL
+}
+
+// trustedDownloadLink accepts only Dropbox temporary content links as redirect targets.
+func trustedDownloadLink(raw string) bool {
+	u, e := url.Parse(raw)
+	if e != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "dl.dropboxusercontent.com" || strings.HasSuffix(host, ".dl.dropboxusercontent.com")
 }

@@ -328,6 +328,14 @@ func TestInterfacePageIsRevalidatedAndAssetsAreCached(t *testing.T) {
 		}
 	}
 	h := s.Handler()
+	for path, want := range map[string]int{"/assets/index-old.js": 200, "/assets/index-old.css": 404} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		isReload := strings.Contains(w.Body.String(), "location.reload()")
+		if w.Code != want || w.Header().Get("Cache-Control") != "no-store" || isReload != (want == 200) || strings.Contains(w.Body.String(), "<html>") {
+			t.Errorf("%s: code %d, cache %q, body %q", path, w.Code, w.Header().Get("Cache-Control"), w.Body.String())
+		}
+	}
 	for path, want := range map[string]string{
 		"/":                    "no-cache",
 		"/storage/disks":       "no-cache",

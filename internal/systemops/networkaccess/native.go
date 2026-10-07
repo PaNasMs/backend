@@ -33,6 +33,9 @@ func nativeDevices() ([]Device, error) {
 		d := Device{Name: i.Name, MAC: i.HardwareAddr.String(), Kind: "ethernet", Usable: true, Addresses: networknative.Addresses(i.Name)}
 		carrier, _ := os.ReadFile("/sys/class/net/" + i.Name + "/carrier")
 		d.Connected = strings.TrimSpace(string(carrier)) == "1"
+		if master, err := filepath.EvalSymlinks("/sys/class/net/" + i.Name + "/master"); err == nil {
+			d.Addresses = append(d.Addresses, networknative.Addresses(filepath.Base(master))...)
+		}
 		if wireless {
 			d.Kind = "wifi"
 			cap := networknative.Capability(i.Name)

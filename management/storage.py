@@ -57,7 +57,7 @@ def inventory():
             "--json",
             "--bytes",
             "--output",
-            "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN",
+            "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN",
         ]
     )
     result = {}
@@ -107,7 +107,17 @@ def friendly_path(path, inv):
     return path
 
 
-SYSTEM_MOUNTS = ("/", "/boot", "/usr", "/var", "/home")
+SYSTEM_MOUNTS = ("/", "/boot", "/efi", "/usr", "/var", "/home")
+# GPT type GUIDs and MBR type ids of partitions the firmware or boot loader depends on, and swap.
+SYSTEM_PARTTYPES = {
+    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",  # EFI system partition
+    "21686148-6449-6e6f-744e-656564454649",  # BIOS boot
+    "bc13c2ff-59e6-4262-a352-b275fd6f7172",  # extended boot loader (XBOOTLDR)
+    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f",  # Linux swap
+    "0xef",  # EFI (MBR)
+    "0x82",  # Linux swap (MBR)
+}
+FSTAB = Path("/etc/fstab")
 
 
 def system_mount(point):
@@ -117,6 +127,35 @@ def system_mount(point):
     if point == "[SWAP]":
         return True
     return any(point == root or (root != "/" and point.startswith(root + "/")) for root in SYSTEM_MOUNTS)
+
+
+def fstab_system_sources(fstab=None):
+    """Sources from fstab configured for system mount points or swap: UUID=, PARTUUID=, LABEL= or paths."""
+    sources = set()
+    try:
+        text = (fstab or FSTAB).read_text()
+    except OSError:
+        return sources
+    for line in text.splitlines():
+        fields = line.split("#", 1)[0].split()
+        if len(fields) < 3:
+            continue
+        if fields[2] == "swap" or system_mount(fields[1]):
+            sources.add(fields[0])
+    return sources
+
+
+def system_partition(d, sources):
+    """A device that carries the running system: mounted on a system path, swap, a boot-loader partition or
+    configured in fstab for one of those."""
+    if any(system_mount(m) for m in d.get("mountpoints", [])):
+        return True
+    if (d.get("parttype") or "").lower() in SYSTEM_PARTTYPES or d.get("fstype") == "swap":
+        return True
+    keys = {d.get("path"), f"UUID={d.get('uuid')}" if d.get("uuid") else None, f"PARTUUID={d.get('partuuid')}" if d.get("partuuid") else None}
+    if d.get("label"):
+        keys.add(f"LABEL={d['label']}")
+    return bool(keys & sources)
 
 
 def protected(dev, inv, layout=False):
@@ -142,7 +181,8 @@ def protected(dev, inv, layout=False):
             backing(parent, seen)
         return seen
 
-    system = {path for path, d in inv.items() if any(system_mount(m) for m in d.get("mountpoints", []))}
+    sources = fstab_system_sources()
+    system = {path for path, d in inv.items() if system_partition(d, sources)}
     carriers = set()
     for path in system:
         carriers |= backing(path)

@@ -3103,6 +3103,8 @@ components:
                 type: string
               status:
                 type: string
+              error:
+                type: string
               deadline:
                 type: number
               addresses:

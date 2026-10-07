@@ -28,6 +28,7 @@ type state struct {
 	Interface   string          `json:"interface"`
 	User        string          `json:"user"`
 	Status      string          `json:"status"`
+	Error       string          `json:"error,omitempty"`
 	Deadline    int64           `json:"deadline"`
 	Addresses   []string        `json:"addresses"`
 	Checkpoint  dbus.ObjectPath `json:"checkpoint"`
@@ -94,7 +95,7 @@ func public(s *state) any {
 	if s == nil {
 		return nil
 	}
-	return map[string]any{"id": s.ID, "interface": s.Interface, "user": s.User, "status": s.Status, "deadline": s.Deadline, "addresses": s.Addresses}
+	return map[string]any{"id": s.ID, "interface": s.Interface, "user": s.User, "status": s.Status, "error": s.Error, "deadline": s.Deadline, "addresses": s.Addresses}
 }
 func systemInterface(name string) bool {
 	p, e := filepath.EvalSymlinks("/sys/class/net/" + name)

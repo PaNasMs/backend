@@ -143,3 +143,21 @@ func TestRollbackRestoresOnlyRecordedFiles(t *testing.T) {
 		t.Fatal("durable recovery status not saved")
 	}
 }
+
+func TestForeignSharingGroupsAreNeverRewritten(t *testing.T) {
+	old := groupsPath
+	groupsPath = t.TempDir() + "/groups.json"
+	t.Cleanup(func() { groupsPath = old })
+	original := `[{'id':'legacy','profiles':{'end0':'saved-uuid'}}]`
+	original = strings.ReplaceAll(original, "'", `"`)
+	if err := os.WriteFile(groupsPath, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Groups(); err == nil {
+		t.Fatal("foreign group accepted for native mutation")
+	}
+	data, err := os.ReadFile(groupsPath)
+	if err != nil || string(data) != original {
+		t.Fatal("foreign configuration changed")
+	}
+}

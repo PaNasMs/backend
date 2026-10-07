@@ -42,6 +42,13 @@ func Groups() ([]Group, error) {
 	if os.IsNotExist(e) {
 		e = nil
 	}
+	if e == nil {
+		for _, group := range g {
+			if group.Provider != "networkd" {
+				return nil, fmt.Errorf("Existing NetworkManager sharing groups require migration before switching network providers")
+			}
+		}
+	}
 	return g, e
 }
 func sourceConnected(name string) bool {

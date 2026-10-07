@@ -1,7 +1,6 @@
 [Unit]
 Description=PaNasMs direct USB access and fallback Wi-Fi
-After=NetworkManager.service
-Wants=NetworkManager.service
+After=NetworkManager.service systemd-networkd.service panasms-network-sharing.service
 
 [Service]
 Type=simple

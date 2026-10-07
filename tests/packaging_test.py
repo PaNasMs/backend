@@ -78,7 +78,7 @@ class PackagingTest(unittest.TestCase):
         required = {
             "raid": {"mdadm", "initramfs-tools"},
             "storage": {"fdisk", "mount", "util-linux", "parted", "smartmontools", "hdparm"},
-            "network": {"network-manager", "wpasupplicant", "python3-dbus", "iw", "dnsmasq-base", "nftables"},
+            "network": {"hostapd | network-manager", "wpasupplicant", "python3-dbus", "iw", "dnsmasq-base", "nftables"},
             "sharing": {"samba", "samba-common-bin", "smbclient", "cifs-utils", "nfs-common", "nfs-kernel-server", "acl"},
             "accounts": {"passwd", "libpam-modules", "libpam-systemd", "rsync"},
             "registry": {"ca-certificates", "openssl"},
@@ -86,6 +86,15 @@ class PackagingTest(unittest.TestCase):
         for feature, dependencies in required.items():
             with self.subTest(feature=feature):
                 self.assertFalse(dependencies - packages, dependencies - packages)
+
+    def test_network_manager_is_not_required_or_started(self):
+        script = (ROOT / "scripts/build-deb.sh").read_text()
+        depends = next(line for line in script.splitlines() if line.startswith("Depends: "))
+        self.assertNotIn("network-manager", depends.removeprefix("Depends: ").split(", "))
+        for name in ("panasms-network-access.service", "panasms-network-sharing.service", "panasms-network-recovery.service"):
+            for line in (ROOT / "packaging" / name).read_text().splitlines():
+                if line.startswith(("Wants=", "Requires=")):
+                    self.assertNotIn("NetworkManager", line)
 
     def test_shell_syntax(self):
         for name in ["preinst", "postinst", "prerm", "postrm", "panasms-configure", "start-agent"]:

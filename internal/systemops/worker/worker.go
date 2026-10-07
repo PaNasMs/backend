@@ -166,7 +166,7 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
-	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" {
+	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" || strings.HasPrefix(action, "network.wifi.") || strings.HasPrefix(action, "network.share.") {
 		return network.Operation(ctx, "plan", action, user, p)
 	}
 	if strings.HasPrefix(action, "network.access.") {
@@ -181,7 +181,7 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
-	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" {
+	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" || strings.HasPrefix(action, "network.wifi.") || strings.HasPrefix(action, "network.share.") {
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		return network.Operation(ctx, "execute", action, user, p)
 	}

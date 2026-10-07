@@ -1,0 +1,11 @@
+[Unit]
+Description=PaNasMs Wi-Fi supplicant for %I
+After=systemd-networkd.service
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+ExecStart=/usr/sbin/wpa_supplicant -i%I -c/etc/wpa_supplicant/panasms-%I.conf
+Restart=on-failure
+RestartSec=3
+UMask=0077

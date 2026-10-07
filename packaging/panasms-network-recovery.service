@@ -1,11 +1,11 @@
 [Unit]
 Description=Restore unconfirmed PaNasMs Wi-Fi changes after reboot
-After=NetworkManager.service
+After=NetworkManager.service systemd-networkd.service
 Before=panasms-agent.service panasms-core.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/wifi.py --recover
+ExecStart=/usr/lib/panasms/panasms-system-helper network-services recover
 Restart=on-failure
 RestartSec=5s
 

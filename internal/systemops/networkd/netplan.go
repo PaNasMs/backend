@@ -47,6 +47,10 @@ func readNetplan(s *snapshot) error {
 	}
 	s.Backend = "netplan"
 	s.Path = netplanPath(s.Link.Name)
+	if status.ID == "00-panasms-wifi-"+s.Link.Name {
+		s.NetplanID = status.ID
+		s.Path = "/etc/netplan/90-panasms-wifi-" + s.Link.Name + ".yaml"
+	}
 	s.Files = map[string]string{}
 	for _, dir := range []string{"/lib/netplan", "/etc/netplan", "/run/netplan"} {
 		paths, e := filepath.Glob(dir + "/*.yaml")
@@ -156,7 +160,11 @@ func renderNetplan(s snapshot, c Config) (string, error) {
 		return "", fmt.Errorf("Netplan requires matching DHCPv4 and DHCPv6 overrides when both are enabled")
 	}
 	node["routes"] = routes
-	raw, e := yaml.Marshal(map[string]any{"network": map[string]any{"version": 2, "ethernets": map[string]any{netplanID(s.Link.Name): node}}})
+	id := s.NetplanID
+	if id == "" {
+		id = netplanID(s.Link.Name)
+	}
+	raw, e := yaml.Marshal(map[string]any{"network": map[string]any{"version": 2, "ethernets": map[string]any{id: node}}})
 	return "# Managed by PaNasMs. Original Netplan definitions are retained.\n" + string(raw), e
 }
 func validateNetplan(path, content string) error {

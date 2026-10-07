@@ -80,7 +80,7 @@ func readConfig(text string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	allowed := map[string]string{"Match": "Name MACAddress PermanentMACAddress Type Driver Path", "Link": "MTUBytes RequiredForOnline RequiredFamilyForOnline ActivationPolicy", "Network": "DHCP LinkLocalAddressing IPv6PrivacyExtensions IPv6AcceptRA DNS Address Gateway", "DHCP": "RouteMetric UseMTU UseDNS UseRoutes UseGateway ClientIdentifier", "DHCPv4": "RouteMetric UseMTU UseDNS UseRoutes UseGateway ClientIdentifier", "DHCPv6": "RouteMetric UseDNS UseRoutes UseGateway", "IPv6AcceptRA": "UseDNS UseGateway RouteMetric", "Address": "Address", "Route": "Destination Gateway Metric"}
+	allowed := map[string]string{"Match": "Name MACAddress PermanentMACAddress Type Driver Path", "Link": "MTUBytes RequiredForOnline RequiredFamilyForOnline ActivationPolicy", "Network": "DHCP LinkLocalAddressing IPv6PrivacyExtensions IPv6AcceptRA DNS Domains DNSDefaultRoute Address Gateway", "DHCP": "RouteMetric UseMTU UseDNS UseRoutes UseGateway ClientIdentifier", "DHCPv4": "RouteMetric UseMTU UseDNS UseRoutes UseGateway ClientIdentifier", "DHCPv6": "RouteMetric UseDNS UseRoutes UseGateway", "IPv6AcceptRA": "UseDNS UseGateway RouteMetric", "Address": "Address", "Route": "Destination Gateway Metric"}
 	for _, s := range sections {
 		keys, ok := allowed[s.name]
 		if !ok {
@@ -318,11 +318,30 @@ func render(name, mac, original string, c Config) (string, error) {
 			}
 		}
 	}
+	before, _ := readConfig(original)
+	oldDHCP := "no"
+	oldRA := ""
+	for _, section := range originalSections {
+		if section.name == "Network" {
+			if v := last(section, "DHCP"); v != "" {
+				oldDHCP = v
+			}
+			oldRA = last(section, "IPv6AcceptRA")
+		}
+	}
+	dhcp4 := c.IPv4.Method == "auto"
+	dhcp6 := c.IPv6.Method == "auto"
+	if dhcp4 && before.IPv4.Method == "auto" {
+		dhcp4 = oldDHCP == "yes" || oldDHCP == "true" || oldDHCP == "ipv4"
+	}
+	if dhcp6 && before.IPv6.Method == "auto" {
+		dhcp6 = oldDHCP == "yes" || oldDHCP == "true" || oldDHCP == "ipv6"
+	}
 	dhcp := "no"
-	if c.IPv4.Method == "auto" {
+	if dhcp4 {
 		dhcp = "ipv4"
 	}
-	if c.IPv6.Method == "auto" {
+	if dhcp6 {
 		if dhcp == "ipv4" {
 			dhcp = "yes"
 		} else {
@@ -343,13 +362,18 @@ func render(name, mac, original string, c Config) (string, error) {
 	ra := "no"
 	if c.IPv6.Method == "auto" {
 		ra = "yes"
+		if before.IPv6.Method == "auto" && oldRA != "" {
+			ra = oldRA
+		}
 	}
 	fmt.Fprintf(&b, "\n[Network]\nDHCP=%s\nLinkLocalAddressing=%s\nIPv6AcceptRA=%s\n", dhcp, ll, ra)
 	sections, _ := parse(original)
 	for _, s := range sections {
 		if s.name == "Network" {
-			if v := last(s, "IPv6PrivacyExtensions"); v != "" {
-				fmt.Fprintf(&b, "IPv6PrivacyExtensions=%s\n", v)
+			for _, key := range []string{"IPv6PrivacyExtensions", "Domains", "DNSDefaultRoute"} {
+				for _, v := range s.values[key] {
+					fmt.Fprintf(&b, "%s=%s\n", key, v)
+				}
 			}
 		}
 	}

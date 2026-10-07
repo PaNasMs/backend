@@ -241,11 +241,23 @@ class StorageSafety(unittest.TestCase):
             "/dev/data": {"type": "disk", "parent": None, "mountpoints": [], "ro": False},
         }
 
-    def test_system_disk_and_siblings_protected(self):
-        for dev in ("/dev/system", "/dev/system1"):
-            with self.assertRaises(Rejected):
-                storage.protected(dev, self.inv)
-        storage.protected("/dev/data", self.inv)
+    def test_system_partition_and_its_disk_protected_but_not_siblings(self):
+        inv = dict(self.inv)
+        inv["/dev/system2"] = {"type": "part", "parent": "/dev/system", "mountpoints": ["/srv/extra"], "ro": False}
+        inv["/dev/system3"] = {"type": "part", "parent": "/dev/system", "mountpoints": ["/homework"], "ro": False}
+        with self.assertRaisesRegex(Rejected, "system partition"):
+            storage.protected("/dev/system1", inv)
+        with self.assertRaisesRegex(Rejected, "system partition"):
+            storage.protected("/dev/system1", inv, layout=True)
+        with self.assertRaisesRegex(Rejected, "system drive"):
+            storage.protected("/dev/system", inv)
+        storage.protected("/dev/system", inv, layout=True)
+        for sibling in ("/dev/system2", "/dev/system3", "/dev/data"):
+            storage.protected(sibling, inv)
+        inv["/dev/system3"]["mountpoints"] = ["/home"]
+        with self.assertRaisesRegex(Rejected, "system partition"):
+            storage.protected("/dev/system3", inv)
+        self.assertTrue(storage.system_mount("[SWAP]") and storage.system_mount("/var/lib") and not storage.system_mount("/various"))
 
     def test_mounted_and_layered_device_rejected(self):
         with self.assertRaises(Rejected):

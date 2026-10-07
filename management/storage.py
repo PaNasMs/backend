@@ -107,14 +107,27 @@ def friendly_path(path, inv):
     return path
 
 
-def protected(dev, inv):
-    protected_roots = set()
-    for path, d in inv.items():
-        if any(
-            m and (m == "/" or m.startswith(("/boot", "/usr", "/var", "/home", "[SWAP]")))
-            for m in d.get("mountpoints", [])
-        ):
-            protected_roots |= ancestors(path, inv)
+SYSTEM_MOUNTS = ("/", "/boot", "/usr", "/var", "/home")
+
+
+def system_mount(point):
+    """True for the mount points that carry the running system (compared by path component)."""
+    if not point:
+        return False
+    if point == "[SWAP]":
+        return True
+    return any(point == root or (root != "/" and point.startswith(root + "/")) for root in SYSTEM_MOUNTS)
+
+
+def protected(dev, inv, layout=False):
+    """Refuse operations that would damage the running system.
+
+    A system partition (anything mounted under a system path, or swap) is always refused. The devices
+    beneath it (its disk, an array or LUKS container and their members) are refused for operations
+    that act on the whole device, such as wiping, array membership or ejecting. Other partitions on
+    the same disk, and new partitions in its free space, are ordinary storage: with ``layout`` the
+    disk itself is accepted so a partition can be created there.
+    """
 
     def backing(path, seen=None):
         seen = set() if seen is None else seen
@@ -129,14 +142,13 @@ def protected(dev, inv):
             backing(parent, seen)
         return seen
 
-    for path, d in inv.items():
-        if any(
-            m and (m == "/" or m.startswith(("/boot", "/usr", "/var", "/home", "[SWAP]")))
-            for m in d.get("mountpoints", [])
-        ):
-            protected_roots |= backing(path)
-    root_ancestors = backing(dev)
-    require(not root_ancestors.intersection(protected_roots), 'The system drive or one of its members is protected')
+    system = {path for path, d in inv.items() if any(system_mount(m) for m in d.get("mountpoints", []))}
+    carriers = set()
+    for path in system:
+        carriers |= backing(path)
+    carriers -= system
+    require(dev not in system, 'The system partition is protected')
+    require(layout or dev not in carriers, 'The system drive or one of its members is protected')
     require(not inv[dev].get("ro"), 'The device is read-only')
 
 
@@ -598,7 +610,9 @@ def plan(action, p):
             )
             details = ['The test may wake the disk', target]
         else:
-            protected(target, inv)
+            # Partition operations touch the layout of a disk, not the disk as a whole: the system disk
+            # is accepted there, its system partitions are not.
+            protected(target, inv, layout=action.startswith("partition."))
             if action.startswith("raid."):
                 md = Path("/sys/class/block") / inv[target]["kname"] / "md"
                 require(md.is_dir(), 'The device is not an MD RAID array')
@@ -1148,7 +1162,7 @@ def execute_unlocked(action, p, user=None):
             "check" if action == "raid.check" else "idle"
         )
     elif action == "partition.create":
-        protected(target, inv)
+        protected(target, inv, layout=True)
         unused(target, inv, True)
         if partition_layout(target, inv) is None:
             command(["parted", "--script", target, "mklabel", "gpt"])
@@ -1481,12 +1495,17 @@ def query(view, target):
             )
             row["filesystemHealth"] = filesystem_health.cached(path)
             row["protectedReason"] = ""
+            row["layoutReason"] = ""
             row["busyReason"] = ""
             row["raidReason"] = ""
             try:
                 protected(path, inv)
             except Rejected as e:
                 row["protectedReason"] = str(e)
+            try:
+                protected(path, inv, layout=True)
+            except Rejected as e:
+                row["layoutReason"] = str(e)
             try:
                 unused(path, inv)
             except Rejected as e:

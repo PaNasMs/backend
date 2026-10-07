@@ -160,6 +160,15 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+func TestWifiPasswordBoundaries(t *testing.T) {
+	for _, size := range []int{7, 8, 11, 12, 63, 64} {
+		c := Config{SSID: "PaNasMs", Password: strings.Repeat("a", size), Band: "auto", Delay: 90}
+		if got := validate(c) == nil; got != (size >= 8 && size <= 63) {
+			t.Errorf("password length %d: accepted=%v", size, got)
+		}
+	}
+}
+
 func TestGadgetKernelNames(t *testing.T) {
 	for path, want := range map[string]bool{"/sys/devices/platform/usb/gadget/net/usb0": true, "/sys/devices/platform/usb/gadget.0/net/usb0": true, "/sys/devices/platform/usb/net/eth1": false, "/tmp/gadget.0/not-net/usb0": false} {
 		if got := IsGadgetPath(path); got != want {

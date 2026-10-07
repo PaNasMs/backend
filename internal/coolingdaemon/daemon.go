@@ -27,17 +27,33 @@ type Config struct {
 }
 
 func readConfig() (Config, error) {
-	var c Config
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
-		return c, err
+		return Config{}, err
 	}
-	if err = json.Unmarshal(raw, &c); err != nil {
+	return decodeConfig(raw)
+}
+func decodeConfig(raw []byte) (Config, error) {
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
 		return c, err
 	}
 	if c.HardwareMode == "" {
 		c.HardwareMode = "external-pwm"
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return c, err
+	}
+	if _, ok := fields["controlGPIO"]; !ok {
 		c.ControlGPIO = 27
+		if c.HardwareMode == "internal-pwm" {
+			c.ControlGPIO = 18
+		}
+	}
+	if _, ok := fields["tachGPIO"]; !ok && c.HardwareMode == "internal-pwm" {
+		tach := 24
+		c.TachGPIO = &tach
 	}
 	if c.CPUProfile == "" {
 		c.CPUProfile = "balanced"

@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    uses: PaNasMs/panasms/.github/workflows/build.yml@4676200305d947b8f65f4906c7001cc9f6ddda32
+    uses: PaNasMs/panasms/.github/workflows/build.yml@43268dcfdb57cfa7b1a9e100ecc1f2450d14e62f
     with:
-      build_ref: 4676200305d947b8f65f4906c7001cc9f6ddda32
+      build_ref: 43268dcfdb57cfa7b1a9e100ecc1f2450d14e62f
       backend_ref: ${{ github.sha }}

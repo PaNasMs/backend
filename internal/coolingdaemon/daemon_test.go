@@ -149,3 +149,27 @@ func TestAtomicStatus(t *testing.T) {
 		t.Fatal(info.Mode())
 	}
 }
+
+func TestLegacyConfigAndExplicitTachDisable(t *testing.T) {
+	for _, tc := range []struct {
+		extra   string
+		mode    string
+		control int
+		tach    bool
+	}{
+		{``, "external-pwm", 27, false},
+		{`,"hardwareMode":"internal-pwm"`, "internal-pwm", 18, true},
+		{`,"hardwareMode":"internal-pwm","tachGPIO":null`, "internal-pwm", 18, false},
+		{`,"hardwareMode":"none"`, "none", 27, false},
+	} {
+		c, err := decodeConfig([]byte(`{"profile":"balanced","sampleSeconds":60,"disks":[]` + tc.extra + `}`))
+		if err != nil || c.HardwareMode != tc.mode || c.ControlGPIO != tc.control || (c.TachGPIO != nil) != tc.tach {
+			t.Fatalf("%+v %v", c, err)
+		}
+	}
+	for _, raw := range []string{`{"profile":"bad"}`, `{"profile":"balanced","sampleSeconds":1}`, `{"profile":"balanced","sampleSeconds":60,"hardwareMode":"internal-pwm","controlGPIO":27}`} {
+		if _, err := decodeConfig([]byte(raw)); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+}

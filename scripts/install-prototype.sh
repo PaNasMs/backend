@@ -46,7 +46,7 @@ printf 'Installing PaNasMs for %s on %s (%s). Existing storage is never formatte
 export DEBIAN_FRONTEND=noninteractive
 python3 "$repo/packaging/panasms-inspect-hardware"
 apt-get update
-apt-get install -y --no-install-recommends build-essential libpam0g-dev pkg-config ca-certificates curl python3 python3-pil openssl
+apt-get install -y --no-install-recommends build-essential cmake libfdt-dev device-tree-compiler libpam0g-dev pkg-config ca-certificates curl python3 python3-pil openssl
 scratch=$(mktemp -d /var/tmp/panasms-build.XXXXXXXX)
 trap 'rm -rf -- "$scratch"' EXIT
 install -d "$scratch/backend" "$scratch/ui"
@@ -71,8 +71,8 @@ install -d -o "$admin" -g "$(id -gn "$admin")" "$repo/dist"
 package="$repo/dist/panasms-prototype_0.2.5_${arch}.deb"
 install -o "$admin" -g "$(id -gn "$admin")" -m 0644 "$scratch/backend/dist/panasms-prototype_0.2.5_${arch}.deb" "$package"
 if [[ $disk_fan == 1 ]]; then
- install -m 0644 "$scratch/backend/dist/panasms-cooling_0.2.0_all.deb" "$repo/dist/panasms-cooling_0.2.0_all.deb"
- apt-get install -y --reinstall "$repo/dist/panasms-cooling_0.2.0_all.deb"
+ install -m 0644 "$scratch/backend/dist/panasms-cooling_0.2.0_${arch}.deb" "$repo/dist/panasms-cooling_0.2.0_${arch}.deb"
+ apt-get install -y --reinstall "$repo/dist/panasms-cooling_0.2.0_${arch}.deb"
  panasms-cooling-configure
 fi
 apt-get install -y --reinstall "$package"

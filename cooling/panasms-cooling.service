@@ -4,8 +4,8 @@ After=local-fs.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/python3 /usr/lib/panasms-cooling/controller.py
-ExecStopPost=/usr/bin/python3 /usr/lib/panasms-cooling/controller.py --failsafe
+ExecStart=/usr/lib/panasms-cooling/panasms-cooling
+ExecStopPost=/usr/lib/panasms-cooling/panasms-cooling --failsafe
 Restart=always
 RestartSec=2
 WatchdogSec=15

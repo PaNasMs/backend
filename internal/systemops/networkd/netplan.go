@@ -83,7 +83,15 @@ func renderNetplan(s snapshot, c Config) (string, error) {
 	node["renderer"] = "networkd"
 	node["dhcp4"] = c.IPv4.Method == "auto"
 	node["dhcp6"] = c.IPv6.Method == "auto"
+	if c.IPv6.Method == "auto" && s.Config.IPv6.Method == "auto" {
+		node["dhcp6"] = s.Netplan["dhcp6"] == true
+	}
 	node["accept-ra"] = c.IPv6.Method == "auto"
+	if c.IPv6.Method == "auto" && s.Config.IPv6.Method == "auto" {
+		if value, ok := s.Netplan["accept-ra"]; ok {
+			node["accept-ra"] = value
+		}
+	}
 	linklocal := []string{}
 	if c.IPv4.Method == "link-local" {
 		linklocal = append(linklocal, "ipv4")

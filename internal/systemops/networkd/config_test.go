@@ -154,3 +154,27 @@ func TestRecoveryDoesNotOverwriteExternalEdits(t *testing.T) {
 		t.Fatal(string(b))
 	}
 }
+
+func TestPreserveSearchDomainsAndSLAACOnly(t *testing.T) {
+	original := "[Match]\nName=eth0\n[Network]\nDHCP=ipv4\nLinkLocalAddressing=ipv6\nDNS=192.0.2.1\nDomains=home.arpa ~example.org\nDNSDefaultRoute=yes\n"
+	c, err := readConfig(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.MTU = 1400
+	rendered, err := render("eth0", "02:00:00:00:00:01", original, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "DHCP=ipv4\n") || !strings.Contains(rendered, "Domains=home.arpa ~example.org\n") || !strings.Contains(rendered, "DNSDefaultRoute=yes\n") {
+		t.Fatal(rendered)
+	}
+	s := snapshot{Config: c, Netplan: map[string]any{"dhcp4": true, "dhcp6": false}, Link: link{Name: "eth0", HardwareAddress: []byte{2, 0, 0, 0, 0, 1}}}
+	rendered, err = renderNetplan(s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "dhcp6: false") {
+		t.Fatal(rendered)
+	}
+}

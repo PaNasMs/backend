@@ -1,12 +1,12 @@
 [Unit]
 Description=PaNasMs network sharing recovery and uplink routing
-After=NetworkManager.service network-online.target panasms-network-recovery.service
+After=NetworkManager.service systemd-networkd.service network-online.target panasms-network-recovery.service
 Wants=network-online.target
 Before=panasms-agent.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/network_sharing.py --service
+ExecStart=/usr/lib/panasms/panasms-system-helper network-services run
 Restart=on-failure
 RestartSec=5s
 UMask=0077

@@ -34,7 +34,7 @@ live in the Go store packages; there is no sqlc generation step.
 
 Linux users/groups, profiles and SSH keys; home relocation; disks and mdadm RAID;
 partitions, filesystems, LUKS and mounts; SMART checks and schedules; disk standby;
-CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager Ethernet/Wi-Fi, native systemd-networkd and Netplan IP settings, access
+CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager and native systemd-networkd/Netplan networking, access
 points and connection sharing; system services, journal, updates and power
 operations; module installation and the signed online catalog.
 
@@ -187,7 +187,7 @@ installing/configuring the optional cooling package.
 
 The package declares required runtime tools in Debian `Depends`, including mdadm
 and initramfs-tools for RAID, partition/filesystem and SMART utilities,
-NetworkManager and wpasupplicant for Ethernet/Wi-Fi, Samba/NFS tools, and PAM/session
+wpasupplicant and either hostapd or an existing NetworkManager for Wi-Fi, Samba/NFS tools, and PAM/session
 support. They are installed even with `--no-install-recommends`; access to the
 configured distribution repositories is required. `dpkg -i` alone does not download
 dependencies. CI resolves the complete dependency tree using an empty installed-package
@@ -442,9 +442,23 @@ after reboot. Physical interfaces are selected individually; Docker and other sy
 interfaces remain protected.
 
 Existing advanced configurations that cannot be represented by the IP editor are
-read-only. Wi-Fi and sharing orchestration still use the explicit legacy dependency
-adapter; they are not silently migrated between network managers. The networkd/Netplan
-IP editor currently targets Ethernet, not wireless authentication or bridge topology.
+read-only. NetworkManager is no longer a mandatory runtime dependency and is not
+started by PaNasMs network units. When NetworkManager is absent and networkd is
+active, the Go native service handles Wi-Fi authentication with wpa_supplicant,
+access points with hostapd, DHCP/DNS with dnsmasq, and selected-uplink NAT with
+policy routing and nftables. Netplan installations retain YAML as their configuration
+source; native networkd installations use dedicated network definitions. Existing
+NetworkManager installations continue to use their existing adapter.
+
+Native changes keep a durable rollback record before modifying configuration.
+Unconfirmed changes are restored after a timeout or reboot. Radio state is per
+adapter. Sharing overlays do not rewrite wildcard OS interface definitions.
+
+Hardware tests are opt-in: `PANASMS_NATIVE_TEST_WIFI=wlan0` enables radio, scan and
+AP tests in `internal/systemops/networknative`; `PANASMS_NATIVE_TEST_UPLINK=end0`
+enables an isolated veth/NAT test. Run only on an authorized test host, as root,
+with NetworkManager stopped and independent recovery arranged. The AP check verifies
+service readiness, not association or a DHCP lease from a physical client.
 
 Run `make check-network-integration` only as root on an authorized test host with
 NetworkManager. It creates and removes a temporary veth pair and tests native Go

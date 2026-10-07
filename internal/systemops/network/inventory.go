@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"panasms.local/backend/internal/systemops/networkd"
+	"panasms.local/backend/internal/systemops/networknative"
 )
 
 func Query(ctx context.Context) (json.RawMessage, error) {
@@ -124,18 +125,26 @@ func Query(ctx context.Context) (json.RawMessage, error) {
 			}
 			delete(row, "nmState")
 			row["managed"] = true
-			row["kind"] = "ethernet"
+			if networknative.Wireless(row["name"].(string)) {
+				row["kind"] = "wifi"
+			} else {
+				row["kind"] = "ethernet"
+			}
 		}
 		if row["system"] == true || row["accessManaged"] == true {
 			row["editable"] = false
 		}
 	}
-	raw, e = legacy(ctx, "inventory", "", "", map[string]any{"interfaces": rows})
-	if e != nil {
-		return nil, e
-	}
 	var extra map[string]any
-	if e = json.Unmarshal(raw, &extra); e != nil {
+	if a == nil && networknative.Active() {
+		extra, e = networknative.Inventory(rows)
+	} else {
+		raw, e = legacy(ctx, "inventory", "", "", map[string]any{"interfaces": rows})
+		if e == nil {
+			e = json.Unmarshal(raw, &extra)
+		}
+	}
+	if e != nil {
 		return nil, e
 	}
 	unlock, e := networkd.Lock()

@@ -49,6 +49,7 @@ type View struct {
 	State    string   `json:"providerState"`
 }
 type snapshot struct {
+	NetplanID   string
 	Backend     string
 	Netplan     map[string]any
 	Link        link
@@ -126,6 +127,9 @@ func inspect(name string) (snapshot, error) {
 		return s, fmt.Errorf("Interface is not managed by systemd-networkd")
 	}
 	s.Path = ownedPath(name)
+	if s.Link.NetworkFile == "/etc/systemd/network/00-panasms-wifi-"+name+".network" {
+		s.Path = s.Link.NetworkFile
+	}
 	if filepath.Base(s.Path) > filepath.Base(s.Link.NetworkFile) {
 		return s, fmt.Errorf("An earlier network file prevents safe per-interface configuration")
 	}

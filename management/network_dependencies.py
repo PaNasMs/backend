@@ -19,7 +19,7 @@ def run(request):
                 'wifi': network.wifi.inventory(adapter, rows) if adapter else None,
                 'sharing': network.sharing.inventory(adapter, rows)}
     require(mode in ('plan', 'execute'), 'Unknown network dependency operation')
-    require(request['action'] in ('network.confirm', 'network.rollback'), 'Unknown network dependency action')
+    require(request['action'] in ('network.confirm', 'network.rollback') or request['action'] in network.wifi.ACTIONS or request['action'] in network.sharing.ACTIONS, 'Unknown network dependency action')
     return getattr(network, mode)(request['action'], request['params'], request['user'])
 
 

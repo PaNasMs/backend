@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"panasms.local/backend/internal/systemops"
+	"panasms.local/backend/internal/systemops/networknative"
 )
 
 const usbBootBlock = "\n# PaNasMs direct USB access\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n# End PaNasMs direct USB access\n"
@@ -119,6 +120,12 @@ func usbStatus(c Config, rows []Device) string {
 	if !c.USB {
 		for _, d := range rows {
 			if d.Profile == usbUUID {
+				if nativeNetwork() {
+					if networknative.DirectStop(usbID, d.Name) != nil {
+						return "error"
+					}
+					continue
+				}
 				_, e := run("nmcli", "connection", "down", "uuid", usbUUID)
 				if e != nil {
 					return "error"
@@ -170,6 +177,12 @@ func usbStatus(c Config, rows []Device) string {
 	addr, e := subnet(rows, 120)
 	if e != nil {
 		return "error"
+	}
+	if nativeNetwork() {
+		if e = networknative.DirectStart(usbID, name, addr, nil); e != nil {
+			return "error"
+		}
+		return "connected"
 	}
 	if e = installProfile(usbID, profile(usbID, usbUUID, "ethernet", name, addr, "")); e != nil {
 		return "error"

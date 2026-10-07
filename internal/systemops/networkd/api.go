@@ -25,3 +25,16 @@ func Operation(mode, action, user string, params map[string]any) (any, error) {
 	}
 	return execute(r)
 }
+
+// SharingSource captures only the simple IP settings supported by the existing editor.
+func SharingSource(name, bridge string) (string, map[string]any, string, error) {
+	s, e := inspect(name)
+	if e != nil {
+		return "", nil, "", e
+	}
+	b, e := render(bridge, "", s.Text, s.Config)
+	if e != nil {
+		return "", nil, "", e
+	}
+	return b, s.Netplan, s.Fingerprint, nil
+}

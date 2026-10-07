@@ -1,0 +1,11 @@
+[Unit]
+Description=PaNasMs access point for %I
+After=systemd-networkd.service
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+ExecStart=/usr/sbin/hostapd /etc/panasms/network/hostapd-%I.conf
+Restart=on-failure
+RestartSec=3
+UMask=0077

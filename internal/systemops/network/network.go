@@ -18,6 +18,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkd"
+	"panasms.local/backend/internal/systemops/networknative"
 )
 
 var validName = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,15}$`)
@@ -164,6 +165,32 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 	s, e := readState()
 	if e != nil {
 		return nil, e
+	}
+	if s != nil && s.Kind == "network.native" && (action == "network.confirm" || action == "network.rollback") {
+		return networknative.Operation(mode, action, user, p)
+	}
+	if strings.HasPrefix(action, "network.wifi.") || strings.HasPrefix(action, "network.share.") {
+		a, err := connect()
+		if err == nil {
+			a.bus.Close()
+			return legacy(ctx, mode, action, user, p)
+		}
+		if !networknative.Active() {
+			return nil, fmt.Errorf("No supported network manager is active")
+		}
+		if strings.HasPrefix(action, "network.wifi.") && action != "network.wifi.scan" && action != "network.wifi.radio" {
+			name, _ := p["interface"].(string)
+			if err := guard(name); err != nil {
+				return nil, err
+			}
+		}
+		if action == "network.wifi.radio" {
+			name, _ := p["interface"].(string)
+			if systemInterface(name) || accessInterface(name) {
+				return nil, fmt.Errorf("Manage this connection in Network access settings")
+			}
+		}
+		return networknative.Operation(mode, action, user, p)
 	}
 	if action != "network.configure" && s != nil && s.Kind != "network.nm" && s.Kind != "network.networkd" {
 		return legacy(ctx, mode, action, user, p)

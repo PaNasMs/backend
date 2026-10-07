@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/systemops"
+	"panasms.local/backend/internal/systemops/networknative"
 )
 
 const root = "/var/lib/panasms-agent/network-access"
@@ -155,6 +156,9 @@ func wifiBands(info string) []string {
 	return bands
 }
 func devices() ([]Device, error) {
+	if nativeNetwork() {
+		return nativeDevices()
+	}
 	out, e := run("nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CON-UUID", "device")
 	if e != nil {
 		return nil, e
@@ -363,6 +367,9 @@ func startAP(c Config, d Device, rows []Device) error {
 	if e != nil {
 		return e
 	}
+	if nativeNetwork() {
+		return networknative.DirectStart(apID, d.Name, addr, &networknative.APConfig{SSID: c.SSID, Password: c.Password, Band: band})
+	}
 	extra := fmt.Sprintf("\n[wifi]\nmode=ap\nsecurity=802-11-wireless-security\nssid=%s\nband=%s\n\n[wifi-security]\nkey-mgmt=wpa-psk\nproto=rsn;\npsk=%s\n", keyValue(c.SSID), band, keyValue(c.Password))
 	if e = installProfile(apID, profile(apID, apUUID, "wifi", d.Name, addr, extra)); e != nil {
 		return e
@@ -371,6 +378,13 @@ func startAP(c Config, d Device, rows []Device) error {
 	return e
 }
 func stopAP() error {
+	if nativeNetwork() {
+		name := networknative.DirectInterface(apID)
+		if name == "" {
+			return nil
+		}
+		return networknative.DirectStop(apID, name)
+	}
 	_, e := run("nmcli", "--wait", "10", "connection", "down", "uuid", apUUID)
 	return e
 }
@@ -648,7 +662,7 @@ func networkLock() (func(), error) {
 		f.Close()
 		return nil, e
 	}
-	if change.Status == "pending" || change.Status == "applying" {
+	if change.Status == "pending" || change.Status == "applying" || change.Status == "rollback-failed" {
 		f.Close()
 		return nil, reject("Confirm or revert the pending network change first")
 	}
@@ -697,7 +711,7 @@ func tickGuarded() error {
 		Status string `json:"status"`
 	}
 	_ = read("/run/panasms-network/change.json", &change)
-	if change.Status == "pending" || change.Status == "applying" {
+	if change.Status == "pending" || change.Status == "applying" || change.Status == "rollback-failed" {
 		return nil
 	}
 	return Tick()
@@ -709,6 +723,16 @@ func Remove() error {
 	}
 	for _, d := range rows {
 		if d.Profile == apUUID || d.Profile == usbUUID {
+			if nativeNetwork() {
+				id := apID
+				if d.Profile == usbUUID {
+					id = usbID
+				}
+				if e = networknative.DirectStop(id, d.Name); e != nil {
+					return e
+				}
+				continue
+			}
 			if _, e = run("nmcli", "connection", "down", "uuid", d.Profile); e != nil {
 				return e
 			}
@@ -716,7 +740,7 @@ func Remove() error {
 	}
 	for id, uuid := range map[string]string{apID: apUUID, usbID: usbUUID} {
 		p := "/etc/NetworkManager/system-connections/" + id + ".nmconnection"
-		if _, e = os.Stat(p); e == nil {
+		if _, e = os.Stat(p); e == nil && !nativeNetwork() {
 			if _, e = run("nmcli", "connection", "delete", "uuid", uuid); e != nil {
 				return e
 			}

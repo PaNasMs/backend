@@ -1,0 +1,11 @@
+[Unit]
+Description=PaNasMs DHCP and DNS for %I
+After=systemd-networkd.service
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/panasms/network/dnsmasq-%I.conf
+Restart=on-failure
+RestartSec=3
+UMask=0077

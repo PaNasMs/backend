@@ -65,6 +65,13 @@ class Updates(unittest.TestCase):
         self.assertEqual(events,[('stop',['panasms-module-terminal.service']),('restore',None)])
         self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
 
+    def test_install_plan_reports_module_blocker_before_submission(self):
+        current={'available':True,'candidate':{'version':'0.2.6'},'installed':{}}
+        with patch.object(u,'busy',return_value=False), patch.object(u,'query',return_value=current), patch.object(u,'preflight'), patch.object(u,'module_idle',side_effect=Rejected('Wait for active module tasks: cloud-sync')) as idle:
+            with self.assertRaisesRegex(Rejected,'cloud-sync'):
+                u.plan('system.update.install',{})
+            idle.assert_called_once_with(skip_terminal=True)
+
     def test_supported_os_requires_explicit_distribution_version_and_arch(self):
         for distro, version, arch, expected in [('debian','13','amd64',True), ('raspbian','13','arm64',True), ('ubuntu','24.04','amd64',True), ('ubuntu','24.04','arm64',False), ('ubuntu','22.04','amd64',False), ('other','13','amd64',False)]:
             with self.subTest(distro=distro,version=version,arch=arch):

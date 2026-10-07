@@ -38,6 +38,19 @@ class SharingTest(unittest.TestCase):
         self.assertIn('root preexec close = yes',smb)
         self.assertIn('root_squash,mountpoint=/srv/data',nfs)
         self.assertNotIn('no_root_squash',nfs)
+    def test_legacy_permissions_migrate_without_overwriting_external_edits(self):
+        state={'shares':[self.share],'accounts':{}}
+        sharing.STATE.write_text(sharing.json.dumps(state))
+        for path,value in zip((sharing.SMB,sharing.EXPORTS),sharing.config(state['shares'],legacy=True)):
+            path.write_text(value)
+        with patch.object(sharing,'reload_services'):self.assertTrue(sharing.republish())
+        self.assertFalse(sharing.drift(state))
+        self.assertIn('inherit permissions = no',sharing.SMB.read_text())
+        self.assertIn('map archive = no',sharing.SMB.read_text())
+        sharing.SMB.write_text(sharing.config(state['shares'],legacy=True)[0]+'# custom edit\n')
+        with patch.object(sharing,'reload_services') as reload:self.assertFalse(sharing.republish())
+        reload.assert_not_called()
+
     def test_disable_protocols(self):
         s={**self.share,'smb':False,'nfs':False}
         self.assertEqual(sharing.config([s]),(sharing.HEADER,sharing.HEADER))

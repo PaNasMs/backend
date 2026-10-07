@@ -31,16 +31,18 @@ def text(path):
     return path.read_text() if path.exists() else ''
 
 
-def config(shares):
+def config(shares, legacy=False):
     smb, nfs = HEADER, HEADER
     for s in shares:
         if s['smb']:
             members = s['readers'] + s['writers']
-            smb += f"\n[{s['name']}]\npath = {s['path']}\nguest ok = no\nread only = yes\nvalid users = {' '.join(members)}\nwrite list = {' '.join(s['writers'])}\ncreate mask = 0660\ndirectory mask = 0770\ninherit permissions = yes\nwide links = no\nfollow symlinks = no\nroot preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check {s['name']}\nroot preexec close = yes\n"
+            smb += f"\n[{s['name']}]\npath = {s['path']}\nguest ok = no\nread only = yes\nvalid users = {' '.join(members)}\nwrite list = {' '.join(s['writers'])}\ncreate mask = 0660\ndirectory mask = 0770\ninherit permissions = no\nmap archive = no\nmap system = no\nmap hidden = no\nwide links = no\nfollow symlinks = no\nroot preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check {s['name']}\nroot preexec close = yes\n"
         if s['smb'] and s['nfs']:
             smb += 'oplocks = no\nlevel2 oplocks = no\nstrict locking = yes\n'
         if s['nfs']:
             nfs += s['path'] + ' ' + ' '.join(c + '(' + ('ro' if s['readOnly'] else 'rw') + ',sync,no_subtree_check,root_squash,mountpoint=' + s['mountpoint'] + ')' for c in s['clients']) + '\n'
+    if legacy:
+        smb = smb.replace("inherit permissions = no\nmap archive = no\nmap system = no\nmap hidden = no", "inherit permissions = yes")
     return smb, nfs
 
 
@@ -181,7 +183,11 @@ def republish():
     # publish them again on reinstall. The installer recreates an empty managed
     # Samba include before this runs, so empty files count as unpublished.
     # Edited managed files are left for the explicit restore action in Shared folders.
-    if read()['shares'] and not JOURNAL.exists() and all(not p.exists() or text(p) == HEADER for p in (SMB, EXPORTS)):
+    state = read()
+    if state['shares'] and not JOURNAL.exists() and tuple(text(p) for p in (SMB, EXPORTS)) == config(state['shares'], legacy=True):
+        apply(state)
+        return True
+    if state['shares'] and not JOURNAL.exists() and all(not p.exists() or text(p) == HEADER for p in (SMB, EXPORTS)):
         recover()
         return True
     return False

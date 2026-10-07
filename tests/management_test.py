@@ -259,6 +259,25 @@ class StorageSafety(unittest.TestCase):
             storage.protected("/dev/system3", inv)
         self.assertTrue(storage.system_mount("[SWAP]") and storage.system_mount("/var/lib") and not storage.system_mount("/various"))
 
+    def test_boot_loader_swap_and_fstab_partitions_are_system(self):
+        inv = dict(self.inv)
+        inv["/dev/system2"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "parttype": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"}
+        inv["/dev/system3"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "fstype": "swap"}
+        inv["/dev/system4"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "uuid": "1234-ABCD", "fstype": "vfat"}
+        inv["/dev/system5"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "partuuid": "0000-05", "fstype": "ext4"}
+        inv["/dev/system6"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "uuid": "data-1", "fstype": "ext4"}
+        with tempfile.NamedTemporaryFile("w", suffix="fstab", delete=False) as f:
+            f.write("# comment\nUUID=1234-ABCD /efi vfat umask=0077 0 1\nPARTUUID=0000-05 /home ext4 defaults 0 2\nUUID=data-1 /srv/data ext4 defaults 0 2\n")
+        fstab = Path(f.name)
+        try:
+            with patch.object(storage, "FSTAB", fstab):
+                for dev in ("/dev/system2", "/dev/system3", "/dev/system4", "/dev/system5"):
+                    with self.assertRaisesRegex(Rejected, "system partition", msg=dev):
+                        storage.protected(dev, inv)
+                storage.protected("/dev/system6", inv)
+        finally:
+            fstab.unlink()
+
     def test_mounted_and_layered_device_rejected(self):
         with self.assertRaises(Rejected):
             storage.unused("/dev/system", self.inv)

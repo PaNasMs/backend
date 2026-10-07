@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/json"
 	"github.com/godbus/dbus/v5"
 	"panasms.local/backend/internal/systemops/networkd"
 	"testing"
@@ -93,5 +94,19 @@ func TestAbsentOptionalProperties(t *testing.T) {
 	c := config(basicSettings())
 	if c.IPv4.Method != "auto" || len(c.IPv4.DNS) != 0 || len(c.IPv6.Routes) != 0 {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestRecoveryFailureIsExposedWithoutPrivateState(t *testing.T) {
+	var s state
+	if err := json.Unmarshal([]byte(`{"id":"test","status":"rollback-failed","error":"external configuration changed","profileHash":"private"}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	result := public(&s).(map[string]any)
+	if result["status"] != "rollback-failed" || result["error"] != "external configuration changed" {
+		t.Fatalf("missing recovery error: %#v", result)
+	}
+	if _, ok := result["profileHash"]; ok {
+		t.Fatal("private transaction data exposed")
 	}
 }

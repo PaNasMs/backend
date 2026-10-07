@@ -36,8 +36,8 @@ func usbCapability() USBCapability {
 	for _, p := range udcs() {
 		function, _ := os.ReadFile(p + "/function")
 		f := strings.TrimSpace(string(function))
-		_, owned := os.Stat("/etc/modules-load.d/panasms-usb.conf")
-		if f != "" && (!strings.Contains(f, "Ethernet Gadget") || owned != nil) {
+		modules, _ := os.ReadFile("/etc/modules-load.d/panasms-usb.conf")
+		if f != "" && !ownedEthernetFunction(f, string(modules)) {
 			c.Reason = "controller-busy"
 			return c
 		}
@@ -144,7 +144,7 @@ func usbStatus(c Config, rows []Device) string {
 	name := ""
 	for _, p := range paths {
 		device, _ := filepath.EvalSymlinks(p)
-		if strings.Contains(device, "/gadget/net/") {
+		if IsGadgetPath(device) {
 			name = filepath.Base(p)
 			break
 		}
@@ -178,4 +178,28 @@ func usbStatus(c Config, rows []Device) string {
 		return "error"
 	}
 	return "connected"
+}
+
+func IsGadgetPath(path string) bool {
+	parts := strings.Split(filepath.Clean(path), "/")
+	for i, part := range parts {
+		if (part == "gadget" || strings.HasPrefix(part, "gadget.")) && i+1 < len(parts) && parts[i+1] == "net" {
+			return true
+		}
+	}
+	return false
+}
+func ownedEthernetFunction(function, modules string) bool {
+	if function != "g_ether" && function != "Ethernet Gadget" && function != "RNDIS/Ethernet Gadget" {
+		return false
+	}
+	if !strings.Contains(modules, "# PaNasMs direct USB access") {
+		return false
+	}
+	for _, line := range strings.Split(modules, "\n") {
+		if strings.TrimSpace(line) == "g_ether" {
+			return true
+		}
+	}
+	return false
 }

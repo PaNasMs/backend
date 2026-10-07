@@ -110,3 +110,13 @@ func TestRecoveryFailureIsExposedWithoutPrivateState(t *testing.T) {
 		t.Fatal("private transaction data exposed")
 	}
 }
+
+func TestLegacyWiFiFractionalDeadline(t *testing.T) {
+	var s state
+	if err := json.Unmarshal([]byte(`{"kind":"network.wifi.radio","status":"expired","deadline":1791368436.034579}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Deadline != 1791368436.034579 {
+		t.Fatalf("deadline changed: %v", s.Deadline)
+	}
+}

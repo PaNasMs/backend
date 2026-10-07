@@ -178,3 +178,23 @@ func TestPreserveSearchDomainsAndSLAACOnly(t *testing.T) {
 		t.Fatal(rendered)
 	}
 }
+
+func TestPendingLegacyWiFiDeadline(t *testing.T) {
+	old := pendingPath
+	t.Cleanup(func() { pendingPath = old })
+	pendingPath = t.TempDir() + "/change.json"
+	for _, input := range []string{`{"status":"pending","deadline":1791368436.034579}`, `{"status":"rollback-failed"}`, `broken`} {
+		if err := os.WriteFile(pendingPath, []byte(input), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if !pending() {
+			t.Fatalf("unsafe transaction allowed: %s", input)
+		}
+	}
+	if err := os.WriteFile(pendingPath, []byte(`{"status":"expired","deadline":1791368436.034579}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if pending() {
+		t.Fatal("expired legacy transaction blocked edits")
+	}
+}

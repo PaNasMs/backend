@@ -16,6 +16,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"panasms.local/backend/internal/systemops"
+	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkd"
 )
 
@@ -29,7 +30,7 @@ type state struct {
 	User        string          `json:"user"`
 	Status      string          `json:"status"`
 	Error       string          `json:"error,omitempty"`
-	Deadline    int64           `json:"deadline"`
+	Deadline    float64         `json:"deadline"`
 	Addresses   []string        `json:"addresses"`
 	Checkpoint  dbus.ObjectPath `json:"checkpoint"`
 	Profile     dbus.ObjectPath `json:"profile"`
@@ -103,7 +104,7 @@ func systemInterface(name string) bool {
 		return true
 	}
 	_, wireless := os.Stat("/sys/class/net/" + name + "/phy80211")
-	return name == "lo" || name == "docker0" || strings.HasPrefix(name, "veth") || (strings.HasPrefix(p, "/sys/devices/virtual/net/") && wireless != nil)
+	return networkaccess.IsGadgetPath(p) || name == "lo" || name == "docker0" || strings.HasPrefix(name, "veth") || (strings.HasPrefix(p, "/sys/devices/virtual/net/") && wireless != nil)
 }
 func accessInterface(name string) bool {
 	b, _ := os.ReadFile("/run/panasms-network-access.json")
@@ -113,7 +114,7 @@ func accessInterface(name string) bool {
 	_ = json.Unmarshal(b, &s)
 	p, _ := filepath.EvalSymlinks("/sys/class/net/" + name)
 	_, usb := os.Stat("/etc/modules-load.d/panasms-usb.conf")
-	return name != "" && (name == s.Interface || (strings.Contains(p, "/gadget/net/") && usb == nil))
+	return name != "" && (name == s.Interface || (networkaccess.IsGadgetPath(p) && usb == nil))
 }
 func guard(name string) error {
 	if !validName.MatchString(name) || systemInterface(name) {
@@ -242,7 +243,7 @@ func nmOperation(a *adapter, mode, action, user string, p map[string]any, s *sta
 			_ = a.rollback(checkpoint)
 			return nil, e
 		}
-		s = &state{ID: hex.EncodeToString(id), Kind: "network.nm", Interface: name, User: user, Checkpoint: checkpoint, Profile: profile, ProfileHash: signature(saved), Status: "applying", Deadline: time.Now().Unix() + 120, Addresses: append(append([]string{}, c.IPv4.Addresses...), c.IPv6.Addresses...), Config: c}
+		s = &state{ID: hex.EncodeToString(id), Kind: "network.nm", Interface: name, User: user, Checkpoint: checkpoint, Profile: profile, ProfileHash: signature(saved), Status: "applying", Deadline: float64(time.Now().Unix() + 120), Addresses: append(append([]string{}, c.IPv4.Addresses...), c.IPv6.Addresses...), Config: c}
 		if e = save(s); e != nil {
 			_ = a.rollback(checkpoint)
 			return nil, e
@@ -270,7 +271,7 @@ func nmOperation(a *adapter, mode, action, user string, p map[string]any, s *sta
 	if action != "network.confirm" && action != "network.rollback" {
 		return nil, fmt.Errorf("Unknown network operation")
 	}
-	if s == nil || s.Status != "pending" || p["id"] != s.ID || s.User != user || time.Now().Unix() >= s.Deadline {
+	if s == nil || s.Status != "pending" || p["id"] != s.ID || s.User != user || float64(time.Now().Unix()) >= s.Deadline {
 		return nil, fmt.Errorf("This network change has expired or is owned by another user")
 	}
 	if mode == "plan" {
@@ -292,7 +293,7 @@ func nmOperation(a *adapter, mode, action, user string, p map[string]any, s *sta
 		if e = a.call(nmPath, nm+".CheckpointAdjustRollbackTimeout", s.Checkpoint, uint32(60)).Err; e != nil {
 			return nil, e
 		}
-		s.Deadline = time.Now().Unix() + 60
+		s.Deadline = float64(time.Now().Unix() + 60)
 		if e = save(s); e != nil {
 			return nil, e
 		}

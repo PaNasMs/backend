@@ -414,6 +414,7 @@ def work():
                 preflight(read('backup.json',{})['version'],worker=True)
                 units=services();save('active-units.json',units)
                 stop_terminals(units)
+                module_idle()
                 guards.enter_context(maintenance(drain=True))
                 module_idle()
                 preflight(read('backup.json',{})['version'],worker=True)

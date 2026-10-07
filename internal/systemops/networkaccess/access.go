@@ -278,12 +278,12 @@ func validate(c Config) error {
 	if len(c.SSID) < 1 || len(c.SSID) > 32 || strings.ContainsAny(c.SSID, "\n\r\x00") {
 		return reject("Enter a Wi-Fi name between 1 and 32 bytes")
 	}
-	if len(c.Password) < 12 || len(c.Password) > 63 {
-		return reject("Use a Wi-Fi password with 12 to 63 printable characters")
+	if len(c.Password) < 8 || len(c.Password) > 63 {
+		return reject("Use a Wi-Fi password with 8 to 63 printable characters")
 	}
 	for _, r := range c.Password {
 		if r < 32 || r > 126 {
-			return reject("Use a Wi-Fi password with 12 to 63 printable characters")
+			return reject("Use a Wi-Fi password with 8 to 63 printable characters")
 		}
 	}
 	if c.Band != "auto" && c.Band != "bg" && c.Band != "a" {

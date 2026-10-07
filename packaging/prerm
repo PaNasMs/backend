@@ -46,7 +46,8 @@ CHECK
   python3 /usr/lib/panasms/management/wifi.py --remove
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' panasms-network-recovery.service || true
-  systemctl disable panasms-network-recovery.service panasms-raid-recovery.service || true
+  systemctl stop panasms-networkd-recovery.service || true
+  systemctl disable panasms-networkd-recovery.service panasms-network-recovery.service panasms-raid-recovery.service || true
   # disable accepts no globs: enumerate the module services and SMART timers.
   for unit in $(systemctl list-unit-files 'panasms-module-*.service' 'panasms-smart-*.timer' --no-legend 2>/dev/null | awk '{print $1}'); do
    systemctl disable --now "$unit" || true

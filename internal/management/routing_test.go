@@ -40,7 +40,7 @@ func TestRouteEmptyViewRejected(t *testing.T) {
 func TestRouteKnownViewGoesLegacy(t *testing.T) {
 	var hit bool
 	r := route(nil, recordingRunner(&hit))
-	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "network"}); err != nil {
+	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "sharing"}); err != nil {
 		t.Fatalf("known view: %v", err)
 	}
 	if !hit {

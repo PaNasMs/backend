@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/webaccess"
 )
+
+type networkUserKey struct{}
 
 type Dispatcher struct {
 	Authorize func(string) (auth.Identity, error)
@@ -119,7 +122,7 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		return nil, err
 	}
 	mutated = true
-	return d.Execute(context.Background(), req.Action, req.Params, r)
+	return d.Execute(context.WithValue(context.Background(), networkUserKey{}, user), req.Action, req.Params, r)
 }
 
 func changing() (bool, error) {
@@ -147,6 +150,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "network":
+		return network.Query(ctx)
 	case "network-access":
 		return networkaccess.Query()
 	case "accounts":
@@ -161,6 +166,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" {
+		return network.Operation(ctx, "plan", action, user, p)
+	}
 	if strings.HasPrefix(action, "network.access.") {
 		return networkaccess.Plan(action, p)
 	}
@@ -173,6 +181,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" {
+		user, _ := ctx.Value(networkUserKey{}).(string)
+		return network.Operation(ctx, "execute", action, user, p)
+	}
 	if strings.HasPrefix(action, "network.access.") {
 		return networkaccess.Execute(action, p)
 	}

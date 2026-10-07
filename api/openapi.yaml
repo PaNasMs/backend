@@ -2906,6 +2906,16 @@ components:
     NetworkInterface:
       type: object
       properties:
+        manager:
+          type: string
+        configurationSource:
+          type: string
+        configurationFile:
+          type: string
+        providerState:
+          type: string
+        editReason:
+          type: string
         name:
           type: string
         kind:

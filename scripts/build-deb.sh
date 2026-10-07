@@ -13,7 +13,7 @@ stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT HUP INT TERM
 mkdir -p dist "$stage/DEBIAN" "$stage/usr/lib/panasms" "$stage/usr/share/panasms/ui" "$stage/usr/lib/systemd/system" "$stage/etc/pam.d" "$stage/usr/sbin"
 go build -buildvcs=false -trimpath -ldflags "-X panasms.local/backend/internal/api.BuildVersion=$version" -o "$stage/usr/lib/panasms/panasms-core" ./cmd/panasms-core
-for helper in panasms-system-helper panasms-keys; do
+for helper in panasms-system-helper panasms-keys panasms-networkd; do
  go build -buildvcs=false -trimpath -o "$stage/usr/lib/panasms/$helper" "./cmd/$helper"
 done
 go build -buildvcs=false -trimpath -tags pam -o "$stage/usr/lib/panasms/panasms-agent" ./cmd/panasms-agent
@@ -46,7 +46,7 @@ for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$scri
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"
 printf 'Source: panasms-prototype\nSection: admin\nPriority: optional\nMaintainer: PaNasMs\n\nPackage: panasms-prototype\nArchitecture: any\nDescription: PaNasMs\n' > "$stage/debian/control"
-shared_deps=$(cd "$stage" && dpkg-shlibdeps -O -eusr/lib/panasms/panasms-core -eusr/lib/panasms/panasms-agent -eusr/lib/panasms/panasms-password -eusr/lib/panasms/panasms-system-helper -eusr/lib/panasms/panasms-keys | sed -n 's/^shlibs:Depends=//p')
+shared_deps=$(cd "$stage" && dpkg-shlibdeps -O -eusr/lib/panasms/panasms-core -eusr/lib/panasms/panasms-agent -eusr/lib/panasms/panasms-password -eusr/lib/panasms/panasms-system-helper -eusr/lib/panasms/panasms-keys -eusr/lib/panasms/panasms-networkd | sed -n 's/^shlibs:Depends=//p')
 [ -n "$shared_deps" ] || { echo 'Runtime library dependencies missing' >&2; exit 1; }
 rm "$stage/debian/control"
 rmdir "$stage/debian"

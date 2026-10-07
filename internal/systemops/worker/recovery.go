@@ -6,6 +6,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/host"
+	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
@@ -33,6 +34,17 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 			return nil, err
 		}
 		add("Direct access", state.State)
+	case req.Action == "network.configure" || req.Action == "network.confirm" || req.Action == "network.rollback":
+		route = "/network/interfaces"
+		raw, err := network.Query(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var status map[string]any
+		if err = json.Unmarshal(raw, &status); err != nil {
+			return nil, err
+		}
+		add("Network change", status["change"])
 	case accounts.IsNative(req.Action):
 		route = "/users"
 		if _, err := systemops.Name(target); err != nil {

@@ -71,7 +71,7 @@ def dispatch(mode, user, request):
         if view == "home-folders": return accounts.folder_locations.folders(target)
         if view == "mount-folders": return accounts.folder_locations.mount_folders(target)
         if view == "network":
-            return network.query()
+            raise Rejected('Network inventory is managed by the native network handler')
         if view == "homes-check":
             return accounts.homes.preflight(target)
         if view == "homes":

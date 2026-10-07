@@ -14,3 +14,6 @@ build:
 	go build -buildvcs=false -trimpath -tags pam -o bin/panasms-password ./cmd/panasms-password
 check-accounts-integration: build
 	PANASMS_NATIVE_TEST_BIN=$(CURDIR)/bin python3 tests/native_accounts_integration.py
+
+check-network-integration:
+	PANASMS_NETWORK_LIVE=1 go test ./internal/systemops/network -run TestLiveNetworkManagerCheckpoint -v

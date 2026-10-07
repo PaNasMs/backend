@@ -476,12 +476,18 @@ func Routing(g Group) error {
 	if e = run("sysctl", "-w", "net.ipv4.ip_forward=1"); e != nil {
 		return e
 	}
+	if e = dockerForwarding(g, false); e != nil {
+		return e
+	}
 	return ensureNAT(g)
 }
 
 func cleanupRouting(g Group) error {
 	if g.Mode != "nat" {
 		return nil
+	}
+	if err := dockerForwarding(g, true); err != nil {
+		return err
 	}
 	_ = run("ip", "-4", "rule", "del", "priority", strconv.Itoa(18000+g.Slot), "iif", g.Bridge, "lookup", strconv.Itoa(28000+g.Slot))
 	_ = run("ip", "-4", "route", "flush", "table", strconv.Itoa(28000+g.Slot))

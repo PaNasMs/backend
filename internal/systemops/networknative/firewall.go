@@ -41,3 +41,31 @@ func ensureNAT(g Group) error {
 	}
 	return run("nft", "-f", file.Name())
 }
+
+func dockerRules(g Group) [][]string {
+	comment := "panasms-" + g.ID
+	return [][]string{
+		{"-i", g.Bridge, "-o", g.Source, "-s", g.Subnet, "-m", "comment", "--comment", comment, "-j", "ACCEPT"},
+		{"-i", g.Source, "-o", g.Bridge, "-d", g.Subnet, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-m", "comment", "--comment", comment, "-j", "ACCEPT"},
+	}
+}
+
+func dockerForwarding(g Group, remove bool) error {
+	if run("iptables", "-w", "2", "-S", "DOCKER-USER") != nil {
+		return nil
+	}
+	for _, rule := range dockerRules(g) {
+		present := run(append([]string{"iptables", "-w", "2", "-C", "DOCKER-USER"}, rule...)...) == nil
+		if present == !remove {
+			continue
+		}
+		action := "-I"
+		if remove {
+			action = "-D"
+		}
+		if err := run(append([]string{"iptables", "-w", "2", action, "DOCKER-USER"}, rule...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}

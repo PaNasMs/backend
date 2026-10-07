@@ -3,6 +3,7 @@ package networknative
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"time"
 )
@@ -138,6 +139,9 @@ func sharingOperation(mode, action, user string, p map[string]any) (json.RawMess
 	if e == nil && g.Enabled {
 		e = ActivateGroup(g)
 	}
+	if e == nil && g.Enabled {
+		e = waitGroup(g, time.Unix(t.Deadline-30, 0))
+	}
 	if e == nil {
 		e = write(groupsPath, after)
 	}
@@ -162,7 +166,11 @@ func sharingOperation(mode, action, user string, p map[string]any) (json.RawMess
 	return json.Marshal(map[string]any{"message": "Network changes await confirmation", "change": publicTransaction(t)})
 }
 func arm(t *transaction) error {
-	return run("systemd-run", "--quiet", "--collect", "--unit=panasms-native-rollback-"+t.ID, "--on-active=150s", "--timer-property=AccuracySec=1s", "--property=Restart=on-failure", "--property=RestartSec=3s", "/usr/lib/panasms/panasms-system-helper", "network-native", "recover")
+	helper, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return run("systemd-run", "--quiet", "--collect", "--unit=panasms-native-rollback-"+t.ID, "--on-active=150s", "--timer-property=AccuracySec=1s", "--property=Restart=on-failure", "--property=RestartSec=3s", helper, "network-native", "recover")
 }
 
 func changedGroups(groups, previous []Group) []Group {
@@ -180,4 +188,24 @@ func changedGroups(groups, previous []Group) []Group {
 		}
 	}
 	return result
+}
+
+func waitGroup(g Group, deadline time.Time) error {
+	for time.Now().Before(deadline) {
+		ready := hasGlobalAddress(Addresses(g.Bridge))
+		for name := range g.Wifi {
+			c, err := wifiSettings(name)
+			if err != nil {
+				return err
+			}
+			if c.Enabled {
+				ready = ready && APActive(name)
+			}
+		}
+		if ready {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("Sharing activation timed out")
 }

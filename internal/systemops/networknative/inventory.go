@@ -14,6 +14,10 @@ func Inventory(rows []map[string]any) (map[string]any, error) {
 			row["sharing"] = cap
 		}
 		if !Wireless(name) {
+			row["nmState"] = 30
+			if sourceConnected(name) {
+				row["nmState"] = 100
+			}
 			continue
 		}
 		present = true

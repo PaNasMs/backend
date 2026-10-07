@@ -144,8 +144,11 @@ def plan(action,p,user=None):
     elif action in ('system.update.install','system.update.download'):
         require(current['available'],'No newer PaNasMs version is available in this channel')
         target=current['candidate']['version'];details=[target,'Only PaNasMs packages are updated. The panel will reconnect automatically.']
-        if action.endswith('install'):preflight(target)
+        if action.endswith('install'):
+            preflight(target)
+            module_idle(skip_terminal=True)
     elif action=='system.update.rollback':
+        module_idle(skip_terminal=True)
         backup=read('backup.json',{})
         require(backup.get('complete'),'No complete rollback backup is available')
         require(backup.get('moduleHash')==module_hash(),'Installed modules changed after the backup; automatic rollback is unavailable')
@@ -261,10 +264,11 @@ def preflight(version, worker=False):
         require(not rows,'Wait for active operations: '+', '.join(f'{a} ({t})' for a,t in rows))
 
 
-def module_idle():
+def module_idle(skip_terminal=False):
     registry=Path('/var/lib/panasms-modules/registry.json')
     if not registry.exists():return
     for mid, manifest in json.loads(registry.read_text()).items():
+        if skip_terminal and mid == 'terminal':continue
         if not manifest.get('enabled') or not manifest.get('service'):continue
         require(re.fullmatch(r'[a-z][a-z0-9-]{0,63}',mid),'Invalid installed module ID')
         if subprocess.run(['systemctl','is-active','--quiet','panasms-module-'+mid+'.service']).returncode != 0:continue
@@ -410,6 +414,7 @@ def work():
                 preflight(read('backup.json',{})['version'],worker=True)
                 units=services();save('active-units.json',units)
                 stop_terminals(units)
+                module_idle()
                 guards.enter_context(maintenance(drain=True))
                 module_idle()
                 preflight(read('backup.json',{})['version'],worker=True)
@@ -428,6 +433,7 @@ def work():
             run(['apt-get','--download-only','--yes','--no-remove','install',*paths],timeout=1800)
             units=services();save('active-units.json',units)
             stop_terminals(units)
+            module_idle()
             guards.enter_context(maintenance(drain=True))
             module_idle()
             preflight(entry['version'],worker=True)

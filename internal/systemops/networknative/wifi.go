@@ -169,7 +169,8 @@ func parseScan(raw []byte) []AccessPoint {
 		case strings.HasPrefix(l, "SSID: "):
 			p.SSID = decodeSSID(strings.TrimPrefix(l, "SSID: "))
 		case strings.HasPrefix(l, "freq: "):
-			p.Frequency, _ = strconv.Atoi(strings.TrimPrefix(l, "freq: "))
+			frequency, _ := strconv.ParseFloat(strings.TrimPrefix(l, "freq: "), 64)
+			p.Frequency = int(frequency)
 		case strings.HasPrefix(l, "signal: "):
 			var dbm float64
 			fmt.Sscanf(l, "signal: %f", &dbm)

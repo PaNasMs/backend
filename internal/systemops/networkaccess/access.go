@@ -202,9 +202,7 @@ func devices() ([]Device, error) {
 		}
 		if f[1] == "ethernet" {
 			carrier, err := os.ReadFile(p + "/carrier")
-			if err != nil || strings.TrimSpace(string(carrier)) != "1" {
-				d.Connected = false
-			}
+			d.Connected = err == nil && ethernetConnected(f[2], string(carrier))
 			if master, err := filepath.EvalSymlinks(p + "/master"); err == nil {
 				if intf, err := net.InterfaceByName(filepath.Base(master)); err == nil {
 					addresses, _ := intf.Addrs()
@@ -239,6 +237,10 @@ func devices() ([]Device, error) {
 	}
 	return rows, nil
 }
+func ethernetConnected(state, carrier string) bool {
+	return strings.TrimSpace(carrier) == "1" && (strings.HasPrefix(state, "connected") || state == "unmanaged")
+}
+
 func hasAddress(d Device) bool {
 	for _, a := range d.Addresses {
 		ip, _, e := net.ParseCIDR(a)

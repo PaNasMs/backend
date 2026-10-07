@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore unconfirmed PaNasMs networkd and Netplan changes
+After=systemd-networkd.service
+Before=panasms-agent.service panasms-core.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/panasms/panasms-networkd recover
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

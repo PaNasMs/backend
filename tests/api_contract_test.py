@@ -81,7 +81,7 @@ class ManagementContractTest(unittest.TestCase):
                     for target in node.targets
                 ):
                     actions.update(ast.literal_eval(node.value))
-        self.assertEqual(set(go_route_inventory()['actions']), actions | {'network.access.save', 'network.access.stop'})
+        self.assertEqual(set(go_route_inventory()['actions']), actions | {'network.access.save', 'network.access.stop', 'network.configure', 'network.confirm', 'network.rollback'})
 
     def test_real_empty_and_recovery_queries_match_schemas(self):
         with tempfile.TemporaryDirectory() as tmp:

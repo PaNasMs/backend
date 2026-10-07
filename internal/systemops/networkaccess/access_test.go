@@ -110,6 +110,35 @@ func TestNoLinkLocalConnectivity(t *testing.T) {
 		t.Fatal("AP counts as upstream")
 	}
 }
+
+func TestNetworkdEthernetPreventsFallbackAP(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, carrier, address string
+		connected                     bool
+	}{
+		{"networkd DHCP", "unmanaged", "1\n", "192.168.1.100/24", true},
+		{"networkd IPv6", "unmanaged", "1", "fd00::2/64", true},
+		{"cable without address", "unmanaged", "1", "", false},
+		{"link local only", "unmanaged", "1", "169.254.1.2/16", false},
+		{"unplugged stale address", "unmanaged", "0", "192.168.1.100/24", false},
+		{"unreadable carrier", "unmanaged", "", "192.168.1.100/24", false},
+		{"NM disconnected", "disconnected", "1", "192.168.1.100/24", false},
+		{"NM external", "connected (externally)", "1", "192.168.1.100/24", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lan := Device{Name: "end0", Kind: "ethernet", Connected: ethernetConnected(tc.state, tc.carrier), Addresses: []string{tc.address}}
+			wifi := Device{Name: "wlan0", Kind: "wifi", AP: true, Usable: true}
+			state, action, _ := decide(Config{Enabled: true, Delay: 90, OnLoss: true}, State{Since: 1}, []Device{lan, wifi}, 100)
+			if tc.connected {
+				if state.Phase != "connected" || action != "" {
+					t.Fatalf("working Ethernet triggered fallback: %s/%s", state.Phase, action)
+				}
+			} else if state.Phase != "access-point" || action != "start" {
+				t.Fatalf("missing Ethernet suppressed fallback: %s/%s", state.Phase, action)
+			}
+		})
+	}
+}
 func TestConfigValidation(t *testing.T) {
 	c := Config{SSID: "PaNasMs", Password: "abcdefghijkl", Band: "auto", Delay: 90}
 	if err := validate(c); err != nil {

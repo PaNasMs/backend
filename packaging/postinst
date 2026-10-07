@@ -37,6 +37,7 @@ case "${1:-}" in
   /usr/lib/panasms/panasms-system-helper network-access initialize || echo 'Direct network access setup incomplete; review Network settings.' >&2
   systemctl enable panasms-network-access.service
   systemctl restart panasms-network-access.service
+  systemctl enable panasms-networkd-recovery.service
   systemctl enable panasms-raid-recovery.service
   systemctl enable panasms-update-recover.service
   systemctl enable --now panasms-update-check.timer

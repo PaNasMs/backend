@@ -34,7 +34,7 @@ live in the Go store packages; there is no sqlc generation step.
 
 Linux users/groups, profiles and SSH keys; home relocation; disks and mdadm RAID;
 partitions, filesystems, LUKS and mounts; SMART checks and schedules; disk standby;
-CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager Ethernet/Wi-Fi, access
+CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager Ethernet/Wi-Fi, native systemd-networkd and Netplan IP settings, access
 points and connection sharing; system services, journal, updates and power
 operations; module installation and the signed online catalog.
 
@@ -429,3 +429,23 @@ Controller configuration is root-only at
 `/run` and polling does not write to data disks. The service cooperates with
 network rollback and package-maintenance locks. Removal stops only its own
 profiles and removes its own USB configuration; boot changes take effect on reboot.
+
+
+### Network configuration ownership
+
+IP configuration is handled in Go. Each interface keeps its existing manager:
+NetworkManager uses D-Bus checkpoints, native systemd-networkd uses a dedicated
+`.network` definition, and Netplan-backed Ethernet uses a dedicated YAML definition
+instead of editing generated files. Changes require confirmation within two minutes;
+unconfirmed networkd/Netplan changes are restored by an independent service, including
+after reboot. Physical interfaces are selected individually; Docker and other system
+interfaces remain protected.
+
+Existing advanced configurations that cannot be represented by the IP editor are
+read-only. Wi-Fi and sharing orchestration still use the explicit legacy dependency
+adapter; they are not silently migrated between network managers. The networkd/Netplan
+IP editor currently targets Ethernet, not wireless authentication or bridge topology.
+
+Run `make check-network-integration` only as root on an authorized test host with
+NetworkManager. It creates and removes a temporary veth pair and tests native Go
+checkpoint handling without changing the management connection.

@@ -18,7 +18,7 @@ ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictAddressFamilies=AF_UNIX
-ReadWritePaths=/run/panasms-cooling /sys/devices /sys/kernel/config
+ReadWritePaths=/run/panasms-cooling /sys/devices /sys/kernel/config -/sys/kernel/debug/pinctrl
 
 [Install]
 WantedBy=multi-user.target

@@ -173,3 +173,16 @@ func TestLegacyConfigAndExplicitTachDisable(t *testing.T) {
 		}
 	}
 }
+
+func TestKernelPinmuxRejectsPeripheralAndUnknownPins(t *testing.T) {
+	for _, state := range []string{"gpio", "none"} {
+		if err := freePinFunction("pin 18 (gpio18) 18:pinctrl-rp1 function "+state+" ("+state+") in lo", 18); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, raw := range []string{"pin 18 (gpio18) 18:pinctrl-rp1 function pwm0 (alt3) out hi", "pin 19 (gpio19) 19:pinctrl-rp1 function gpio (gpio) in lo", "unknown"} {
+		if err := freePinFunction(raw, 18); err == nil {
+			t.Fatal("accepted " + raw)
+		}
+	}
+}

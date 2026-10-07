@@ -76,7 +76,8 @@ func pwmChip(load bool) (string, error) {
 	}
 	return "", fmt.Errorf("RP1 PWM0 controller is unavailable")
 }
-func Failsafe() error {
+func Failsafe() error { return failsafe(nil) }
+func failsafe(control *gpio.Line) error {
 	raw, err := os.ReadFile(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -93,10 +94,24 @@ func Failsafe() error {
 		return err
 	}
 	if w.Mode != "none" {
-		if _, err = pinctrl("set", strconv.Itoa(w.Control), "op", "dh"); err != nil {
-			return err
+		if control != nil {
+			if err = control.Reconfigure(gpio.AsOutput(1)); err != nil {
+				return err
+			}
+		} else {
+			chip, e := rp1Chip()
+			if e != nil {
+				return e
+			}
+			defer chip.Close()
+			line, e := chip.RequestLine(w.Control, gpio.AsOutput(1))
+			if e != nil {
+				return e
+			}
+			defer line.Close()
 		}
 	}
+
 	if w.Mode == "internal-pwm" {
 		chip, e := pwmChip(false)
 		if e != nil {
@@ -135,19 +150,9 @@ func openHardware(w Wiring) (h *hardware, err error) {
 	if !strings.Contains(readText("/proc/device-tree/model"), "Raspberry Pi 5") {
 		return nil, fmt.Errorf("GPIO cooling currently supports Raspberry Pi 5 only")
 	}
-	var chip *gpio.Chip
-	for _, p := range gpio.Chips() {
-		c, e := gpio.NewChip(p, gpio.WithConsumer("panasms-cooling"), gpio.WithABIVersion(2))
-		if e == nil {
-			if c.Label == "pinctrl-rp1" {
-				chip = c
-				break
-			}
-			c.Close()
-		}
-	}
-	if chip == nil {
-		return nil, fmt.Errorf("RP1 GPIO controller is unavailable")
+	chip, err := rp1Chip()
+	if err != nil {
+		return nil, err
 	}
 	defer chip.Close()
 	pins := []int{w.Control}
@@ -162,14 +167,8 @@ func openHardware(w Wiring) (h *hardware, err error) {
 		if info.Used {
 			return nil, fmt.Errorf("GPIO%d is used by %s", pin, info.Consumer)
 		}
-		state, e := pinctrl("get", strconv.Itoa(pin))
-		if e != nil {
+		if e = checkPinFunction(pin); e != nil {
 			return nil, e
-		}
-		for i := 0; i < 9; i++ {
-			if strings.Contains(string(state), fmt.Sprintf(" a%d ", i)) {
-				return nil, fmt.Errorf("GPIO%d is assigned to a peripheral", pin)
-			}
 		}
 	}
 	var pwmRoot string
@@ -216,7 +215,7 @@ func openHardware(w Wiring) (h *hardware, err error) {
 				return nil, err
 			}
 		}
-		if _, err = pinctrl("set", strconv.Itoa(w.Control), pwmPins[w.Control].function); err != nil {
+		if err = selectPWM(w.Control); err != nil {
 			return nil, err
 		}
 	}
@@ -270,7 +269,7 @@ func (h *hardware) close() error {
 	if h.control == nil {
 		return nil
 	}
-	err := Failsafe()
+	err := failsafe(h.control)
 	if h.tach != nil {
 		err = errors.Join(err, h.tach.Close())
 		h.tach = nil

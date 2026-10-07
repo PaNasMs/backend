@@ -19,6 +19,14 @@ func TestScanDoesNotTreatEnterpriseAsPersonal(t *testing.T) {
 		t.Fatalf("unexpected security %+v", rows)
 	}
 }
+func TestScanFrequencyFormats(t *testing.T) {
+	for _, value := range []string{"2412", "2412.0"} {
+		rows := parseScan([]byte("BSS 00:11:22:33:44:55(on wlan0)\nfreq: " + value + "\nSSID: Test\n"))
+		if len(rows) != 1 || rows[0].Frequency != 2412 {
+			t.Fatalf("frequency %q: %+v", value, rows)
+		}
+	}
+}
 func TestChannelsExcludeForbiddenDFSAndDisabled(t *testing.T) {
 	c := Channels("* 2412 MHz [1] (20.0 dBm)\n* 2462 MHz [11] (disabled)\n* 5180 MHz [36] (no IR)\n* 5200 MHz [40] (23.0 dBm)\n* 5500 MHz [100] (radar detection)\n* 5975 MHz [5] (23.0 dBm)")
 	if len(c["bg"]) != 1 || c["bg"][0] != 1 || len(c["a"]) != 1 || c["a"][0] != 40 {

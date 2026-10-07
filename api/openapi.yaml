@@ -3249,6 +3249,8 @@ components:
           - type: 'null'
         protectedReason:
           type: string
+        layoutReason:
+          type: string
         busyReason:
           type: string
         raidReason:
@@ -3266,6 +3268,7 @@ components:
       - path
       - kname
       - protectedReason
+      - layoutReason
       - busyReason
       - raidReason
       - raidEligible

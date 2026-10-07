@@ -3,7 +3,7 @@ set -eu
 case "${1:-}" in
  remove|deconfigure)
   if [ -e /etc/panasms-cooling/config.json ]; then
-   echo 'Cooling remains responsible for GPIO27. Transfer cooling to another controller and archive /etc/panasms-cooling/config.json before removing this independent package.' >&2
+   echo 'Cooling remains responsible for the configured fan GPIO. Transfer cooling to another controller and archive /etc/panasms-cooling/config.json before removing this independent package.' >&2
    exit 1
   fi
   systemctl disable --now panasms-cooling.service || true

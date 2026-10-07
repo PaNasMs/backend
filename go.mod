@@ -11,6 +11,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/msteinert/pam/v2 v2.1.0
+	github.com/warthog618/go-gpiocdev v0.9.2
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1

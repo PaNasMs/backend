@@ -219,8 +219,13 @@ func pending() bool {
 	if e != nil {
 		return false
 	}
-	var s change
-	return json.Unmarshal(b, &s) == nil && active(&s)
+	var s struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return true
+	}
+	return s.Status == "pending" || s.Status == "applying" || s.Status == "rollback-failed"
 }
 func unchanged(files map[string]string) bool {
 	for p, want := range files {

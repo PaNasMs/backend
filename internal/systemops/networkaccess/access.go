@@ -178,7 +178,7 @@ func devices() ([]Device, error) {
 		}
 		p := filepath.Join("/sys/class/net", name)
 		resolved, _ := filepath.EvalSymlinks(p)
-		isUSB := strings.Contains(resolved, "/gadget/") || strings.Contains(resolved, "/gadget/net/")
+		isUSB := IsGadgetPath(resolved)
 		if f[1] == "ethernet" && strings.Contains(resolved, "/virtual/") {
 			continue
 		}

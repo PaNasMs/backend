@@ -159,3 +159,20 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestGadgetKernelNames(t *testing.T) {
+	for path, want := range map[string]bool{"/sys/devices/platform/usb/gadget/net/usb0": true, "/sys/devices/platform/usb/gadget.0/net/usb0": true, "/sys/devices/platform/usb/net/eth1": false, "/tmp/gadget.0/not-net/usb0": false} {
+		if got := IsGadgetPath(path); got != want {
+			t.Errorf("%s: %v", path, got)
+		}
+	}
+	modules := "# PaNasMs direct USB access\ndwc2\ng_ether\n"
+	for _, name := range []string{"g_ether", "Ethernet Gadget", "RNDIS/Ethernet Gadget"} {
+		if !ownedEthernetFunction(name, modules) {
+			t.Error(name)
+		}
+	}
+	if ownedEthernetFunction("g_mass_storage", modules) || ownedEthernetFunction("g_ether", "") || ownedEthernetFunction("g_ether", "# PaNasMs direct USB access disabled\n") {
+		t.Fatal("unowned or disabled gadget accepted")
+	}
+}

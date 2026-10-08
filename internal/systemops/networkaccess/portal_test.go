@@ -54,7 +54,7 @@ func TestPortalRedirectCanonicalAndCurrentPort(t *testing.T) {
 
 func TestPortalRulesDoNotInterceptLANPanelOrHTTPS(t *testing.T) {
 	rules := portalRules(map[string]*portalInstance{"usb0": {endpoint: portalEndpoint{"usb0", "10.180.120.1", "10.180.120.2"}, httpPort: 32001, dnsPort: 32002}})
-	for _, want := range []string{`iifname "usb0" ip daddr 10.180.120.1 udp dport 53`, `iifname "usb0" ip daddr 10.180.120.1 tcp dport 53`, `iifname "usb0" ip daddr 10.180.120.2 tcp dport 80 dnat to 10.180.120.2:32001`} {
+	for _, want := range []string{`iifname "usb0" ip daddr 10.180.120.1 udp dport 53 dnat to 10.180.120.1:32002`, `iifname "usb0" ip daddr 10.180.120.1 tcp dport 53 dnat to 10.180.120.1:32002`, `iifname "usb0" ip daddr 10.180.120.2 tcp dport 80 dnat to 10.180.120.2:32001`} {
 		if !strings.Contains(rules, want) {
 			t.Fatal(rules)
 		}

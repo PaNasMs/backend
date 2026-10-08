@@ -42,6 +42,14 @@ func TestLiveCaptivePortal(t *testing.T) {
 	if !strings.Contains(raw, "302 Found") || !strings.Contains(raw, "Location: http://10.181.240.1/") {
 		t.Fatal(raw)
 	}
+	// networkd may remove/re-add the gateway when carrier returns, making the alias first.
+	if _, err := run("ip", "address", "del", "10.181.240.1/24", "dev", "portal-test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("ip", "address", "add", "10.181.240.1/24", "dev", "portal-test"); err != nil {
+		t.Fatal(err)
+	}
+	_ = client("env", "PANASMS_PORTAL_DNS_CLIENT=1", os.Args[0], "-test.run=^TestLivePortalDNSClient$", "-test.v")
 	// Changing from USB to AP uses the same scoped discovery path.
 	rows[0].Profile = apUUID
 	if err := p.sync(config, rows); err != nil {

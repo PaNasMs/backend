@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/networkd"
 )
 
@@ -227,13 +228,16 @@ func Operation(mode, action, user string, p map[string]any) (json.RawMessage, er
 			time.Sleep(time.Second)
 		}
 		if !connected {
-			e = fmt.Errorf("Wi-Fi connection timed out; check password and router settings")
+			e = &systemops.Rejected{Message: "Wi-Fi connection timed out; check password, signal and router settings"}
 		}
 	}
 	if e != nil {
 		original := e
 		if recovery := rollback(t); recovery != nil {
 			return nil, fmt.Errorf("Wi-Fi operation failed and rollback needs attention: %v", recovery)
+		}
+		if systemops.IsRejected(original) {
+			return nil, original
 		}
 		return nil, fmt.Errorf("%v; previous settings restored", original)
 	}

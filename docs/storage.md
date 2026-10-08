@@ -4,6 +4,29 @@ PaNasMs uses Linux MD, cryptsetup, filesystem and systemd tools. Disk quotas are
 not implemented. Operations require administrator access and recheck the target
 and its dependent layers before changing storage.
 
+## System partitions and independent data volumes
+
+Protection follows system volumes and their backing devices, not every partition
+sharing the same physical disk. Root, boot, EFI, swap and configured system mounts
+cannot be formatted, deleted, resized or unmounted through storage operations.
+Their RAID/LUKS backing partitions are protected too. Wiping or removing the whole
+system disk or array remains forbidden because it would destroy those volumes.
+
+An independent data partition may be created in unallocated space on the same
+disk or partitioned MD array while system siblings remain mounted. An existing
+data partition can be formatted, resized or deleted only after its own mounts and
+dependencies are released. Mounted or active sibling partitions do not block it.
+
+Partition changes preserve the existing table and update only the affected kernel
+partition. GPT and primary MBR partitions are supported; extended MBR/EBR chains
+are rejected. Inconsistent on-disk and kernel geometry blocks writes. If the table
+was written but the kernel did not confirm it, restart before retrying; the panel
+must not report that no changes occurred.
+
+`tests/storage_system_layout_integration.py` verifies these operations using
+throwaway GPT/MBR images and a partitioned RAID with a mounted system-volume
+sentinel. It does not modify the host's real partition tables.
+
 ## RAID conversion
 
 Healthy, idle MD 1.2 arrays support:

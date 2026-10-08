@@ -57,7 +57,7 @@ def inventory():
             "--json",
             "--bytes",
             "--output",
-            "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN",
+            "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,LABEL,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN",
         ]
     )
     result = {}
@@ -188,7 +188,7 @@ def protected(dev, inv, layout=False):
         carriers |= backing(path)
     carriers -= system
     require(dev not in system, 'The system partition is protected')
-    require(layout or dev not in carriers, 'The system drive or one of its members is protected')
+    require(dev not in carriers or (layout and inv[dev]['type'] in ('disk', 'loop', 'md', 'raid0', 'raid1', 'raid5', 'raid6', 'raid10')), 'The system drive or one of its members is protected')
     require(not inv[dev].get("ro"), 'The device is read-only')
 
 
@@ -207,6 +207,51 @@ def unused(dev, inv, allow_children=False):
         except OSError:
             raise Rejected('Could not verify storage dependencies. No changes were made.')
         require(not holders, "Device " + path + ' is used by: ' + ", ".join(holders))
+
+
+def layout_available(dev, inv):
+    protected(dev, inv, layout=True)
+    require(not inv[dev].get('fstype'), 'The device contains a file system')
+    require(not any(inv[dev].get('mountpoints', [])), 'Unmount file systems first')
+    try:
+        holders = list((Path('/sys/class/block') / inv[dev]['kname'] / 'holders').iterdir())
+    except OSError:
+        raise Rejected('Could not verify storage dependencies. No changes were made.')
+    require(not holders, 'The drive is used by an array or another storage layer')
+
+
+def checked_layout(dev, inv):
+    layout_available(dev, inv)
+    layout = partition_layout(dev, inv)
+    if layout is None:
+        return None
+    sector = layout.get('sectorsize', 512)
+    parts = layout.get('partitions', [])
+    # Extended MBR partitions require updating EBR chains, not independent entries.
+    require(not any(str(p.get('type', '')).lower() in ('5', 'f', '85', '05', '0f') for p in parts),
+            'Unsupported partition table. No changes were made.')
+    direct = {k: v for k, v in inv.items() if v.get('parent') == dev and v['type'] == 'part'}
+    require({p['node'] for p in parts} == set(direct), 'Partition metadata is inconsistent. No changes were made.')
+    for part in parts:
+        row = direct[part['node']]
+        start = int((Path('/sys/class/block') / row['kname'] / 'start').read_text()) * 512
+        require(start == part['start'] * sector and row['size'] == part['size'] * sector,
+                'Partition metadata is inconsistent. No changes were made.')
+    return layout
+
+
+def write_partition(dev, args, data=None):
+    command(['sfdisk', '--no-reread', '--no-tell-kernel', '--wipe', 'never', '--wipe-partitions', 'never', *args, dev], data=data)
+
+
+def verify_kernel_partition(part, sector):
+    node = Path('/sys/class/block') / Path(part['node']).name
+    try:
+        matches = (int((node / 'start').read_text()) * 512 == part['start'] * sector
+                   and int((node / 'size').read_text()) * 512 == part['size'] * sector)
+    except OSError:
+        matches = False
+    require(matches, 'The partition table changed, but the kernel has not confirmed it. Restart the NAS before retrying.')
 
 
 def eject_check(target, inv):
@@ -442,9 +487,18 @@ def partition_layout(dev, inv):
             require(descendants(dev, inv) == {dev},
                     'Partition metadata is inconsistent. No changes were made.')
             return None
-        require(all(s.get("type") in ("gpt", "PMBR", "dos") for s in signatures),
+        overlapping_atari = any(s.get('type') == 'dos' and s.get('offset') == '0x1fe' for s in signatures)
+        require(all(s.get("type") in ("gpt", "PMBR", "dos")
+                    or (overlapping_atari and s.get('type') == 'atari' and s.get('offset') == '0x1d2')
+                    for s in signatures),
                 'Existing signatures prevent creating a partition. Prepare the disk explicitly first.')
         layout = table(dev)
+        if any(s.get('type') == 'atari' for s in signatures):
+            # Some valid MBR entries also match Atari's overlapping signature.
+            # Keep every byte; checked_layout additionally verifies kernel geometry.
+            require(layout.get('label') == 'dos' and layout.get('partitions')
+                    and descendants(dev, inv) != {dev},
+                    'Existing signatures prevent creating a partition. Prepare the disk explicitly first.')
         require(isinstance(layout, dict) and layout.get("label") in ("gpt", "dos"),
                 'Unsupported partition table. No changes were made.')
         return layout
@@ -738,17 +792,17 @@ def plan(action, p):
                     ]
             elif action.startswith("partition."):
                 if action == "partition.create":
-                    unused(target, inv, True)
+                    layout_available(target, inv)
                     require(
                         inv[target]["type"] in ("disk", "loop", "md")
                         or inv[target]["type"].startswith("raid"),
                         'Select a disk or array',
                     )
                     require(not inv[target].get("fstype"), 'The device contains a file system')
-                    partition_state = partition_layout(target, inv)
+                    partition_state = checked_layout(target, inv)
                     start = integer(p.get("startMiB"), 1, inv[target]["size"] // 1048576)
                     end = integer(p.get("endMiB"), start + 1, inv[target]["size"] // 1048576)
-                    for k in descendants(target, inv) - {target}:
+                    for k in (k for k, row in inv.items() if row.get("parent") == target and row["type"] == "part"):
                         d = inv[k]
                         begin = int((Path("/sys/class/block") / d["kname"] / "start").read_text()) * 512
                         finish = begin + d["size"]
@@ -764,7 +818,7 @@ def plan(action, p):
                     unused(target, inv)
                     parent = inv[target]["parent"]
                     paths.append(parent)
-                    unused(parent, inv, True)
+                    partition_state = checked_layout(parent, inv)
                     if action == "partition.resize":
                         require(
                             inv[target].get("fstype") in (None, "", "ext2", "ext3", "ext4"),
@@ -775,7 +829,7 @@ def plan(action, p):
                             int((Path("/sys/class/block") / inv[target]["kname"] / "start").read_text()) * 512
                         )
                         require(start + size * 1048576 < inv[parent]["size"] - 1048576, 'Outside disk boundaries')
-                        for other in descendants(parent, inv) - {parent, target}:
+                        for other in (k for k, row in inv.items() if row.get("parent") == parent and row["type"] == "part" and k != target):
                             row = inv[other]
                             begin = int((Path("/sys/class/block") / row["kname"] / "start").read_text()) * 512
                             require(
@@ -947,7 +1001,7 @@ def plan(action, p):
         state["reshape_control"] = reshape_control_state(md, action)
     if growth is not None:
         state["raid_growth"] = growth
-    if action == "partition.create":
+    if action.startswith("partition."):
         state["partition_table"] = partition_state
     if released:
         state["released_shares"] = [[s["name"], s["path"]] for s in released]
@@ -1202,26 +1256,38 @@ def execute_unlocked(action, p, user=None):
             "check" if action == "raid.check" else "idle"
         )
     elif action == "partition.create":
-        protected(target, inv, layout=True)
-        unused(target, inv, True)
-        if partition_layout(target, inv) is None:
-            command(["parted", "--script", target, "mklabel", "gpt"])
-        command(
-            [
-                "parted",
-                "--script",
-                target,
-                "mkpart",
-                "primary",
-                str(p["startMiB"]) + "MiB",
-                str(p["endMiB"]) + "MiB",
-            ]
-        )
+        plan(action, p)
+        layout = checked_layout(target, inv)
+        if layout is None:
+            command(['parted', '--script', target, 'mklabel', 'gpt'])
+            layout = table(target)
+        before = layout.get('partitions', [])
+        sector = layout.get('sectorsize', 512)
+        start = p['startMiB'] * 1048576 // sector
+        size = (p['endMiB'] - p['startMiB']) * 1048576 // sector
+        write_partition(target, ['--append'], f'start={start}, size={size}, type=L\n')
+        after = table(target)
+        require(all(part in after.get('partitions', []) for part in before),
+                'Could not confirm the new partition')
+        added = [part for part in after['partitions'] if part not in before]
+        require(len(added) == 1, 'Could not confirm the new partition')
+        number = re.search(r'(\d+)$', added[0]['node']).group(1)
+        command(['partx', '--add', '--nr', number, target], accepted=(0, 1))
+        command(['udevadm', 'settle'])
+        verify_kernel_partition(added[0], sector)
     elif action == "partition.delete":
-        command(["parted", "--script", inv[target]["parent"], "rm", str(inv[target]["partn"])])
+        plan(action, p)
+        number = str(inv[target]['partn'])
+        parent = inv[target]['parent']
+        command(['sfdisk', '--no-reread', '--no-tell-kernel', '--delete', parent, number])
+        command(['partx', '--delete', '--nr', number, parent], accepted=(0, 1))
+        command(['udevadm', 'settle'])
+        require(not (Path('/sys/class/block') / inv[target]['kname']).exists(),
+                'The partition table changed, but the kernel has not confirmed it. Restart the NAS before retrying.')
         if inv[target].get("uuid"):
             fstab_change(inv[target]["uuid"])
     elif action == "partition.resize":
+        plan(action, p)
         row = inv[target]
         size = p["sizeMiB"]
         fs = row.get("fstype")
@@ -1233,10 +1299,12 @@ def execute_unlocked(action, p, user=None):
         start = int((Path("/sys/class/block") / row["kname"] / "start").read_text()) * 512
         sector = table(row["parent"]).get("sectorsize", 512)
         command(
-            ["sfdisk", "-N", str(row["partn"]), row["parent"]],
+            ["sfdisk", "--no-reread", "--no-tell-kernel", "-N", str(row["partn"]), row["parent"]],
             data="size=" + str(size * 1048576 // sector) + "\n",
         )
+        command(["partx", "--update", "--nr", str(row["partn"]), row["parent"]], accepted=(0, 1))
         command(["udevadm", "settle"])
+        verify_kernel_partition({"node": target, "start": start // sector, "size": size * 1048576 // sector}, sector)
         if fs:
             command(["resize2fs", target], timeout=86400)
     elif action == "filesystem.format":
@@ -1543,7 +1611,7 @@ def query(view, target):
             except Rejected as e:
                 row["protectedReason"] = str(e)
             try:
-                protected(path, inv, layout=True)
+                layout_available(path, inv)
             except Rejected as e:
                 row["layoutReason"] = str(e)
             try:

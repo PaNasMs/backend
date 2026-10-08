@@ -259,6 +259,24 @@ class StorageSafety(unittest.TestCase):
             storage.protected("/dev/system3", inv)
         self.assertTrue(storage.system_mount("[SWAP]") and storage.system_mount("/var/lib") and not storage.system_mount("/various"))
 
+    def test_system_raid_and_crypt_backing_partitions_stay_protected(self):
+        for kind in ('raid1', 'crypt'):
+            inv = {
+                '/dev/disk': {'type':'disk','mountpoints':[], 'parent':None},
+                '/dev/member': {'type':'part','mountpoints':[], 'parent':'/dev/disk'},
+                '/dev/root': {'type':kind,'mountpoints':['/'], 'parent':'/dev/member'},
+                '/dev/data': {'type':'part','mountpoints':[], 'parent':'/dev/disk'},
+            }
+            with self.subTest(kind=kind), patch.object(Path, 'glob', return_value=[]):
+                for target in ('/dev/member', '/dev/root'):
+                    for layout in (True, False):
+                        with self.assertRaises(Rejected):
+                            storage.protected(target, inv, layout=layout)
+                storage.protected('/dev/data', inv)
+                storage.protected('/dev/disk', inv, layout=True)
+                with self.assertRaises(Rejected):
+                    storage.protected('/dev/disk', inv)
+
     def test_boot_loader_swap_and_fstab_partitions_are_system(self):
         inv = dict(self.inv)
         inv["/dev/system2"] = {"type": "part", "parent": "/dev/system", "mountpoints": [], "ro": False, "parttype": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"}

@@ -73,6 +73,20 @@ try:
     perform("mount.detach", {"target": array})
     perform("mount.attach", {"target": array, "point": mount, "automount": True})
     assert marker.read_text() == "temporary test data\n"
+    try:
+        storage.plan("filesystem.remove", {"target": array})
+        raise AssertionError("mounted filesystem removal accepted")
+    except Rejected:
+        print("PASS mounted removal rejected", flush=True)
+    perform("mount.detach", {"target": array})
+    member_ids = [storage.inventory()[dev]["uuid"] for dev in loops[:2]]
+    perform("filesystem.remove", {"target": array})
+    current = storage.inventory()
+    assert not current[os.path.realpath(array)].get("fstype")
+    assert [current[dev]["uuid"] for dev in loops[:2]] == member_ids
+    assert all(current[dev]["fstype"] == "linux_raid_member" for dev in loops[:2])
+    storage.plan("luks.create", {"target": array, "passphrase": "test-only-passphrase"})
+    print("PASS array preserved and ready for LUKS", flush=True)
     perform("raid.delete", {"target": array})
     assert not Path(array).exists()
     perform("raid.create", {"name": Path(array).name, "level": "0", "members": loops[:2]})

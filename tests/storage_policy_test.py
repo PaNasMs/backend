@@ -15,6 +15,13 @@ from common import Rejected
 
 
 class Policies(unittest.TestCase):
+    def test_remove_rejects_storage_containers_and_rechecks_execution(self):
+        for kind in ('linux_raid_member', 'crypto_LUKS', 'LVM2_member', 'swap', ''):
+            with self.subTest(kind=kind), patch.object(storage, 'protected'), patch.object(storage, 'unused'), patch.object(storage, 'inventory', return_value={'/dev/test': {'fstype': kind}}), patch.object(storage, 'command') as command:
+                with self.assertRaises(Rejected):
+                    storage.execute_unlocked('filesystem.remove', {'target': '/dev/test'})
+                command.assert_not_called()
+
     def test_fstab_replaces_unavailable_managed_volume_at_same_mountpoint(self):
         old = 'UUID=old /srv/data ext4 rw,nofail,x-systemd.device-timeout=30s 0 0'
         new = 'UUID=new /srv/data ext4 rw,nofail,x-systemd.device-timeout=30s 0 0'

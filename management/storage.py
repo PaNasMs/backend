@@ -27,6 +27,7 @@ ACTIONS = {
     "partition.delete",
     "partition.resize",
     "filesystem.format",
+    "filesystem.remove",
     "filesystem.resize",
     "mount.attach",
     "mount.detach",
@@ -842,6 +843,9 @@ def plan(action, p):
                             f'New size: {size} MiB',
                             'The ext file system and partition will be resized in a safe order',
                         ]
+            elif action == "filesystem.remove":
+                removable_filesystem(target, inv)
+                details = [target, "Removing the file system makes all its data inaccessible. The RAID array and partition layout are preserved."]
             elif action == "filesystem.format":
                 unused(target, inv)
                 require(p.get("format") in supported_formats(), 'The utility for creating this file system is unavailable')
@@ -980,6 +984,7 @@ def plan(action, p):
         "mount.detach",
         "partition.delete",
         "filesystem.format",
+        "filesystem.remove",
         "disk.eject",
         "disk.prepare",
     ) or (action == "mount.open" and p.get("mode") in ("repair", "repair-only")):
@@ -1014,6 +1019,13 @@ def plan(action, p):
         "confirmation": target,
         "fingerprint": fingerprint(action, p, state),
     }
+
+
+def removable_filesystem(target, inv):
+    protected(target, inv)
+    unused(target, inv)
+    require(inv[target].get("fstype") in ("ext2", "ext3", "ext4", "xfs", "btrfs", "vfat", "exfat", "ntfs"),
+            "Select a supported data file system, not a RAID member or encrypted container")
 
 
 def supported_formats():
@@ -1139,7 +1151,7 @@ def open_filesystem(target, p, user, inv):
 
 
 def execute(action, p, user=None):
-    if action in ("mount.open", "mount.attach", "mount.detach"):
+    if action in ("mount.open", "mount.attach", "mount.detach", "filesystem.remove"):
         with filesystem_health.device_lock(os.path.realpath(p.get("target", ""))):
             return execute_unlocked(action, p, user)
     return execute_unlocked(action, p, user)
@@ -1321,6 +1333,12 @@ def execute_unlocked(action, p, user=None):
         verify_kernel_partition({"node": target, "start": start // sector, "size": size * 1048576 // sector}, sector)
         if fs:
             command(["resize2fs", target], timeout=86400)
+    elif action == "filesystem.remove":
+        removable_filesystem(target, inv)
+        command(["wipefs", "--all", "--types", inv[target]["fstype"], "--", target])
+        command(["udevadm", "trigger", "--action=change", "--settle", target], accepted=(0, 1), timeout=60)
+        if inv[target].get("uuid"):
+            fstab_change(inv[target]["uuid"])
     elif action == "filesystem.format":
         fs = p["format"]
         args = {

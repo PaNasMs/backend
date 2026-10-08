@@ -160,11 +160,10 @@ func usbStatus(c Config, rows []Device) string {
 		return "waiting-cable"
 	}
 	for _, d := range rows {
-		if d.Name == name && d.Connected {
-			if d.Profile != usbUUID {
-				return "controller-busy"
+		if d.Name == name {
+			if state := usbConnectionState(d, nativeNetwork()); state != "" {
+				return state
 			}
-			return "connected"
 		}
 	}
 	if _, e := run("ip", "link", "set", "dev", name, "up"); e != nil {
@@ -191,6 +190,25 @@ func usbStatus(c Config, rows []Device) string {
 		return "error"
 	}
 	return "connected"
+}
+
+func usbConnectionState(d Device, native bool) string {
+	if d.Reserved {
+		return "controller-busy"
+	}
+	if !d.Connected {
+		return ""
+	}
+	if d.Profile == usbUUID {
+		if native && !hasAddress(d) {
+			return ""
+		}
+		return "connected"
+	}
+	if !native || d.Profile != "" || hasAddress(d) {
+		return "controller-busy"
+	}
+	return ""
 }
 
 func IsGadgetPath(path string) bool {

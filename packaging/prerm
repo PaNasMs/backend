@@ -34,6 +34,8 @@ CHECK
  systemctl stop 'panasms-fs-check@*.service' || true
  systemctl stop panasms-volume-access.service || true
  if [ "$1" = remove ]; then systemctl disable panasms-volume-access.service || true; fi
+ systemctl stop panasms-disk-sleep.timer panasms-disk-sleep.service || true
+ rm -f /run/panasms-disk-sleep/state.json
  systemctl stop panasms-core.service panasms-agent.service
  systemctl stop panasms-sharing.timer panasms-sharing.service || true
  if [ "$1" = remove ]; then

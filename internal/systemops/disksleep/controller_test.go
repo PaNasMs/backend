@@ -134,7 +134,7 @@ func TestStandbyGates(t *testing.T) {
 				}
 				return real(name, args...)
 			}
-			if kind == "raid" {
+			if kind == "raid" || kind == "disabled" {
 				os.WriteFile(filepath.Join(s.sys, "sda/md/sync_action"), []byte("resync"), 0600)
 			}
 			old := state{Version: 1, Minutes: 10, Seen: 690, IdleSince: 100, Status: "applied"}
@@ -154,6 +154,9 @@ func TestStandbyGates(t *testing.T) {
 			}
 			if sent != (kind == "idle") {
 				t.Fatalf("standby=%v calls=%v result=%+v err=%v", sent, *calls, result, err)
+			}
+			if kind == "disabled" && result.Status != "applied" {
+				t.Fatal(result)
 			}
 			if kind == "unknown-smart" && err == nil {
 				t.Fatal("unknown SMART accepted")

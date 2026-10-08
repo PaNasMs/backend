@@ -27,6 +27,7 @@ class DeleteArrayWithShares(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
+        self.start(patch.object(storage.disk_sleep, "LOCK", root / "disk-sleep.lock"))
         for key in ("STATE", "SMB", "EXPORTS", "JOURNAL", "LOCK"):
             self.start(patch.object(sharing, key, root / key))
         self.start(patch.object(sharing, "atomic", side_effect=lambda p, s, mode=0o600: p.write_text(s)))

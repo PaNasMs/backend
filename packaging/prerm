@@ -57,7 +57,7 @@ CHECK
   systemctl stop 'panasms-module-*.service' 'panasms-smart-*.timer' || true
   systemctl stop panasms-disk-sleep.timer panasms-disk-sleep.service || true
   systemctl disable panasms-disk-sleep.timer || true
-  python3 /usr/lib/panasms/management/disk_sleep.py --disable || true
+  /usr/lib/panasms/panasms-system-helper disk-sleep disable || true
   systemctl disable panasms-core.service panasms-agent.service
  fi
  ;;

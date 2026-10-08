@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from common import command, require
-from disk_sleep import busy_arrays
+from disk_sleep import busy_arrays, locked
 
 
 def due(today, start, weeks):
@@ -28,6 +28,11 @@ def next_scheduled(schedule, now=None):
 
 
 def run(device, test, weeks, start):
+    with locked():
+        return run_locked(device, test, weeks, start)
+
+
+def run_locked(device, test, weeks, start):
     require(test in ("short", "long") and weeks in (1, 2), 'Invalid schedule')
     if not due(datetime.date.today(), datetime.date.fromisoformat(start), weeks):
         return

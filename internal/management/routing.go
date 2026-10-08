@@ -73,6 +73,7 @@ var actionModules = map[string]impl{
 	"disk.prepare":                legacy,
 	"disk.sleep":                  legacy,
 	"filesystem.format":           legacy,
+	"filesystem.remove":           legacy,
 	"filesystem.resize":           legacy,
 	"filesystem.snapshot-create":  legacy,
 	"filesystem.snapshot-delete":  legacy,

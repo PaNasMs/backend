@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,20 @@ func TestLiveNativeSharing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if os.Getenv("PANASMS_NATIVE_TEST_DHCP") == "1" {
+		if err = run("ip", "-n", namespace, "address", "flush", "dev", peer); err != nil {
+			t.Fatal(err)
+		}
+		script := filepath.Join(t.TempDir(), "lease.sh")
+		if err = os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \"$1\" in bound|renew) ip addr replace \"$ip/24\" dev \"$interface\"; ip route replace default via \"${router%% *}\"; echo DHCP_BOUND;; esac\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := invoke("ip", "netns", "exec", namespace, "busybox", "udhcpc", "-i", peer, "-s", script, "-n", "-q", "-t", "10", "-T", "3")
+		if err != nil || !strings.Contains(string(raw), "DHCP_BOUND") {
+			t.Fatalf("client did not obtain DHCP lease: %s %v", raw, err)
+		}
+		t.Log("isolated client obtained a real DHCP lease")
+	}
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		err = run("ip", "netns", "exec", namespace, "ping", "-c", "1", "-W", "1", strings.Split(address(subnet), "/")[0])
@@ -203,5 +218,5 @@ func TestLiveNativeSharing(t *testing.T) {
 	if err = run("ip", "netns", "exec", namespace, "ping", "-c", "2", "-W", "3", routes[0].Gateway); err != nil {
 		t.Fatal("client cannot reach uplink gateway through NAT: ", err)
 	}
-	t.Log("isolated client reached bridge and upstream gateway through native NAT; DHCP lease not tested")
+	t.Log("isolated client reached bridge and upstream gateway through native NAT")
 }

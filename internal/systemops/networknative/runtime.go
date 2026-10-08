@@ -117,10 +117,15 @@ func setFile(path string, text *string) error {
 		}
 		return e
 	}
-	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+	directoryMode := os.FileMode(0700)
+	mode := systemops.NetworkConfigMode(path)
+	if mode == 0644 {
+		directoryMode = 0755
+	}
+	if e := os.MkdirAll(filepath.Dir(path), directoryMode); e != nil {
 		return e
 	}
-	return writeFile(path, *text, 0600)
+	return writeFile(path, *text, mode)
 }
 func text(s string) *string { return &s }
 func fields(raw []byte) map[string]string {

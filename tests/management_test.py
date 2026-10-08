@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "management"))
 import storage, accounts, host
+import common
 from common import Rejected
 
 
@@ -380,3 +381,13 @@ class StorageSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CommandErrors(unittest.TestCase):
+    def test_cryptsetup_wrong_passphrase_is_reported_clearly(self):
+        with patch.object(common.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", "No key available with this passphrase.")):
+            with self.assertRaisesRegex(Rejected, "password is incorrect"):
+                common.command(["cryptsetup", "open", "--test-passphrase", "/dev/null"], data="x")
+        with patch.object(common.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "Device busy")):
+            with self.assertRaisesRegex(Rejected, "exited with code 1"):
+                common.command(["cryptsetup", "open", "/dev/null"], data="x")

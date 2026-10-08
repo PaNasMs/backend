@@ -70,6 +70,9 @@ def command(args, *, data=None, accepted=(0,), timeout=120):
         for signature, message in failures.items():
             if signature in result.stderr:
                 raise Rejected(message)
+        # cryptsetup exits with 2 when no key slot accepts the supplied passphrase.
+        if Path(args[0]).name == "cryptsetup" and result.returncode == 2:
+            raise Rejected('The LUKS password is incorrect')
     require(
         result.returncode in accepted,
         f"Command {Path(args[0]).name} exited with code {result.returncode}. Check the object's state and system journal.",

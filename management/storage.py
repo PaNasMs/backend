@@ -671,7 +671,7 @@ def plan(action, p):
             ),
         ]
     elif action == "disk.sleep":
-        disk_sleep.timer_value(p.get("minutes"))
+        disk_sleep.validate(p.get("minutes"))
         require(bool(shutil.which("hdparm")), 'The hdparm package is required to configure disk sleep')
         target = "all-hdd"
         details = [
@@ -1151,6 +1151,13 @@ def open_filesystem(target, p, user, inv):
 
 
 def execute(action, p, user=None):
+    if action.startswith(("raid.", "smart.")):
+        with disk_sleep.locked():
+            return execute_locked(action, p, user)
+    return execute_locked(action, p, user)
+
+
+def execute_locked(action, p, user=None):
     if action in ("mount.open", "mount.attach", "mount.detach", "filesystem.remove"):
         with filesystem_health.device_lock(os.path.realpath(p.get("target", ""))):
             return execute_unlocked(action, p, user)
@@ -1678,9 +1685,7 @@ def query(view, target):
             )
             rows.append(row)
         return {
-            "sleepSettings": disk_sleep.read(),
-            "sleepRuntime": disk_sleep.runtime(inv),
-            "sleepStatus": json.loads(disk_sleep.STATE.read_text()) if disk_sleep.STATE.exists() else {},
+            **disk_sleep.query(),
             "devices": rows,
             "formats": supported_formats(),
             "capabilities": {

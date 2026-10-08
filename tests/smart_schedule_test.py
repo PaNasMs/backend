@@ -7,6 +7,11 @@ import smart_schedule, storage
 
 
 class SmartScheduleTest(unittest.TestCase):
+    def setUp(self):
+        lock = patch.object(smart_schedule, "locked")
+        lock.start()
+        self.addCleanup(lock.stop)
+
     def test_fortnight_crosses_year_without_iso_week_reset(self):
         start = datetime.date(2026, 12, 28)
         for offset, expected in [(-7, False), (0, True), (7, False), (14, True), (21, False), (28, True)]:

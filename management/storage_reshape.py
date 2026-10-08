@@ -95,7 +95,8 @@ def plan(action, params, user=None):
 
 def execute(action, params, user=None):
     from filesystem_health import device_lock
-    with device_lock(os.path.realpath(params.get("target", ""))):
+    from disk_sleep import locked
+    with locked(), device_lock(os.path.realpath(params.get("target", ""))):
         return execute_locked(action, params, user)
 
 

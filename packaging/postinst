@@ -47,6 +47,7 @@ case "${1:-}" in
   systemctl enable --now panasms-sharing.timer
   if [ -f /etc/panasms/disk-sleep.json ]; then
    systemctl enable --now panasms-disk-sleep.timer
+   systemctl start panasms-disk-sleep.service
   fi
   # The public installer configures and starts the panel itself right after this script.
   if [ "${PANASMS_INSTALLER:-}" != 1 ]; then

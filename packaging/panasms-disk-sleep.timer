@@ -1,9 +1,10 @@
 [Unit]
-Description=Apply PaNasMs HDD standby settings after boot and hotplug
+Description=Check PaNasMs HDD idle time after boot and hotplug
 
 [Timer]
 OnBootSec=30
-OnUnitInactiveSec=60
+OnUnitInactiveSec=30
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target

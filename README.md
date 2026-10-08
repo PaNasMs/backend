@@ -58,6 +58,22 @@ home creation/moves and moving the shared home base. Read-only folder-selection
 queries expose eligible roots and explain unavailable locations; they do not
 create directories or replace the validation performed by each operation.
 
+## HDD idle control
+
+The Go system helper checks non-system SATA HDDs every 30 seconds. It measures
+continuous idle time using kernel read/write/discard/flush counters and in-flight
+I/O, then requests standby after the configured timeout. Hardware standby timers
+are disabled for managed disks; the controller does not change APM settings.
+Normal filesystem access wakes disks automatically and may take a few seconds.
+
+System/boot/swap backing disks are excluded, including disks below encrypted
+RAID. RAID maintenance and SMART self-tests postpone standby. SMART status must
+be verifiable before an active disk is stopped. PaNasMs RAID and SMART operations
+share a lock with the controller. A restart, disk replacement, configuration
+change or monitoring gap starts a new idle interval. Runtime observations live
+in `/run`, so monitoring does not write to data disks. The legacy storage API
+uses a small Python bridge; idle policy and execution are implemented in Go.
+
 ## Task cancellation and recovery
 
 The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional

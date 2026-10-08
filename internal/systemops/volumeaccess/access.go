@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -110,6 +111,14 @@ func apply(m mount) error {
 	if deviceID(st.Dev) != m.device {
 		return fmt.Errorf("mount changed at %s", m.point)
 	}
+	var mounted unix.Statx_t
+	if err = unix.Statx(fd, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &mounted); err != nil {
+		return err
+	}
+	if strconv.FormatUint(mounted.Mnt_id, 10) != m.id {
+		return fmt.Errorf("mount replaced at %s", m.point)
+	}
+
 	switch m.fs {
 	case "vfat", "exfat", "ntfs", "ntfs3":
 		group, err := user.LookupGroup("users")

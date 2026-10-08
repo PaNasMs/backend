@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -676,14 +678,13 @@ func Run() error {
 		}
 		fmt.Fprintln(os.Stderr, "network access initialization:", e)
 	}
-	for {
-		if e := tickGuarded(); e != nil {
-			fmt.Fprintln(os.Stderr, "network access:", e)
-		}
-		time.Sleep(10 * time.Second)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return runAccess(ctx)
 }
-func tickGuarded() error {
+
+func tickGuarded() error { return tickGuardedPortal(nil) }
+func tickGuardedPortal(portal *portalController) error {
 	// Cooperate with network rollback transactions and exclusive package maintenance.
 	var files []*os.File
 	defer func() {
@@ -714,7 +715,21 @@ func tickGuarded() error {
 	if change.Status == "pending" || change.Status == "applying" || change.Status == "rollback-failed" {
 		return nil
 	}
-	return Tick()
+	if err := Tick(); err != nil {
+		return err
+	}
+	if portal != nil {
+		c, err := load()
+		if err != nil {
+			return err
+		}
+		rows, err := devices()
+		if err != nil {
+			return err
+		}
+		return portal.sync(c, rows)
+	}
+	return nil
 }
 func Remove() error {
 	rows, e := devices()

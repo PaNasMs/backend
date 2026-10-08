@@ -421,6 +421,23 @@ are left alone. The installer owns only its marked boot block and PaNasMs profil
 A data cable and the NAS's normal independent power supply are required. This
 exposes Ethernet, **not raw storage**: use the web panel or existing shared folders.
 Linux/macOS use the gadget network directly; Windows may need an RNDIS driver.
+USB and fallback Wi-Fi also provide captive-portal discovery. Known operating-system
+connectivity probe names resolve to a dedicated `.2` address within that direct
+network and redirect HTTP probes to the NAS gateway and its current web port.
+The redirect never accepts credentials; authentication remains in the normal panel.
+Regular DNS queries are forwarded, the panel gateway itself is not intercepted,
+and LAN, ordinary access points, connection sharing, and HTTPS are not redirected.
+Discovery uses the existing dnsmasq/nftables dependencies on both NetworkManager
+and native networkd/Netplan. The controller removes its listeners, alias and rules
+when direct access stops and reconciles them after restart or interface recovery.
+
+Opening a browser or a “Sign in to network” notification is controlled by the client
+OS and is not guaranteed, particularly when another connection already provides
+internet access. The panel address remains usable manually. This is legacy HTTP
+probe discovery, not an RFC 8908/8910 CAPPORT API: no DHCP option 114 is advertised
+without a trusted HTTPS API endpoint. `.2` is reserved for discovery; automatically
+allocated direct-network DHCP leases begin at `.20`.
+
 Use the NAS address displayed in Network; direct USB DHCP uses an unused private
 subnet. The configured web port and authentication still apply.
 

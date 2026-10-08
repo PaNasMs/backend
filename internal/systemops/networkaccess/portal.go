@@ -43,8 +43,9 @@ type portalInstance struct {
 }
 
 type portalController struct {
-	instances map[string]*portalInstance
-	rules     string
+	instances   map[string]*portalInstance
+	rules       string
+	initialized bool
 }
 
 func portalEndpoints(c Config, rows []Device) []portalEndpoint {
@@ -192,9 +193,9 @@ func portalRules(instances map[string]*portalInstance) string {
 	for _, name := range names {
 		p := instances[name]
 		e := p.endpoint
-		fmt.Fprintf(&b, "iifname %q ip daddr %s udp dport 53 redirect to :%d\n", e.Interface, e.Gateway, p.dnsPort)
-		fmt.Fprintf(&b, "iifname %q ip daddr %s tcp dport 53 redirect to :%d\n", e.Interface, e.Gateway, p.dnsPort)
-		// DNAT preserves the alias destination; REDIRECT would select the primary address.
+		fmt.Fprintf(&b, "iifname %q ip daddr %s udp dport 53 dnat to %s:%d\n", e.Interface, e.Gateway, e.Gateway, p.dnsPort)
+		fmt.Fprintf(&b, "iifname %q ip daddr %s tcp dport 53 dnat to %s:%d\n", e.Interface, e.Gateway, e.Gateway, p.dnsPort)
+		// Pin both destinations: reconfiguration can change the primary interface address.
 		fmt.Fprintf(&b, "iifname %q ip daddr %s tcp dport 80 dnat to %s:%d\n", e.Interface, e.Alias, e.Alias, p.httpPort)
 	}
 	b.WriteString("}\n}\n")
@@ -266,6 +267,12 @@ func applyPortalRules(rules string) error {
 }
 
 func (p *portalController) sync(c Config, rows []Device) error {
+	if !p.initialized {
+		if err := cleanupPortal(); err != nil {
+			return err
+		}
+		p.initialized = true
+	}
 	desired := portalEndpoints(c, rows)
 	wanted := map[string]portalEndpoint{}
 	for _, e := range desired {
@@ -348,6 +355,9 @@ func cleanupPortal() error {
 }
 
 func (p *portalController) close() {
+	if !p.initialized {
+		return
+	}
 	_ = applyPortalRules("")
 	for _, instance := range p.instances {
 		instance.close()
@@ -356,9 +366,6 @@ func (p *portalController) close() {
 }
 
 func runAccess(ctx context.Context) error {
-	if err := cleanupPortal(); err != nil {
-		return err
-	}
 	portal := &portalController{instances: map[string]*portalInstance{}}
 	defer portal.close()
 	for {

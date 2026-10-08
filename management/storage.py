@@ -1040,9 +1040,22 @@ def fstab_change(uuid, line=None):
     path = Path("/etc/fstab")
     rows = path.read_text().splitlines()
     kept = []
+    point = line.split()[1] if line else None
     for row in rows:
         fields = row.split()
+        if row.lstrip().startswith('#'):
+            kept.append(row)
+            continue
         if fields and fields[0] == "UUID=" + uuid:
+            continue
+        if point and len(fields) >= 4 and fields[1] == point:
+            options = fields[3].split(',')
+            require(fields[0].startswith('UUID=') and 'x-systemd.device-timeout=30s' in options,
+                    'The mount point is already used by another volume')
+            existing = subprocess.run(['blkid', '-U', fields[0][5:]], capture_output=True, text=True, timeout=15)
+            require(existing.returncode == 2 and not existing.stdout.strip(),
+                    'The mount point is already used by another volume')
+            kept.append('# PaNasMs: superseded unavailable volume: ' + row)
             continue
         kept.append(row)
     if line:

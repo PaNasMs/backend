@@ -15,6 +15,32 @@ from common import Rejected
 
 
 class Policies(unittest.TestCase):
+    def test_fstab_replaces_unavailable_managed_volume_at_same_mountpoint(self):
+        old = 'UUID=old /srv/data ext4 rw,nofail,x-systemd.device-timeout=30s 0 0'
+        new = 'UUID=new /srv/data ext4 rw,nofail,x-systemd.device-timeout=30s 0 0'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'fstab'
+            path.write_text('# keep\nUUID=root / ext4 defaults 0 1\n' + old + '\n')
+            with patch.object(storage, 'Path', return_value=path), patch.object(storage, 'atomic', side_effect=lambda p, text, mode: p.write_text(text)), patch.object(storage, 'command'), patch.object(storage.subprocess, 'run', return_value=SimpleNamespace(returncode=2, stdout='')):
+                storage.fstab_change('new', new)
+                result = path.read_text()
+                self.assertIn('# PaNasMs: superseded unavailable volume: ' + old, result)
+                self.assertIn('UUID=root / ext4 defaults 0 1', result)
+                self.assertEqual([r for r in result.splitlines() if not r.startswith('#') and '/srv/data' in r], [new])
+                storage.fstab_change('new', new)
+                self.assertEqual(path.read_text(), result)
+
+    def test_fstab_preserves_available_or_unmanaged_conflicting_volume(self):
+        for options, code in [('defaults', 2), ('x-systemd.device-timeout=30s', 0), ('x-systemd.device-timeout=30s', 4)]:
+            with self.subTest(options=options, code=code), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'fstab'
+                original = f'UUID=old /srv/data ext4 {options} 0 0\n'
+                path.write_text(original)
+                with patch.object(storage, 'Path', return_value=path), patch.object(storage, 'command'), patch.object(storage.subprocess, 'run', return_value=SimpleNamespace(returncode=code, stdout='')):
+                    with self.assertRaises(Rejected):
+                        storage.fstab_change('new', 'UUID=new /srv/data ext4 defaults 0 0')
+                self.assertEqual(path.read_text(), original)
+
     def test_parity_conversion_resume_rejects_missing_original_member(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(storage_reshape, 'ROOT', Path(tmp) / 'recovery'):
             storage_reshape.ROOT.mkdir()

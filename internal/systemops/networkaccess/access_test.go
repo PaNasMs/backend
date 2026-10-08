@@ -185,3 +185,28 @@ func TestGadgetKernelNames(t *testing.T) {
 		t.Fatal("unowned or disabled gadget accepted")
 	}
 }
+
+func TestUSBCarrierDoesNotClaimAnUnconfiguredNativeInterface(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		d      Device
+		native bool
+		want   string
+	}{
+		{"native cable only", Device{Connected: true}, true, ""},
+		{"native link local", Device{Connected: true, Addresses: []string{"169.254.2.3/16", "fe80::1/64"}}, true, ""},
+		{"native foreign address", Device{Connected: true, Addresses: []string{"192.168.4.1/24"}}, true, "controller-busy"},
+		{"native foreign profile", Device{Connected: true, Profile: "other"}, true, "controller-busy"},
+		{"native owned pending", Device{Connected: true, Profile: usbUUID}, true, ""},
+		{"native owned ready", Device{Connected: true, Profile: usbUUID, Addresses: []string{"10.180.120.1/24"}}, true, "connected"},
+		{"reserved", Device{Reserved: true}, true, "controller-busy"},
+		{"NM foreign", Device{Connected: true}, false, "controller-busy"},
+		{"NM owned", Device{Connected: true, Profile: usbUUID}, false, "connected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := usbConnectionState(tc.d, tc.native); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

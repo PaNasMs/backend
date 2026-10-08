@@ -70,6 +70,9 @@ func TestDNSPrivateRange(t *testing.T) {
 	if e != nil || !strings.Contains(c, "dhcp-range=10.42.0.20,10.42.0.200,255.255.255.0,12h") {
 		t.Fatalf("%s %v", c, e)
 	}
+	if !strings.Contains(c, "\nexcept-interface=lo\n") {
+		t.Fatal("per-interface DNS must not claim the shared loopback socket")
+	}
 	if _, e = dnsConfig("br0", "::1/128"); e == nil {
 		t.Fatal("accepted unsupported DHCP address")
 	}

@@ -173,7 +173,7 @@ func dnsConfig(name, addr string) (string, error) {
 	start, end := append(net.IP{}, base...), append(net.IP{}, base...)
 	start[3] += 20
 	end[3] += 200
-	return fmt.Sprintf("interface=%s\nbind-dynamic\nlisten-address=%s\ndhcp-range=%s,%s,255.255.255.0,12h\ndhcp-option=option:router,%s\ndhcp-option=option:dns-server,%s\ndhcp-leasefile=/run/panasms-dnsmasq-%s.leases\ndomain-needed\nbogus-priv\n", name, ip.String(), start.String(), end.String(), ip.String(), ip.String(), name), nil
+	return fmt.Sprintf("interface=%s\nexcept-interface=lo\nbind-dynamic\nlisten-address=%s\ndhcp-range=%s,%s,255.255.255.0,12h\ndhcp-option=option:router,%s\ndhcp-option=option:dns-server,%s\ndhcp-leasefile=/run/panasms-dnsmasq-%s.leases\ndomain-needed\nbogus-priv\n", name, ip.String(), start.String(), end.String(), ip.String(), ip.String(), name), nil
 }
 func directFile(id string) string {
 	if Netplan() {

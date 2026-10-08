@@ -1679,6 +1679,7 @@ def query(view, target):
             rows.append(row)
         return {
             "sleepSettings": disk_sleep.read(),
+            "sleepRuntime": disk_sleep.runtime(inv),
             "sleepStatus": json.loads(disk_sleep.STATE.read_text()) if disk_sleep.STATE.exists() else {},
             "devices": rows,
             "formats": supported_formats(),

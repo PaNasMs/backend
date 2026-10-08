@@ -3276,6 +3276,21 @@ components:
     StorageOptions:
       type: object
       properties:
+        sleepRuntime:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [unconfigured, unknown, inactive, unavailable, error, busy, pending, disabled, applied]
+            timerActive:
+              type: boolean
+            timerEnabled:
+              type: boolean
+            applied:
+              type: integer
+            total:
+              type: integer
+          required: [status, timerActive, timerEnabled, applied, total]
         sleepSettings:
           type: object
           properties:

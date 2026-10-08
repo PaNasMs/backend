@@ -487,9 +487,18 @@ def partition_layout(dev, inv):
             require(descendants(dev, inv) == {dev},
                     'Partition metadata is inconsistent. No changes were made.')
             return None
-        require(all(s.get("type") in ("gpt", "PMBR", "dos") for s in signatures),
+        overlapping_atari = any(s.get('type') == 'dos' and s.get('offset') == '0x1fe' for s in signatures)
+        require(all(s.get("type") in ("gpt", "PMBR", "dos")
+                    or (overlapping_atari and s.get('type') == 'atari' and s.get('offset') == '0x1d2')
+                    for s in signatures),
                 'Existing signatures prevent creating a partition. Prepare the disk explicitly first.')
         layout = table(dev)
+        if any(s.get('type') == 'atari' for s in signatures):
+            # Some valid MBR entries also match Atari's overlapping signature.
+            # Keep every byte; checked_layout additionally verifies kernel geometry.
+            require(layout.get('label') == 'dos' and layout.get('partitions')
+                    and descendants(dev, inv) != {dev},
+                    'Existing signatures prevent creating a partition. Prepare the disk explicitly first.')
         require(isinstance(layout, dict) and layout.get("label") in ("gpt", "dos"),
                 'Unsupported partition table. No changes were made.')
         return layout

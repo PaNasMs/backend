@@ -118,3 +118,17 @@ class DiskProtectionTest(unittest.TestCase):
             with self.assertRaises(Rejected): storage.verify_kernel_partition(part,512)
         with patch.object(Path,'read_text',side_effect=['2048','4096']):
             storage.verify_kernel_partition(part,512)
+
+    def test_overlapping_atari_signature_requires_existing_dos_table(self):
+        signatures=[{'type':'dos','offset':'0x1fe'},{'type':'atari','offset':'0x1d2'}]
+        layout={'label':'dos','partitions':[{'node':'/dev/test1'}]}
+        with patch.object(storage,'json_command',return_value={'signatures':signatures}), patch.object(storage,'table',return_value=layout):
+            self.assertEqual(storage.partition_layout('/dev/test', self.inv), layout)
+            with self.assertRaises(Rejected):
+                storage.partition_layout('/dev/test', {'/dev/test':self.inv['/dev/test']})
+        for label in ('gpt', 'atari'):
+            with patch.object(storage,'json_command',return_value={'signatures':signatures}), patch.object(storage,'table',return_value={**layout,'label':label}):
+                with self.assertRaises(Rejected): storage.partition_layout('/dev/test', self.inv)
+        signatures[1]['offset']='0x200'
+        with patch.object(storage,'json_command',return_value={'signatures':signatures}):
+            with self.assertRaises(Rejected): storage.partition_layout('/dev/test', self.inv)

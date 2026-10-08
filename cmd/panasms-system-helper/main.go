@@ -17,6 +17,7 @@ import (
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networknative"
+	"panasms.local/backend/internal/systemops/volumeaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"panasms.local/backend/internal/systemops/worker"
 
@@ -25,6 +26,28 @@ import (
 )
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "volume-access" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		var err error
+		switch {
+		case len(os.Args) == 3 && os.Args[2] == "run":
+			err = volumeaccess.Run(false)
+		case len(os.Args) == 3 && os.Args[2] == "once":
+			err = volumeaccess.Run(true)
+		case len(os.Args) == 4 && os.Args[2] == "apply":
+			err = volumeaccess.ApplyMounted(os.Args[3])
+		default:
+			err = fmt.Errorf("unknown volume access command")
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && (os.Args[1] == "network-native" || os.Args[1] == "network-services") {
 		if os.Geteuid() != 0 || (os.Args[2] != "run" && os.Args[2] != "recover") {
 			os.Exit(1)

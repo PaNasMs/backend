@@ -83,6 +83,9 @@ func executeAccount(ctx context.Context, action string, p map[string]any, r *sys
 		if err != nil {
 			return err
 		}
+		if !contains(groups, "users") {
+			groups = append(groups, "users")
+		}
 		args = []string{"usermod", "--groups", strings.Join(groups, ",")}
 		if primary != "" {
 			args = append(args, "--gid", primary)
@@ -103,6 +106,9 @@ func executeAccount(ctx context.Context, action string, p map[string]any, r *sys
 		groups, err := stringList(p, "groups")
 		if err != nil {
 			return err
+		}
+		if !contains(groups, "users") {
+			groups = append(groups, "users")
 		}
 		args := []string{"usermod", "--comment", stringParam(p, "name"), "--groups", strings.Join(groups, ",")}
 		if primary != "" {

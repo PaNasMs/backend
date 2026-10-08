@@ -31,10 +31,13 @@ case "${1:-}" in
   python3 /usr/lib/panasms/sharing-install.py
   python3 /usr/lib/panasms/management/sharing.py --republish >/dev/null || echo 'Shared folders kept from the previous installation were not republished; use Restore in Shared folders.' >&2
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
+  getent group users >/dev/null || groupadd --system users
   systemctl daemon-reload
   udevadm control --reload-rules
   udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=0bda --attr-match=idProduct=8152
   /usr/lib/panasms/panasms-system-helper network-access initialize || echo 'Direct network access setup incomplete; review Network settings.' >&2
+  systemctl enable panasms-volume-access.service
+  systemctl restart panasms-volume-access.service
   systemctl enable panasms-network-access.service
   systemctl restart panasms-network-access.service
   systemctl enable panasms-networkd-recovery.service

@@ -8,6 +8,40 @@ from common import Rejected
 
 
 class DiskSleepTest(unittest.TestCase):
+    def test_runtime_does_not_confuse_saved_configuration_with_application(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, state = Path(tmp) / "config", Path(tmp) / "state"
+            cfg.write_text('{"minutes":10}')
+            state.write_text(json.dumps({"disk:1": {"status": "applied", "minutes": 10}}))
+            with (
+                patch.object(disk_sleep, "CONFIG", cfg),
+                patch.object(disk_sleep, "STATE", state),
+                patch.object(disk_sleep, "check_disk"),
+                patch.object(disk_sleep, "identity", return_value="disk:1") as identity,
+                patch.object(disk_sleep, "command", return_value="ActiveState=inactive\nUnitFileState=disabled\n") as command,
+            ):
+                inv = {"/dev/test": {}}
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "inactive")
+                command.return_value = "ActiveState=active\nUnitFileState=enabled\n"
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "applied")
+                identity.return_value = "disk:2"
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "pending")
+                identity.return_value = "disk:1"
+                cfg.write_text('{"minutes":20}')
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "pending")
+                cfg.write_text('{"minutes":0}')
+                state.write_text('{"disk:1":{"status":"applied","minutes":0}}')
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "disabled")
+                state.write_text('{"disk:1":{"status":"error","minutes":null}}')
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "error")
+                state.write_text('{"disk:1":{"status":"busy","minutes":null}}')
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "busy")
+                self.assertEqual(disk_sleep.runtime({})["status"], "unavailable")
+                command.side_effect = Rejected("unavailable")
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "unknown")
+                cfg.unlink()
+                self.assertEqual(disk_sleep.runtime(inv)["status"], "unconfigured")
+
     def test_timer_encoding(self):
         for minutes, value in [(0, 0), (5, 60), (20, 240), (30, 241), (60, 242), (300, 250)]:
             self.assertEqual(disk_sleep.timer_value(minutes), value)

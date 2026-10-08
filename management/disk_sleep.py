@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import subprocess
 from pathlib import Path
 from common import Rejected, require, command, atomic, integer
 
@@ -50,6 +51,48 @@ def read():
     return json.loads(CONFIG.read_text()) if CONFIG.exists() else None
 
 
+def identity(row):
+    node = Path("/sys/class/block") / row["kname"]
+    sequence = node / "diskseq"
+    return row["serial"] + ":" + (sequence if sequence.exists() else node / "dev").read_text().strip()
+
+
+def runtime(inv):
+    cfg = read()
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    current = []
+    for target, row in inv.items():
+        try:
+            check_disk(target, inv)
+            current.append(state.get(identity(row), {}))
+        except Rejected:
+            continue
+    try:
+        properties = dict(line.split("=", 1) for line in command([
+            "systemctl", "show", "panasms-disk-sleep.timer",
+            "--property=ActiveState,UnitFileState",
+        ], timeout=5).splitlines() if "=" in line)
+        active = properties.get("ActiveState") == "active"
+        enabled = properties.get("UnitFileState") == "enabled"
+        known = bool(properties.get("ActiveState") and properties.get("UnitFileState"))
+    except (Rejected, OSError, subprocess.TimeoutExpired):
+        active = enabled = known = False
+    applied = sum(s.get("status") == "applied" and s.get("minutes") == cfg["minutes"]
+                  for s in current) if cfg else 0
+    status = (
+        "unconfigured" if cfg is None else
+        "unknown" if not known else
+        "inactive" if not active or not enabled else
+        "unavailable" if not current else
+        "error" if any(s.get("status") == "error" for s in current) else
+        "busy" if any(s.get("status") == "busy" for s in current) else
+        "pending" if applied != len(current) else
+        "disabled" if cfg["minutes"] == 0 else "applied"
+    )
+    return {"status": status, "timerActive": active, "timerEnabled": enabled,
+            "applied": applied, "total": len(current)}
+
+
 def save(minutes):
     timer_value(minutes)
     atomic(CONFIG, json.dumps({"minutes": minutes}))
@@ -74,13 +117,7 @@ def apply(disable=False):
             check_disk(target, inv)
         except Rejected:
             continue
-        node = Path("/sys/class/block") / row["kname"]
-        sequence = (
-            (node / "diskseq").read_text().strip()
-            if (node / "diskseq").exists()
-            else (node / "dev").read_text().strip()
-        )
-        key = row["serial"] + ":" + sequence
+        key = identity(row)
         if cfg["minutes"] and busy_arrays(row["kname"]):
             current[key] = {"minutes": None, "device": target, "status": "busy"}
             continue

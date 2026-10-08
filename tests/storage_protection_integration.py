@@ -80,8 +80,8 @@ with tempfile.TemporaryDirectory(prefix='panasms-storage-guard-', dir='/var/tmp'
         run('udevadm', 'settle')
         for loop in loops:
             rejected('disk.prepare', {'target': loop})
-            rejected('partition.create', {'target':loop, 'startMiB':102, 'endMiB':110})
-        print('PASS unmounted RAID partition members protect both parent disks', flush=True)
+            storage.plan('partition.create', {'target':loop, 'startMiB':102, 'endMiB':110})
+        print('PASS RAID members block disk wipes but allow independent free space', flush=True)
         run('mdadm', '--stop', array)
         array_active = False
         for part in parts:
@@ -94,8 +94,8 @@ with tempfile.TemporaryDirectory(prefix='panasms-storage-guard-', dir='/var/tmp'
         crypt_active = True
         run('udevadm', 'settle')
         rejected('disk.prepare', {'target':loops[0]})
-        rejected('partition.create', {'target':loops[0], 'startMiB':102, 'endMiB':110})
-        print('PASS open unmounted LUKS partition protects its parent disk', flush=True)
+        storage.plan('partition.create', {'target':loops[0], 'startMiB':102, 'endMiB':110})
+        print('PASS LUKS blocks disk wipes but allows independent free space', flush=True)
     finally:
         if crypt_active:
             run('cryptsetup', 'close', crypt)

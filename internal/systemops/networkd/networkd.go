@@ -283,7 +283,7 @@ func rollback(s *change) error {
 		if s.Previous == nil {
 			e = os.Remove(s.Path)
 		} else {
-			e = writeFile(s.Path, *s.Previous, 0600)
+			e = writeFile(s.Path, *s.Previous, systemops.NetworkConfigMode(s.Path))
 		}
 	} else {
 		e = nil
@@ -400,7 +400,7 @@ func execute(r request) (any, error) {
 			return nil, e
 		}
 		if e = os.MkdirAll(filepath.Dir(s.Path), 0755); e == nil {
-			e = writeFile(s.Path, content, 0600)
+			e = writeFile(s.Path, content, systemops.NetworkConfigMode(s.Path))
 		}
 		if e == nil {
 			e = reconfigure(s.Interface, s.Backend, s.AppliedMTU)

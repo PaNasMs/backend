@@ -1,0 +1,12 @@
+[Unit]
+Description=PaNasMs shared access to local data volumes
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/lib/panasms/panasms-system-helper volume-access run
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

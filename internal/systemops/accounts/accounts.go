@@ -147,3 +147,18 @@ func contains(list []string, value string) bool {
 	}
 	return false
 }
+
+// VolumeUsers returns the same local, non-service users exposed by the panel.
+func VolumeUsers() ([]string, error) {
+	rows, err := localUsers()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, u := range rows {
+		if normal(rows, u) == nil {
+			names = append(names, u.Name)
+		}
+	}
+	return names, nil
+}

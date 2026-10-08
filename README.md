@@ -480,3 +480,23 @@ service readiness, not association or a DHCP lease from a physical client.
 Run `make check-network-integration` only as root on an authorized test host with
 NetworkManager. It creates and removes a temporary veth pair and tests native Go
 checkpoint handling without changing the management connection.
+
+### Shared local data volumes
+
+PaNasMs grants local, non-service users membership of the `users` group. Writable
+local data volumes mounted below `/srv`, `/mnt` or `/media` grant that group
+write access at the filesystem root and inherit this access in new directories
+through default ACLs. Existing children and their explicit permissions are not
+recursively rewritten. Files created explicitly private by an application remain
+private. Administrators can still manage individual folder permissions.
+
+The Go `panasms-volume-access` service reconciles newly mounted volumes, including
+boot and on-demand mounts. It reads the kernel mount table and local account
+metadata; it does not walk files or repeatedly touch already processed volumes.
+The currently running system's filesystems, their aliases, system fstab targets,
+read-only volumes and bind-mounted subdirectories are excluded. A data partition
+on the system disk remains eligible. FAT/exFAT/NTFS use a shared group and mount
+masks instead of POSIX ACLs. Previously mounted FAT/exFAT/NTFS volumes with
+private masks must be detached and attached through Disks once; busy volumes are
+never forcibly unmounted by the reconciler. Remote SMB/NFS permissions remain controlled by the
+remote server; this policy cannot override them.

@@ -18,6 +18,7 @@ class MountAccessTest(unittest.TestCase):
                         storage, "inventory", return_value={"/dev/test": {"uuid": "test", "fstype": "vfat"}}
                     ),
                     patch.object(storage, "mountpoint", return_value=point),
+                    patch.object(storage.grp, "getgrnam", return_value=SimpleNamespace(gr_gid=100)),
                     patch.object(storage, "fstab_change"),
                     patch.object(storage, "command") as command,
                     patch.object(
@@ -28,7 +29,8 @@ class MountAccessTest(unittest.TestCase):
                         "mount.attach", {"target": "/dev/test", "point": str(point)}, "test"
                     )
                     options = next(c.args[0][2] for c in command.call_args_list if c.args[0][0] == "mount")
-                    self.assertIn("uid=1000,gid=1000,fmask=0177,dmask=0077", options)
+                    self.assertIn("uid=1000,gid=100,fmask=0113,dmask=0002", options)
+                    command.assert_any_call(["/usr/lib/panasms/panasms-system-helper", "volume-access", "apply", str(point)])
                     self.assertEqual(point.parent.stat().st_mode & 0o777, 0o755)
             finally:
                 os.umask(previous)

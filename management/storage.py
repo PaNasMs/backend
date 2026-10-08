@@ -1,5 +1,6 @@
 import os
 import pwd
+import grp
 from pathlib import Path
 import re
 import shutil
@@ -1366,7 +1367,7 @@ def execute_unlocked(action, p, user=None):
         if inv[target]["fstype"] in ("vfat", "exfat", "ntfs", "ntfs3"):
             require(bool(user), 'No user specified for mounting the volume')
             owner = pwd.getpwnam(user)
-            opts += f",uid={owner.pw_uid},gid={owner.pw_gid},fmask=0177,dmask=0077"
+            opts += f",uid={owner.pw_uid},gid={grp.getgrnam('users').gr_gid},fmask=0113,dmask=0002"
         if p.get("readOnly") and inv[target]["fstype"] in ("ext3", "ext4"):
             opts += ",noload"
         if action == "mount.attach":
@@ -1377,6 +1378,8 @@ def execute_unlocked(action, p, user=None):
         )
         if action == "mount.attach":
             command(["mount", "-o", opts, "--", target, str(point)])
+        if not p.get("readOnly"):
+            command(["/usr/lib/panasms/panasms-system-helper", "volume-access", "apply", str(point)])
     elif action == "mount.detach":
         for _, point in sorted(mounted_rows(target, inv), key=lambda row: len(row[1]), reverse=True):
             command(["umount", "--", point])

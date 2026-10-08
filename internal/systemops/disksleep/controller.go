@@ -124,6 +124,7 @@ func (s *service) step(d disk, old state, minutes int, now float64) (state, erro
 	if err != nil {
 		return old, err
 	}
+	busy = busy && minutes > 0
 	next := advance(old, d, minutes, now, current, busy)
 	if old.Version != 1 || old.Minutes != minutes {
 		// Disable the firmware timer: it must not stop a disk during a SMART test or RAID work.

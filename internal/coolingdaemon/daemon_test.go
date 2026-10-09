@@ -10,6 +10,9 @@ import (
 )
 
 func ptr(v float64) *float64 { return &v }
+func readSleep(v float64) []Disk {
+	return []Disk{{State: "sleeping", Temperature: ptr(v), SleepTemperature: true}}
+}
 func TestCoolingPolicy(t *testing.T) {
 	unknown := []Disk{{State: "unknown"}}
 	sleep := []Disk{{State: "sleeping"}}
@@ -22,6 +25,7 @@ func TestCoolingPolicy(t *testing.T) {
 		starting       bool
 		elapsed        time.Duration
 		stale, invalid bool
+		running        bool
 		want           float64
 	}{
 		{name: "startup no disks", profile: "quiet", sensor: ptr(50), starting: true, stale: true, want: .5},
@@ -32,7 +36,21 @@ func TestCoolingPolicy(t *testing.T) {
 		{name: "invalid overrides startup", profile: "quiet", disks: unknown, sensor: ptr(50), starting: true, invalid: true, want: 1},
 		{name: "hot disk overrides unknown", profile: "quiet", disks: append(unknown, Disk{State: "active", Temperature: ptr(50)}), sensor: ptr(50), starting: true, want: 1},
 		{name: "sleep stops fan", profile: "quiet", disks: sleep, sensor: ptr(50), want: 0},
-		{name: "sleep hot CPU", profile: "quiet", disks: sleep, sensor: ptr(65), want: .5},
+		{name: "sleep hot CPU", profile: "quiet", disks: sleep, sensor: ptr(65), want: .75},
+		{name: "sleep warm CPU starts fan", profile: "quiet", disks: sleep, sensor: ptr(57), want: .25},
+		{name: "sleep CPU below start threshold", profile: "quiet", disks: sleep, sensor: ptr(51), want: 0},
+		{name: "sleep CPU hysteresis keeps fan", profile: "quiet", disks: sleep, sensor: ptr(51), running: true, want: .25},
+		{name: "sleep CPU cools down", profile: "quiet", disks: sleep, sensor: ptr(49), running: true, want: 0},
+		{name: "sleep CPU 60-65", profile: "quiet", disks: sleep, sensor: ptr(62), want: .5},
+		{name: "sleeping disk read cool", profile: "balanced", disks: readSleep(34), sensor: ptr(57), want: 0},
+		{name: "sleeping disk read below start", profile: "balanced", disks: readSleep(36), sensor: ptr(57), want: 0},
+		{name: "sleeping disk read starts fan", profile: "balanced", disks: readSleep(37), sensor: ptr(57), want: .5},
+		{name: "sleeping disk read hysteresis", profile: "balanced", disks: readSleep(36), sensor: ptr(57), running: true, want: .5},
+		{name: "sleeping disk read off below 35", profile: "balanced", disks: readSleep(34.9), sensor: ptr(57), running: true, want: 0},
+		{name: "sleeping disk read curve", profile: "balanced", disks: readSleep(44), sensor: ptr(40), want: .75},
+		{name: "sleeping disk read hot", profile: "balanced", disks: readSleep(46), sensor: ptr(40), want: 1},
+		{name: "one unreadable sleeping disk uses CPU", profile: "balanced", disks: append(readSleep(30), Disk{State: "sleeping"}), sensor: ptr(57), want: .25},
+		{name: "sleeping reading counts with active disks", profile: "balanced", disks: append(readSleep(44), Disk{State: "active", Temperature: ptr(31)}), sensor: ptr(40), want: .75},
 		{name: "missing system sensor", profile: "quiet", disks: sleep, want: 1},
 		{name: "cold", profile: "balanced", disks: cold, sensor: ptr(50), want: 0},
 		{name: "stale cold", profile: "quiet", disks: cold, sensor: ptr(50), stale: true, want: 1},
@@ -42,14 +60,14 @@ func TestCoolingPolicy(t *testing.T) {
 		{name: "missing temperature", profile: "quiet", disks: []Disk{{State: "active"}}, sensor: ptr(50), want: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := target(tc.profile, tc.disks, tc.sensor, tc.starting, tc.elapsed, tc.stale, tc.invalid)
+			got, _ := target(tc.profile, tc.disks, tc.sensor, tc.starting, tc.elapsed, tc.stale, tc.invalid, tc.running)
 			if got != tc.want {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
 	}
 	for name := range profiles {
-		if v, _ := target(name, cold, ptr(65), false, 0, false, false); v == 0 {
+		if v, _ := target(name, cold, ptr(65), false, 0, false, false, false); v == 0 {
 			t.Fatalf("%s stopped with hot CPU", name)
 		}
 	}
@@ -184,5 +202,33 @@ func TestKernelPinmuxRejectsPeripheralAndUnknownPins(t *testing.T) {
 		if err := freePinFunction(raw, 18); err == nil {
 			t.Fatal("accepted " + raw)
 		}
+	}
+}
+
+func TestSleepTemperatureParsing(t *testing.T) {
+	if v := sleepTemperature([]byte(`{"temperature":{"current":44}}`)); v == nil || *v != 44 {
+		t.Fatalf("current temperature: %v", v)
+	}
+	if v := sleepTemperature([]byte(`{"ata_smart_attributes":{"table":[{"id":194,"raw":{"value":41}}]}}`)); v == nil || *v != 41 {
+		t.Fatalf("attribute 194: %v", v)
+	}
+	for _, raw := range []string{`{}`, `{"temperature":{"current":120}}`, `not json`} {
+		if v := sleepTemperature([]byte(raw)); v != nil {
+			t.Fatalf("%s gave %v", raw, *v)
+		}
+	}
+}
+
+func TestCachedSleepingDisk(t *testing.T) {
+	now := 100.0
+	previous := Disk{State: "active", Temperature: ptr(38), Health: "passed", ObservedAt: &now}
+	stale := cachedDisk(Disk{Path: "/dev/null", State: "sleeping"}, previous)
+	if !stale.Stale || stale.Temperature == nil || *stale.Temperature != 38 || stale.Health != "passed" {
+		t.Fatalf("stale cache: %+v", stale)
+	}
+	later := 200.0
+	fresh := cachedDisk(Disk{Path: "/dev/null", State: "sleeping", Temperature: ptr(43), ObservedAt: &later, SleepTemperature: true}, previous)
+	if fresh.Stale || *fresh.Temperature != 43 || *fresh.ObservedAt != 200 || fresh.Health != "passed" {
+		t.Fatalf("fresh standby reading: %+v", fresh)
 	}
 }

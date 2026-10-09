@@ -1897,6 +1897,12 @@ components:
                     - unknown
                   stale:
                     type: boolean
+                  sleepReadable:
+                    type: boolean
+                    description: Known after the first standby read; true when SMART can be read without waking the disk.
+                  sleepTemperature:
+                    type: boolean
+                    description: The temperature was read while the disk stayed in standby.
                   observedAt:
                     type:
                     - number

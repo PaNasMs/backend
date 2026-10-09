@@ -11,7 +11,19 @@ import (
 var profiles = map[string][3]float64{"quiet": {40, 45, 50}, "balanced": {35, 40, 45}, "performance": {30, 35, 40}}
 var cpuProfiles = map[string][4]int{"quiet": {50000, 60000, 67500, 75000}, "balanced": {45000, 55000, 64000, 70000}, "performance": {40000, 50000, 60000, 65000}}
 
-func target(profile string, disks []Disk, sensor *float64, starting bool, elapsed time.Duration, stale, invalid bool) (float64, string) {
+// While all disks sleep the fan stops below sleepingOff and starts again from sleepingOn (°C, disk
+// temperature read in standby). Disks that cannot be read in standby use the CPU temperature instead,
+// with the fan off below cpuOff and on again from cpuOn.
+const (
+	sleepingOff = 35.0
+	sleepingOn  = 37.0
+	cpuOff      = 50.0
+	cpuOn       = 52.0
+)
+
+// target returns the fan duty (0..1) and its reason. running tells whether the fan currently turns,
+// for hysteresis while the disks sleep.
+func target(profile string, disks []Disk, sensor *float64, starting bool, elapsed time.Duration, stale, invalid, running bool) (float64, string) {
 	thresholds, ok := profiles[profile]
 	if !ok || invalid {
 		return 1, "stale-or-invalid-data"
@@ -22,6 +34,7 @@ func target(profile string, disks []Disk, sensor *float64, starting bool, elapse
 	unknown := len(disks) == 0
 	active := false
 	maximum := float64(-1)
+	sleepingKnown := true
 	for _, d := range disks {
 		if d.State == "active" {
 			active = true
@@ -29,6 +42,15 @@ func target(profile string, disks []Disk, sensor *float64, starting bool, elapse
 				unknown = true
 			} else if *d.Temperature > maximum {
 				maximum = *d.Temperature
+			}
+		}
+		if d.State == "sleeping" {
+			if d.SleepTemperature && d.Temperature != nil {
+				if *d.Temperature > maximum {
+					maximum = *d.Temperature
+				}
+			} else {
+				sleepingKnown = false
 			}
 		}
 		if d.State == "unknown" || d.State == "unavailable" {
@@ -51,10 +73,27 @@ func target(profile string, disks []Disk, sensor *float64, starting bool, elapse
 		return 1, "system-temperature"
 	}
 	if !active {
-		if *sensor < 65 {
-			return 0, "all-disks-sleeping"
+		if sleepingKnown {
+			if (running && maximum < sleepingOff) || (!running && maximum < sleepingOn) {
+				return 0, "all-disks-sleeping"
+			}
+			for i, t := range thresholds {
+				if maximum < t {
+					return float64(i+1) / 4, "sleeping-disk-temperature"
+				}
+			}
+			return 1, "sleeping-disk-temperature"
 		}
-		return .5, "system-temperature"
+		cpu := *sensor
+		switch {
+		case (running && cpu < cpuOff) || (!running && cpu < cpuOn):
+			return 0, "all-disks-sleeping"
+		case cpu < 60:
+			return .25, "system-temperature"
+		case cpu < 65:
+			return .5, "system-temperature"
+		}
+		return .75, "system-temperature"
 	}
 	if maximum < 30 && *sensor < 65 {
 		return 0, "disks-cool"

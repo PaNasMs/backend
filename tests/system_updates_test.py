@@ -52,7 +52,7 @@ class Updates(unittest.TestCase):
             events=self.transaction()
         self.assertEqual(u.read('state.json',{})['phase'],'failed')
         self.assertIn('terminal-stop',events)
-        self.assertIn('start',events)
+        self.assertIn(('start',['core','panasms-module-terminal.service']),events)
         self.assertNotIn('backup',events)
         self.assertNotIn('install',events)
 
@@ -87,34 +87,96 @@ class Updates(unittest.TestCase):
         for text in ('Inst libc6 [2.1] (2.2 repo)','Remv samba [1.0]'):
             with patch.object(u,'run',return_value=text),self.assertRaises(Rejected):u.apt_plan(['/a.deb'])
         with patch.object(u,'run',return_value='Inst panasms-prototype [0.2.5] (0.2.6 local)\nInst new-dependency (1.0 repo)'),self.assertRaises(Rejected):u.apt_plan(['/a.deb'])
-    def transaction(self, failure=False):
-        events=[];version=['0.2.5']
+    def test_apt_plan_upgrades_installed_cooling_but_never_installs_it(self):
+        both='Inst panasms-cooling [0.2.5] (0.2.6 local) [arm64]\nInst panasms-prototype [0.2.5] (0.2.6 local) [arm64]'
+        with patch.object(u,'installed',return_value={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}),patch.object(u,'run',return_value=both):u.apt_plan(['/a.deb','/b.deb'])
+        with patch.object(u,'run',return_value=both),self.assertRaisesRegex(Rejected,'panasms-cooling'):u.apt_plan(['/a.deb','/b.deb'])
+    def release(self, *names, version='0.2.6'):
+        return {'version':version,'packages':{'arm64':[{'name':n,'file':f'{n}_{version}_arm64.deb','size':3,'sha256':__import__('hashlib').sha256(b'deb').hexdigest(),'url':u.BASE+n} for n in names]}}
+    def download(self, entry, current):
+        fields={'Package':None,'Version':entry['version'],'Architecture':'arm64'}
+        def run(args,**kw):
+            if args[0]=='dpkg':return 'arm64\n'
+            return Path(args[2]).name.split('_')[0] if args[3]=='Package' else fields[args[3]]
+        with patch.object(u,'installed',return_value=current),patch.object(u,'run',side_effect=run),patch.object(u,'fetch',return_value=b'deb') as fetch:
+            return u.download(entry),fetch
+    def test_download_includes_installed_cooling_package(self):
+        paths,fetch=self.download(self.release('panasms-cooling','panasms-prototype'),{'panasms-prototype':'0.2.5','panasms-cooling':'0.2.4'})
+        self.assertEqual(sorted(paths),['panasms-cooling','panasms-prototype'])
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(sorted(u.read('downloaded.json',{})['paths']),sorted(paths.values()))
+    def test_download_skips_cooling_that_is_not_installed(self):
+        paths,fetch=self.download(self.release('panasms-cooling','panasms-prototype'),{'panasms-prototype':'0.2.5'})
+        self.assertEqual(list(paths),['panasms-prototype'])
+        self.assertEqual(fetch.call_count,1)
+    def test_download_rejects_unrelated_or_duplicate_packages(self):
+        for names in (('panasms-prototype','samba'),('panasms-prototype','panasms-prototype')):
+            with self.subTest(names=names),self.assertRaises(Rejected):self.download(self.release(*names),{'panasms-prototype':'0.2.5'})
+    def test_installed_reports_cooling_with_core(self):
+        def query(args,**kw):
+            versions={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.4'}
+            return subprocess.CompletedProcess(args,0,'installed '+versions[args[-1]])
+        with patch.object(u.subprocess,'run',side_effect=query):
+            self.assertEqual(importlib.reload(u).installed(),{'panasms-prototype':'0.2.5','panasms-cooling':'0.2.4'})
+    def transaction(self, failure=False, cooling=None):
+        events=[];version=['0.2.5'];cooling_version=['0.2.5']
         def run(args,**kw):
             if args[0]=='apt-get' and '--download-only' not in args:
                 events.append('install');version[0]='0.2.6'
+                if cooling!='stale':cooling_version[0]='0.2.6'
             return ''
         def health():
             events.append('health')
             if failure:raise Rejected('health failed')
         patches={
             'check':lambda:{'releases':[{'version':'0.2.6','rollbackCompatible':True}]},
-            'download':lambda e:['/new.deb'], 'preflight':lambda *a,**k:events.append('preflight'),
+            'download':lambda e:{'panasms-prototype':'/new.deb',**({'panasms-cooling':'/cooling.deb'} if cooling else {})}, 'preflight':lambda *a,**k:events.append('preflight'),
             'apt_plan':lambda p:events.append('apt-plan'), 'services':lambda:['core','panasms-module-terminal.service'],
-            'stop':lambda p:events.append('terminal-stop' if p==['panasms-module-terminal.service'] else 'stop'), 'backup':lambda p:events.append('backup'),
-            'start':lambda p:events.append('start'), 'healthy':health,
+            'stop':lambda p:events.append('terminal-stop' if p==['panasms-module-terminal.service'] else ('stop',p)), 'backup':lambda p:events.append(('backup',p)),
+            'start':lambda p:events.append(('start',p)), 'healthy':health,
             'restore':lambda:events.append('restore'), 'run':run,
-            'installed':lambda:{'panasms-prototype':version[0]},
+            'installed':lambda:{'panasms-prototype':version[0],**({'panasms-cooling':cooling_version[0]} if cooling else {})},
+            'active':lambda unit:bool(cooling) and (cooling!='inactive' or 'install' not in events),
         }
         with patch.multiple(u,**patches):u.work()
         return events
     def test_success_orders_backup_before_install(self):
         events=self.transaction()
-        self.assertLess(events.index('terminal-stop'),events.index('stop'))
+        units=['core','panasms-module-terminal.service']
+        self.assertLess(events.index('terminal-stop'),events.index(('stop',units)))
         self.assertIn('panasms-module-terminal.service',u.read('active-units.json',[]))
-        self.assertLess(events.index('stop'),events.index('backup'))
-        self.assertLess(events.index('backup'),events.index('install'))
+        self.assertLess(events.index(('stop',units)),events.index(('backup',units)))
+        self.assertLess(events.index(('backup',units)),events.index('install'))
         self.assertEqual(u.read('state.json',{})['phase'],'complete')
         self.assertNotIn('restore',events)
+    def test_cooling_upgrades_with_core_without_being_stopped(self):
+        events=self.transaction(cooling='active')
+        units=['core','panasms-module-terminal.service'];keep=units+['panasms-cooling.service']
+        self.assertIn(('stop',units),events)
+        self.assertIn(('backup',keep),events)
+        self.assertIn(('start',keep),events)
+        self.assertEqual(u.read('active-units.json',[]),keep)
+        self.assertEqual(u.read('state.json',{})['phase'],'complete')
+        self.assertNotIn('restore',events)
+    def test_cooling_version_or_service_failure_rolls_back(self):
+        for cooling in ('stale','inactive'):
+            with self.subTest(cooling=cooling):
+                u.save('state.json',{'id':'test','phase':'queued','operation':'install','version':'0.2.6'})
+                events=self.transaction(cooling=cooling)
+                self.assertEqual(events.count('restore'),1)
+                state=u.read('state.json',{})
+                self.assertEqual(state['phase'],'rolled-back')
+                self.assertIn('Installed version' if cooling=='stale' else 'panasms-cooling.service',state['error'])
+    def test_backup_repacks_every_installed_package(self):
+        u.save('state.json',{'id':'a'*32,'phase':'backing-up','version':'0.2.6'})
+        current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}
+        def run(args,cwd=None,**kw):
+            if args[0]=='dpkg-repack':(Path(cwd)/f'{args[1]}_0.2.5_arm64.deb').write_bytes(b'deb')
+            return ''
+        with patch.object(u,'installed',return_value=current),patch.object(u,'run',side_effect=run):u.backup(['core','panasms-cooling.service'])
+        backup=u.read('backup.json',{})
+        self.assertEqual(sorted(Path(p).name.split('_')[0] for p in backup['packages']),['panasms-cooling','panasms-prototype'])
+        self.assertEqual((backup['version'],backup['toVersion'],backup['units']),('0.2.5','0.2.6',['core','panasms-cooling.service']))
     def test_failed_health_rolls_back_without_retrying_update(self):
         events=self.transaction(True)
         self.assertEqual(events.count('restore'),1)

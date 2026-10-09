@@ -125,6 +125,7 @@ type sample struct {
 func sampleDisks(ctx context.Context, c Config, out chan<- sample) {
 	cached := map[string]Disk{}
 	lastErrors := map[string]string{}
+	sleepReads := loadSleepCapabilities(sleepCapabilityPath)
 	initialized := false
 	started := time.Now()
 	for ctx.Err() == nil {
@@ -157,6 +158,9 @@ func sampleDisks(ctx context.Context, c Config, out chan<- sample) {
 			if row.State == "active" {
 				cached[p] = row
 			}
+			if row.State == "sleeping" {
+				row = sleepingDisk(ctx, p, row, sleepReads)
+			}
 			row = cachedDisk(row, cached[p])
 			disks = append(disks, row)
 			if row.Error != lastErrors[p] {
@@ -186,6 +190,38 @@ func sampleDisks(ctx context.Context, c Config, out chan<- sample) {
 		wait(ctx, delay)
 	}
 }
+
+// sleepingDisk adds a standby temperature reading when the disk allows it. The first read of each
+// disk is a probe: if the disk wakes up, it is remembered and never read in standby again.
+func sleepingDisk(ctx context.Context, path string, row Disk, capabilities map[string]bool) Disk {
+	capable, known := capabilities[path]
+	if known && !capable {
+		row.SleepReadable = &capable
+		return row
+	}
+	temp, asleep := readSleeping(ctx, path)
+	readable := asleep && temp != nil
+	if !known || readable != capable {
+		capabilities[path] = readable
+		if err := atomicJSON(sleepCapabilityPath, capabilities); err != nil {
+			log.Printf("Cooling sensor %s: cannot save standby read capability: %v", path, err)
+		}
+		if readable {
+			log.Printf("Cooling sensor %s: temperature is readable in standby", path)
+		} else {
+			log.Printf("Cooling sensor %s: reading SMART in standby is not supported; using CPU temperature while disks sleep", path)
+		}
+	}
+	row.SleepReadable = &readable
+	if readable {
+		now := float64(time.Now().UnixNano()) / 1e9
+		row.Temperature = temp
+		row.ObservedAt = &now
+		row.SleepTemperature = true
+	}
+	return row
+}
+
 func Run(ctx context.Context) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -277,7 +313,7 @@ func Run(ctx context.Context) (err error) {
 					required = append(required, d)
 				}
 			}
-			targetValue, reason := target(c.Profile, required, systemTemperature(), !state.initialized, now.Sub(started), state.at.IsZero() || now.Sub(state.at) > time.Duration(c.SampleSeconds+60)*time.Second, invalid)
+			targetValue, reason := target(c.Profile, required, systemTemperature(), !state.initialized, now.Sub(started), state.at.IsZero() || now.Sub(state.at) > time.Duration(c.SampleSeconds+60)*time.Second, invalid, value > 0)
 			if targetValue < value {
 				if previousTarget != targetValue {
 					lowerSince = now

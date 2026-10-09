@@ -339,6 +339,14 @@ GPIO. Mode changes check pin ownership and wait for the controller to acknowledg
 the previous configuration on failure. CPU cooling is configured separately in Settings > General
 and requires writable active thermal trip points.
 
+While all disks sleep, the controller tries to read each disk's temperature without waking it. The
+first standby read of a disk is a probe: if the disk stays in standby, its temperature keeps steering
+the fan as in normal operation, and the fan stops below 35 °C and starts again from 37 °C. If the read
+wakes the disk, `/var/lib/panasms-cooling/sleep-reads.json` records that and the disk is not read in
+standby again. As long as any sleeping disk cannot be read, the fan follows the CPU temperature
+instead: off below 50 °C (on again from 52 °C), 25 % up to 60 °C, 50 % up to 65 °C, 75 % up to 70 °C
+and full speed above. SMART reads do not change the block I/O counters the idle controller watches.
+
 Capability detection is read-only and separate from the controller heartbeat. The installation
 hardware report includes `supportedCooling`, and the cooling API rechecks it at runtime. A
 temperature sensor alone does not enable fan controls, and a supported GPIO controller does not

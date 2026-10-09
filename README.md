@@ -376,8 +376,11 @@ publisher removes its trusted key but keeps its installed modules running.
 Settings > System updates handles signed stable and testing releases, checks, downloads, automatic
 installation windows and rollback. The default is the stable channel with notifications only. A
 separate systemd worker with its own journal performs the update and survives package replacement.
-It updates the core package and does not upgrade the Linux distribution. It stops if APT would
-install or remove other system packages; update those dependencies separately first. The
+It updates the core package and, when the release carries it, an installed `panasms-cooling`
+package in the same transaction; it never installs cooling where it is absent. Cooling keeps running
+during the backup, its package restarts it, and the update rolls back if cooling does not come back.
+The updater does not upgrade the Linux distribution. It stops if APT would install or remove other
+system packages; update those dependencies separately first. The
 [update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
 documents publication, trust, backup and recovery.
 

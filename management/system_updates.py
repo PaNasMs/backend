@@ -25,7 +25,11 @@ BASE = 'https://panasms.github.io/updates/'
 ACTIVE = {'queued', 'checking', 'downloading', 'preparing', 'backing-up', 'installing', 'verifying', 'rolling-back'}
 CHANGING = {'preparing', 'backing-up', 'installing', 'verifying', 'rolling-back'}
 ACTIONS = {'system.update.settings', 'system.update.check', 'system.update.download', 'system.update.install', 'system.update.rollback'}
-PACKAGES = {'panasms-prototype'}
+CORE = 'panasms-prototype'
+# Installed PaNasMs packages upgrade together when the release carries them; none is newly installed.
+PACKAGES = {CORE, 'panasms-cooling'}
+# Kept running through the transaction: package scripts restart them and verification requires them.
+INDEPENDENT = ['panasms-cooling.service']
 MAINTENANCE = Path('/run/lock/panasms-maintenance.lock')
 
 
@@ -123,7 +127,7 @@ def query():
     candidate=releases[0] if releases else None
     state=read('state.json',{})
     return {'settings':config(),'installed':current,'candidate':candidate,'checkedAt':cache.get('checkedAt'),
-            'available':bool(candidate and greater(candidate['version'],current.get('panasms-prototype','0'))),
+            'available':bool(candidate and greater(candidate['version'],current.get(CORE,'0'))),
             'state':state,'busy':busy(),'history':read('history.json',[]),
             'rollbackAvailable': bool(read('backup.json',{}).get('complete')) and not busy()}
 
@@ -152,7 +156,7 @@ def plan(action,p,user=None):
         backup=read('backup.json',{})
         require(backup.get('complete'),'No complete rollback backup is available')
         require(backup.get('moduleHash')==module_hash(),'Installed modules changed after the backup; automatic rollback is unavailable')
-        require(current['installed'].get('panasms-prototype')==backup.get('toVersion') or read('state.json',{}).get('phase')=='recovery-required','Rollback backup does not match the installed version')
+        require(current['installed'].get(CORE)==backup.get('toVersion') or read('state.json',{}).get('phase')=='recovery-required','Rollback backup does not match the installed version')
         target=backup['version'];details=[target,'Restore previous PaNasMs packages, settings and databases. User files are not restored.']
     else:target=config()['channel'];details=['Check signed system update catalog']
     return {'target':str(target),'confirmation':str(target),'details':details,
@@ -289,11 +293,13 @@ def download(entry):
     arch=run(['dpkg','--print-architecture']).strip();current=installed()
     require(arch in ('arm64','amd64'),'Unsupported system architecture')
     packages=entry['packages'][arch]
-    require(any(p['name']=='panasms-prototype' for p in packages),'Core package missing from release')
+    require(any(p['name']==CORE for p in packages),'Core package missing from release')
+    require(len({p['name'] for p in packages})==len(packages),'Duplicate update package')
     folder=ROOT/'downloads';folder.mkdir(exist_ok=True)
-    paths=[]
+    paths={}
     for package in packages:
-        require(package['name'] in {'panasms-prototype', 'panasms-cooling'} and re.fullmatch(r'[A-Za-z0-9_.~+-]+\.deb',package['file']),'Invalid update package')
+        require(package['name'] in PACKAGES and re.fullmatch(r'[A-Za-z0-9_.~+-]+\.deb',package['file']),'Invalid update package')
+        # Optional packages are upgraded only where they are already installed.
         if package['name'] not in current:continue
         require(type(package['size']) is int and 0<package['size']<=256*1024**2,'Invalid update package size')
         path=folder/package['file']
@@ -303,8 +309,8 @@ def download(entry):
             temp=path.with_suffix('.tmp');temp.write_bytes(raw);temp.replace(path)
         require(run(['dpkg-deb','-f',str(path),'Package']).strip()==package['name'] and run(['dpkg-deb','-f',str(path),'Version']).strip()==entry['version'],'Update package identity mismatch')
         require(run(['dpkg-deb','-f',str(path),'Architecture']).strip() in (arch,'all'),'Update package architecture mismatch')
-        paths.append(str(path))
-    save('downloaded.json',{'version':entry['version'],'paths':paths})
+        paths[package['name']]=str(path)
+    save('downloaded.json',{'version':entry['version'],'paths':list(paths.values())})
     return paths
 
 
@@ -312,14 +318,23 @@ def apt_plan(paths):
     text=run(['apt-get','--simulate','--no-remove','install',*paths])
     require(not re.search(r'^Remv ',text,re.M),'The update would remove system packages')
     changes=re.findall(r'^Inst (\S+)',text,re.M)
-    require(all(name.split(':')[0] in PACKAGES for name in changes),'Update system dependencies separately before installing this PaNasMs version: '+', '.join(changes))
+    current=installed()
+    require(all(name.split(':')[0] in current for name in changes),'Update system dependencies separately before installing this PaNasMs version: '+', '.join(changes))
 
 
 def services():
     units=['panasms-core.service','panasms-agent.service','panasms-sharing.timer','panasms-sharing.service']
     units+=run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain','panasms-module-*.service']).splitlines()
     units=[u.split()[0] for u in units]
-    return [u for u in units if subprocess.run(['systemctl','is-active','--quiet',u],check=False).returncode==0]
+    return [u for u in units if active(u)]
+
+
+def active(unit):
+    return subprocess.run(['systemctl','is-active','--quiet',unit],check=False).returncode==0
+
+
+def independent():
+    return [u for u in INDEPENDENT if active(u)]
 
 
 def stop_terminals(units):
@@ -387,7 +402,7 @@ def backup(units):
         fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
         try:os.fsync(fd)
         finally:os.close(fd)
-    save('backup.json',{'folder':str(folder),'packages':packages,'version':installed()['panasms-prototype'],'units':units,'complete':True,'moduleHash':module_hash(),'toVersion':read('state.json',{})['version']})
+    save('backup.json',{'folder':str(folder),'packages':packages,'version':installed()[CORE],'units':units,'complete':True,'moduleHash':module_hash(),'toVersion':read('state.json',{})['version']})
 
 
 def restore(boot=False):
@@ -424,25 +439,27 @@ def work():
             if op=='check':finish('checked');return
             require(data['releases'],'No release is available in this channel')
             entry=data['releases'][0]
-            require(greater(entry['version'],installed().get('panasms-prototype','0')),'No newer PaNasMs version is available in this channel')
-            paths=download(entry)
+            require(greater(entry['version'],installed().get(CORE,'0')),'No newer PaNasMs version is available in this channel')
+            downloads=download(entry);paths=list(downloads.values())
             if op=='download':finish('downloaded');return
             require(entry.get('rollbackCompatible') is True and not entry.get('requiresReboot'),'This release requires manual maintenance')
             phase('preparing');preflight(entry['version'],worker=True)
             apt_plan(paths)
             run(['apt-get','--download-only','--yes','--no-remove','install',*paths],timeout=1800)
-            units=services();save('active-units.json',units)
+            units=services();keep=independent();save('active-units.json',units+keep)
             stop_terminals(units)
             module_idle()
             guards.enter_context(maintenance(drain=True))
             module_idle()
             preflight(entry['version'],worker=True)
-            stop(units);backup(units)
+            stop(units);backup(units+keep)
             phase('installing');mutated=True
             os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
             run(['apt-get','--yes','--no-remove','-o','Dpkg::Options::=--force-confold','install',*paths],timeout=1800)
-            phase('verifying');start(units);healthy()
-            require(installed().get('panasms-prototype')==entry['version'],'Installed version does not match the requested update')
+            phase('verifying');start(units+keep);healthy()
+            current=installed()
+            require(all(current.get(name)==entry['version'] for name in downloads),'Installed version does not match the requested update')
+            require(all(active(u) for u in keep),'Independent services did not restart after the update: '+', '.join(u for u in keep if not active(u)))
             finish('complete')
             try:cleanup()
             except OSError as error:print('Update cache cleanup deferred: '+str(error),file=__import__('sys').stderr)

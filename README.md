@@ -1,518 +1,468 @@
 # PaNasMs backend
 
-The Linux server for **Pavlo's NAS Management System**. The current 0.2.x
-prototype combines a Go HTTP/WebSocket core, a privileged Go agent and Python
-system-management adapters. The deployed target is Raspberry Pi OS ARM64.
+This repository is the Linux server side of [PaNasMs](https://github.com/PaNasMs/panasms)
+(Pavlo's NAS Management System). It contains the Go HTTP/WebSocket core, the privileged Go agent
+and system helpers, the Python system-management adapters, and the scripts that build the
+`panasms-prototype` (core) and `panasms-cooling` Debian packages. The current version is 0.2.15,
+the first stable release.
 
-[Project website](https://panasms.github.io/) ·
-[System update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
+End users install PaNasMs with the one-command installer described on the
+[project website](https://panasms.github.io/) and in the
+[installation guide](https://panasms.github.io/docs/setup/install/). The installer and update
+channels live in [PaNasMs/updates](https://github.com/PaNasMs/updates). Supported systems are
+Raspberry Pi OS 13 ARM64, Debian 13 ARM64/AMD64, Ubuntu 24.04 LTS AMD64 and Armbian 26.8 (Debian 13).
 
 ## Architecture
 
-- **Core** serves the SPA, HTTP API, sessions, user preferences, wallpaper,
+- **Core** (`panasms-core`) serves the SPA, the HTTP API, sessions, user preferences, wallpaper,
   notifications and metrics. It runs as the restricted `panasms` service user.
-- **Agent** authenticates through PAM and executes authorized system operations
-  through a local Unix socket. It stores persistent jobs separately from core.
-- **System adapters** integrate Linux tools and services; Linux remains the source
-  of truth for users, disks, mounts, RAID and network configuration.
-- **Installable modules** run as separate services. Files, Terminal and Cloud Sync
-  have their own repositories and signed packages; their code is not installed
-  as part of the core package.
-- **Cooling** has an independent package and service, so removing the panel does
-  not stop the disk cooling controller. Fresh cooling configurations default to no
-  disk-bay GPIO control. Advanced disk settings select external power PWM (two-wire,
-  GPIO27 by default) or built-in fan PWM (four-wire, GPIO18/25kHz and GPIO24 tachometer).
-  GPIO hardware support currently targets Raspberry Pi5; pin numbers are BCM.
-  Mode changes validate ownership and wait for controller acknowledgment, restoring
-  the previous configuration on failure. CPU cooling remains independent.
+- **Agent** (`panasms-agent`) authenticates users through PAM and runs authorized system
+  operations behind a local Unix socket. It keeps its persistent jobs in its own database.
+- **System helpers** (`panasms-system-helper`, `panasms-keys`, `panasms-password`,
+  `panasms-networkd`) are Go binaries for account, key, password, network and other system
+  operations. Some also run as their own systemd services, such as network access and volume
+  access.
+- **Python adapters** in `management/` call Linux tools for the domains that have not moved to Go.
+  Linux stays the source of truth for users, disks, mounts, RAID and network configuration.
+- **Installable modules** (Files, Terminal, Cloud Sync, Containers) run as separate services and
+  ship as separate signed packages from their own repositories.
+- **Cooling** (`panasms-cooling`) is a separate package and service, so removing the panel does
+  not stop the disk cooling controller.
 
-The implementation uses `net/http`, chi, coder/websocket, `database/sql` with
-SQLite, PAM through cgo, and systemd. SQLite schema initialization and migrations
-live in the Go store packages; there is no sqlc generation step.
+The code uses `net/http`, chi, coder/websocket, `database/sql` with SQLite, PAM through cgo, and
+systemd. The Go store packages own SQLite schema creation and migrations. There is no sqlc step.
 
-## Implemented system areas
-
-Linux users/groups, profiles and SSH keys; home relocation; disks and mdadm RAID;
-partitions, filesystems, LUKS and mounts; SMART checks and schedules; disk standby;
-CPU/disk cooling; local SMB/NFS shared folders and external NFS/SMB mounts; NetworkManager and native systemd-networkd/Netplan networking, access
-points and connection sharing; system services, journal, updates and power
-operations; module installation and the signed online catalog.
-
-Network changes use confirmation and rollback. Storage and account operations
-use server-side validation and the management plan/run workflow. UI visibility
-is not an authorization boundary. Dedicated firewall and LVM management remain
-outside the current interface.
-
-Realtek USB Ethernet adapters that initially expose a driver CD-ROM as
-`0bda:8152` are switched to Ethernet mode by a packaged udev rule using
-`usb-modeswitch`. The rule requires a USB mass-storage interface and targets the
-exact USB bus/device address; ordinary RTL8152 network interfaces are left alone.
-It runs on attachment and is also applied to matching devices during installation.
-Removing the package removes the rule. The switch message is documented in the
-[USB_ModeSwitch device discussion](https://www.draisberghof.de/usb_modeswitch/bb/viewtopic.php?t=2972).
-
-Home-folder destinations must use a writable local Linux filesystem on permanent
-storage, mounted automatically. USB and removable backing devices are rejected,
-including members beneath RAID or encrypted volumes. The checks run for individual
-home creation/moves and moving the shared home base. Read-only folder-selection
-queries expose eligible roots and explain unavailable locations; they do not
-create directories or replace the validation performed by each operation.
-
-## HDD idle control
-
-The Go system helper checks non-system SATA HDDs every 30 seconds. It measures
-continuous idle time using kernel read/write/discard/flush counters and in-flight
-I/O, then requests standby after the configured timeout. Hardware standby timers
-are disabled for managed disks; the controller does not change APM settings.
-Normal filesystem access wakes disks automatically and may take a few seconds.
-
-System/boot/swap backing disks are excluded, including disks below encrypted
-RAID. RAID maintenance and SMART self-tests postpone standby. SMART status must
-be verifiable before an active disk is stopped. PaNasMs RAID and SMART operations
-share a lock with the controller. A restart, disk replacement, configuration
-change or monitoring gap starts a new idle interval. Runtime observations live
-in `/run`, so monitoring does not write to data disks. The legacy storage API
-uses a small Python bridge; idle policy and execution are implemented in Go.
-
-## Task cancellation and recovery
-
-The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional
-`recovery` report. Cancellation is cooperative: queued work can be cancelled;
-running helpers accept a request only at safe checkpoints. Module download and
-staging, home-copy preparation, and Files 0.2.12 staged copies support this.
-Partition writes, formatting, package configuration and committed changes are
-not terminated midway. RAID maintenance has separate pause/resume controls.
-
-After agent restart, queued jobs become cancelled and running jobs become
-interrupted. Commands and credentials are never replayed automatically. The
-administrator can inspect actual domain state, run a pending home/module
-recovery or finish incomplete package configuration, then acknowledge the result.
-Clearing history retains unreviewed failures and interrupted operations, and
-preserves idempotency records. Inspection is blocked while other tasks run.
-
-Files copies are published from a sibling staging directory only after copying
-finishes. Cancellation removes that staging copy and preserves the source.
-Interrupted cross-filesystem moves can retain both copies and a journal; inspect
-them before deleting or retrying. This is not a filesystem snapshot or an undo
-mechanism for formatting, deletion, live source modifications or power loss.
-Destructive-operation recovery still requires domain-specific checks and backups.
-
-`POST /api/v1/manage?view=cancel|recover|acknowledge` accepts `{ "id": "..." }`.
-Recovery reads current state; it does not repeat the original operation. Explicit
-recovery actions use the same fresh plan/confirmation/run workflow as other jobs.
-
-## Source map
+## Source layout
 
 | Path | Contents |
 | --- | --- |
-| [cmd](cmd) | Core and agent entry points |
-| [internal](internal) | API, identity, persistence, jobs, metrics and module integration |
+| [cmd](cmd) | Entry points for core, agent, cooling and the system helpers |
+| [internal](internal) | API, identity, persistence, jobs, metrics, system operations and module integration |
 | [management](management) | Python Linux adapters and module installation/catalog logic |
-| [api/openapi.yaml](api/openapi.yaml) | OpenAPI contract; management operations are not fully described yet |
+| [api/openapi.yaml](api/openapi.yaml) | Management API contract |
 | [api/events.md](api/events.md) | Event WebSocket protocol |
-| [packaging](packaging) | Debian hooks, systemd units, PAM policy and administration tools |
-| [cooling](cooling) | Independent disk cooling controller |
-| [scripts](scripts) | Build and installation migration tools |
-| [tests](tests) | Python adapter tests; Go tests live beside their packages |
+| [packaging](packaging) | Debian hooks, systemd units, udev rules, PAM policy and administration tools |
+| [cooling](cooling) | Disk cooling controller packaging and device tree overlay |
+| [scripts](scripts) | Package builds, source installation and one-time migrations |
+| [tests](tests) | Python tests and integration tests; Go tests live beside their packages |
 
 ## Build and test
 
-Use Linux, Go 1.26 or newer, Python 3, a C compiler and PAM development headers
-(`libpam0g-dev` on Debian). CGO is required for PAM and SQLite.
-
-The Python test suite also contains Files-module regression checks. Clone
-[module-files](https://github.com/PaNasMs/module-files) at `../modules/files`
-in the workspace layout and install Pillow (`python3-pil` on Debian) before
-running `make check`. The CI workflow prepares these test dependencies explicitly.
+You need Linux, Go 1.26 or newer, Python 3, a C compiler and PAM development headers
+(`libpam0g-dev` on Debian). PAM and SQLite require cgo. The Python tests also need
+`python3-pil`, `python3-yaml` and `python3-jsonschema`, and a checkout of
+[module-files](https://github.com/PaNasMs/module-files) at `../modules/files`, because
+`tests/filesystem_health_test.py` imports its backend. CI uses the same layout.
 
 ```sh
-make check
-make check-race
-make build
+make check        # Go tests with the pam tag, go vet, Python unit tests
+make check-race   # Go tests with the race detector
+make build        # bin/panasms-core, panasms-agent, panasms-system-helper, panasms-keys, panasms-password
 ```
 
-`make check` runs Go tests with PAM, Go vet and Python unit tests. `make build`
-produces `bin/panasms-core` and `bin/panasms-agent`.
+The test suite uses temporary data. It covers legacy schema adoption, failed and future
+migrations, crashes inside migrations and jobs, journal write failures, cooperative cancellation
+and job ordering. Physical power loss and hardware controllers need separate acceptance tests on
+real hardware.
 
-Build the [frontend](https://github.com/PaNasMs/frontend) first, then package its
-static output on the target architecture:
+### Integration tests
+
+`make check-accounts-integration` builds the workers and runs disposable account and PAM tests in
+user, mount, PID and network namespaces. It needs user namespaces, `newuidmap`/`newgidmap` with
+subordinate UID/GID ranges, PAM headers and the standard account tools. It never modifies host
+accounts. Account commands, PAM, keys and home moves or deletion run for real; systemd and storage
+discovery use fixtures. The tests compare native queries, plans and recovery reports with the
+legacy Python contract.
+
+`make check-network-integration` must run as root on an authorized test host with
+NetworkManager. It creates and removes a temporary veth pair to test checkpoint handling and does
+not change the management connection.
+
+The native networking hardware tests in `internal/systemops/networknative` are opt-in.
+`PANASMS_NATIVE_TEST_WIFI=wlan0` enables radio, scan and access point tests, and
+`PANASMS_NATIVE_TEST_UPLINK=end0` enables an isolated veth/NAT test. Run them only as root on an
+authorized test host with NetworkManager stopped and a separate way to recover the host. The access
+point test checks service readiness, not a client association or DHCP lease.
+
+### Debian packages
+
+Build the [frontend](https://github.com/PaNasMs/frontend) first, then build the packages natively
+on the target architecture. The core script refuses to cross-compile.
 
 ```sh
 sh scripts/build-deb.sh ../frontend/dist
 sh scripts/build-cooling-deb.sh
 ```
 
-Outputs are `dist/panasms-prototype_0.2.5_<architecture>.deb` and
-`dist/panasms-cooling_0.2.0_all.deb`. The package script expects a native Go build;
-ARM64 is the tested deployment target. Go binaries can be built without frontend
-sources, but the prototype Debian package requires prebuilt SPA assets.
+The outputs are `dist/panasms-prototype_<version>_<arch>.deb` and
+`dist/panasms-cooling_<version>_<arch>.deb`. The core version comes from [VERSION](VERSION) unless
+`PANASMS_PACKAGE_VERSION` is set. The cooling version defaults to 0.2.0 unless
+`PANASMS_COOLING_VERSION` is set. Both scripts validate the version with `dpkg`. The cooling build
+also compiles `pinctrl` and `dtoverlay` from `third_party/raspberrypi-utils`, so it needs `cmake`,
+`libfdt-dev` and `device-tree-compiler`.
 
-The core package version defaults to [VERSION](VERSION). CI supplies a unique
-prerelease through `PANASMS_PACKAGE_VERSION`; `PANASMS_COOLING_VERSION` similarly
-overrides the optional cooling package version. Both are validated by `dpkg`.
-See the [automated build guide](https://github.com/PaNasMs/panasms/blob/main/documentation/builds.md)
-for native ARM64/AMD64 artifacts, source manifests and validation limits.
-
-## Users, groups and personal access
-
-The Users section reads local Linux users and groups on every request. Membership
-in `sudo` (primary or supplementary) grants administration. Root, service UIDs,
-non-local and ambiguous duplicate-UID accounts are visible but protected.
-Ordinary accounts require explicit panel access in `/etc/panasms/accounts.json`;
-existing sudo users retain bootstrap access. The optional deployment allowlist
-remains an additional restriction.
-
-Administrators manage account names, primary/supplementary groups, homes, UID,
-expiry, password aging, forced password changes, SSH keys and panel/SSH sessions.
-New accounts have a private home and panel access; SSH is disabled by default.
-Deletion defaults to removing only the home; shared-folder files are preserved.
-Busy homes return named process/service blockers. Self-lockout and removal of the
-last available administrator are blocked. UID changes update home ownership via
-`usermod`; ownership on other volumes requires a separate administrator decision.
-
-Passwords follow the host PAM configuration, without an extra application strength
-policy. Own-password changes use the `passwd` PAM stack with the caller's real UID
-and effective root identity, as the system password utility does. Administrator
-resets use `chpasswd`. Expired passwords must be changed before a session is issued.
-Panel sessions are rechecked against live Linux access, UID and revocation epoch;
-password resets and access/membership changes revoke affected sessions.
-
-Ordinary users access their profile, avatar, language, desktop preferences, read-only
-system widgets and Files under their own Linux permissions. They cannot administer
-storage, network, modules, users, service settings or other users' sessions/tasks.
-Terminal and Cloud Sync remain administrator-only. Security history records panel
-sign-ins, profile changes, session termination and completed account/group jobs.
-SSH sessions are discovered and terminated through `systemd-logind`.
-
-SSH restrictions use `/etc/ssh/sshd_config.d/60-panasms-users.conf`, validate effective
-OpenSSH configuration and reload the service. Disabling an account also expires it
-in Linux and terminates SSH sessions. Managed Samba access is also revoked; Linux group changes disconnect affected
-SMB sessions so access is evaluated again. Removing PaNasMs preserves Linux account state
-and this SSH policy rather than silently reopening access.
+Pushes to `main` call the shared build workflow in PaNasMs/panasms, which builds ARM64 and AMD64
+packages and feeds the testing channel. The
+[build guide](https://github.com/PaNasMs/panasms/blob/main/documentation/builds.md) describes the
+artifacts, source manifests and validation limits.
 
 ## Installation and operation
 
-On the target Debian-based machine, run `sudo apt update`, then install the generated
-prototype package with `sudo apt install ./<package>.deb` so OS dependencies are
-resolved, then run
-`sudo panasms-configure` (HTTP port 80 on a fresh installation). Use
-`sudo panasms-configure --port 8080` to choose a different port. Running without
-`--port` preserves an existing choice. It requires an existing non-root user in the Linux
-`sudo` group; it does not create an administrator. Review hardware support before
-installing/configuring the optional cooling package.
+To install a locally built package on a Debian-based machine:
 
-The package declares required runtime tools in Debian `Depends`, including mdadm
-and initramfs-tools for RAID, partition/filesystem and SMART utilities,
-wpasupplicant and either hostapd or an existing NetworkManager for Wi-Fi, Samba/NFS tools, and PAM/session
-support. They are installed even with `--no-install-recommends`; access to the
-configured distribution repositories is required. `dpkg -i` alone does not download
-dependencies. CI resolves the complete dependency tree using an empty installed-package
-status database on both architectures. SSH server support remains optional and is
-available when OpenSSH server is installed; hardware-specific cooling is a separate package.
+```sh
+sudo apt update
+sudo apt install ./panasms-prototype_<version>_<arch>.deb
+sudo panasms-configure            # port 80 on a fresh installation
+sudo panasms-configure --port 8080
+```
 
-Administrators can also change the HTTP port in Settings → General, alongside CPU
-cooling. Occupied and browser-blocked ports are rejected. The panel restarts; the browser checks the new address and redirects automatically when it responds.
-A manual link remains available if the browser cannot verify it. Failed startup restores the previous port. The choice
-is stored in `/etc/panasms/web.env` and survives package upgrades. The source
-installer accepts `--port PORT` too.
+Use `apt install`, not `dpkg -i`, so APT downloads the dependencies listed in `Depends` (RAID,
+partition, filesystem and SMART tools, Samba and NFS, Wi-Fi tools, PAM and session support). They
+install even with `--no-install-recommends`, so the distribution repositories must be reachable.
+OpenSSH server is optional. `panasms-configure` without `--port` keeps the existing port. It needs
+an existing non-root user in the `sudo` group and does not create an administrator.
+`sudo scripts/install-prototype.sh --assets ../frontend/dist [--port PORT] [--disk-fan]` builds and
+installs both packages from source in one step.
 
-The packaged prototype serves HTTP on port 80 by default. The core binary also accepts TLS
-certificate/key flags. Runtime configuration is in `/etc/panasms/panasms.env`;
-core state is in `/var/lib/panasms`, and agent jobs/state in `/var/lib/panasms-agent`.
-Inspect `panasms-core`, `panasms-agent` and, if installed, `panasms-cooling` with
-`systemctl` and `journalctl`.
+Administrators can change the HTTP port in Settings > General. The panel rejects occupied and
+browser-blocked ports, restarts, and redirects the browser once the new address responds. If
+startup fails, it restores the previous port. The port is stored in `/etc/panasms/web.env` and
+survives upgrades. `sudo panasms-tls enable [CERTIFICATE KEY]` switches the panel to HTTPS with a
+supplied or self-signed certificate, and `sudo panasms-tls disable` switches it back.
 
-`sudo panasms-uninstall --plan` previews removal. `--remove` removes the panel;
-`--purge` additionally removes panel-owned state. User data, Linux accounts,
-RAID and mounts are retained. The separate cooling package is retained.
-Review the plan before using either removal mode.
+| Path | Contents |
+| --- | --- |
+| `/etc/panasms/panasms.env` | Runtime configuration |
+| `/var/lib/panasms` | Core state |
+| `/var/lib/panasms-agent` | Agent jobs and state |
 
-The one-time `scripts/migrate-ostojaos.py` helper applies only to its explicitly
-validated legacy installation and supplied backup artifacts. It is not a general
-installer or a substitute for future upgrade migrations.
+Inspect `panasms-core`, `panasms-agent` and, if installed, `panasms-cooling` with `systemctl` and
+`journalctl`.
 
-## Related repositories and license
+`sudo panasms-uninstall --plan` previews removal. `--remove` removes the panel, and `--purge` also
+removes panel-owned state. Panel-published SMB/NFS shares are unpublished. User files, Linux
+accounts, RAID arrays, mounts and the cooling package stay. Review the plan before running either
+mode.
 
-[Workspace](https://github.com/PaNasMs/panasms) ·
-[Frontend](https://github.com/PaNasMs/frontend) ·
-[Module SDK](https://github.com/PaNasMs/module-sdk) ·
-[Registry](https://github.com/PaNasMs/module-registry)
+`scripts/migrate-pinas.py` and `scripts/migrate-ostojaos.py` are one-time migrations for two
+specific earlier prototype installations and their backup artifacts. They are not general
+installers or upgrade migrations.
 
-Internal planning/deployment documents are not public. Public documentation is
-maintained in English. Original code: [PolyForm Noncommercial 1.0.0](LICENSE);
-third-party scope: [NOTICE](NOTICE).
+## Users, groups and access
 
-## Shared folders (system module)
+The Users section reads local Linux users and groups on every request. Membership in `sudo`
+(primary or supplementary) grants administration. Root, service UIDs, non-local accounts and
+ambiguous duplicate-UID accounts are visible but protected. Ordinary accounts need explicit panel
+access in `/etc/panasms/accounts.json`. Existing sudo users keep bootstrap access. An optional
+deployment allowlist can restrict access further. Hiding a control in the UI is not an
+authorization boundary; the server validates every operation.
 
-`management/sharing.py` owns local publications; it is part of core, not an
-installable package. External SMB/NFS mounts remain a separate storage feature.
-The `/sharing` page offers folder and connection tabs. SMB access and password
-synchronization status belong to each user’s Security tab in Users. A folder can
-be published through SMB, NFS, both, or neither; removing a publication never
-removes files. Existing legacy NFS exports remain visible and editable.
+Administrators manage account names, groups, homes, UID, expiry, password aging, forced password
+changes, SSH keys and panel/SSH sessions. New accounts get a private home and panel access, with
+SSH disabled. Deletion removes only the home by default and keeps shared-folder files. A busy home
+returns the blocking processes and services. The panel blocks self-lockout and removal of the last
+administrator. A UID change updates home ownership through `usermod`; ownership on other volumes
+needs a separate decision.
 
-- SMB access is explicitly enabled per Linux user. Shares select users/groups
-  for read or write access; Linux permissions remain the upper bound. Folder
-  owner/group/mode editing is nonrecursive and separate from publication.
-- Successful PAM password login, own-password change and administrator reset
-  synchronize the SMB password. Plaintext only crosses stdin in memory; it is
-  never stored in settings/jobs/logs. A sync failure has a visible account status
-  and login notification; a partial own-password failure still revokes sessions.
-- `panasms-sharing.timer` checks Linux account state every 30 seconds (up to five
-  seconds timer slack). External locks, expiry, UID changes and password changes
-  revoke stale SMB access. A successful panel password login provisions the new
-  password. SMB-disabled users need no Samba credentials.
-- NFS uses explicit client IP/subnet allowlists, numeric UID/GID and root_squash.
-  It is intended for trusted networks, without Kerberos. Remote root is not an
-  administrator of a published folder. Per-user SMB restrictions do not replace
-  NFS's underlying Unix permissions.
-- Joint SMB/NFS shares disable Samba oplocks and use strict locking; real SMB3
-  and NFS4 byte-range lock conflict tests cover the deployed Linux kernel.
-  SMB-only shares keep normal Samba caching defaults.
-- Managed fragments are `/etc/samba/panasms-shares.conf` and
-  `/etc/exports.d/panasms-shares.exports`; state is root-only
-  `/etc/panasms/sharing.json`. A persisted transaction journal restores prior
-  fragments/state on failure or agent startup. External fragment edits block
-  further edits until explicitly restored. Changes to unrelated administrator
-  configuration are not overwritten.
-- New installation replaces only the verified distribution-default Samba config,
-  saving its original. A customized existing Samba server requires manual review
-  and the managed include. Guest access and automatic home/printer publication
-  are not enabled. Removal stops managed publication and preserves user files;
-  an unchanged installer-owned global config is restored from its backup.
+Passwords follow the host PAM configuration with no extra strength policy. Own-password changes use
+the `passwd` PAM stack with the caller's real UID, as `passwd` does. Administrator resets use
+`chpasswd`. An expired password must be changed before the panel issues a session. Every session
+is rechecked against live Linux access, UID and a revocation epoch. Password resets and access or
+membership changes revoke affected sessions.
 
-Publication currently requires an existing folder on a mounted local data volume;
-root filesystem and remote-mount re-export are rejected. Spaces/configuration
-metacharacters in export paths are not supported. Create folders using Files
-before publishing them. SMB volume UUID checks and NFS mountpoint guards prevent
-publishing a fallback directory when a backing mount disappears. NFS and SMB
-publications also block destructive volume operations in the storage manager.
+Ordinary users can use their profile, avatar, language, desktop preferences, read-only system
+widgets and Files under their own Linux permissions. They cannot administer storage, network,
+modules, users, services or other users' sessions and tasks. Terminal, Cloud Sync and the other
+module APIs except Files are administrator-only. Security history records panel sign-ins, profile
+changes, session termination and completed account and group jobs.
 
-References: [Samba configuration](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html)
-and [smbpasswd](https://www.samba.org/samba/docs/current/man-html/smbpasswd.8.html).
+SSH restrictions live in `/etc/ssh/sshd_config.d/60-panasms-users.conf`. The panel validates the
+effective OpenSSH configuration and reloads the service. `systemd-logind` lists and terminates SSH
+sessions. Disabling an account also expires it in Linux, ends its SSH sessions and revokes managed
+Samba access. Linux group changes disconnect affected SMB sessions so Samba re-evaluates access.
+Removing PaNasMs keeps account state and this SSH policy, so it does not reopen access.
 
-## Additional module repositories
+## Storage
 
-Administrators can manage catalog URLs from the repository icon in Modules.
-The official `https://panasms.github.io/module-registry/` source is added by default.
-Removing a source keeps installed modules; an empty list permits file installation.
-Configuration is stored in `/etc/panasms/module-sources.json`.
+The panel manages disks and mdadm RAID, partitions, filesystems, LUKS, mounts, SMART checks and
+schedules, disk standby, and external NFS/SMB mounts. It does not manage LVM or a firewall. Storage
+operations use server-side validation and the plan/run workflow. See
+[docs/storage.md](docs/storage.md) for capabilities and recovery.
 
-A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique
-catalog id), `catalog.sig` (Ed25519 envelope), and `keys/<signer>.pem` (Ed25519
-public key). Use a unique publisher id; `panasms-*` is reserved. Its catalog and
-module archives must use that publisher's key. The add dialog displays the key's
-SHA-256 fingerprint before granting trust. Compare it with the publisher's
-independently supplied fingerprint. A key change requires explicit reconfiguration;
-a reused publisher id with a different key is rejected.
+Home folders must be on a writable local Linux filesystem on permanent storage that mounts
+automatically. The panel rejects USB and removable backing devices, including those beneath RAID
+or encrypted volumes. These checks apply to single home creation or moves and to moving the shared
+home base. Folder-selection queries list eligible roots and explain unavailable ones without
+creating directories.
 
-Use the official registry schema as a template: each module has `id` and `releases`;
-each stable release provides its signed `manifest`, HTTPS archive `url`, byte `size`,
-`sha256`, and `channel: stable`. The archive uses the existing PaNasMs bundle format
-and SDK signing procedure. Archive size limits, hashes, signatures, compatibility
-and dependency checks apply equally to every source. Downloads may redirect over
-HTTPS (including GitHub release assets). Repository URLs do not accept credentials,
-query parameters, fragments or nonstandard ports.
+### Shared data volumes
 
-Sources have deterministic priority in configured order; a duplicate module id
-from a later source is reported and ignored. Updates cannot silently replace an
-installed module with another publisher's module. An unavailable source reports
-its own error while healthy sources remain visible. Removing the last source for
-a custom publisher removes its trusted key; running installed modules are retained.
+PaNasMs adds local, non-service users to the `users` group. Writable local data volumes mounted
+below `/srv`, `/mnt` or `/media` give that group write access at the filesystem root, and default
+ACLs pass it on to new directories. Existing children keep their permissions. Files an application
+creates as private stay private.
 
-## System updates
+The Go `panasms-volume-access` service applies this to new mounts, including boot and on-demand
+mounts. It reads the kernel mount table and local account data and does not walk files. It skips
+the running system's filesystems and their aliases, system fstab targets, read-only volumes and
+bind-mounted subdirectories. A data partition on the system disk is still eligible. FAT, exFAT and
+NTFS use a shared group and mount masks instead of ACLs. Such volumes mounted earlier with private
+masks must be detached and attached through Disks once. The service never force-unmounts a busy
+volume. It cannot override permissions on remote SMB/NFS mounts.
 
-Settings → System updates controls signed stable/testing releases, checks, downloads,
-automatic installation windows and rollback. The independent systemd worker retains
-its own journal and code across package replacement. It updates the core package,
-leaving Linux distribution upgrades and hardware cooling separate. The default is
-stable with notifications only. See the [update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
-for publication, trust, backup and recovery guarantees and limitations.
+### HDD standby
 
-## Actionable notifications
+The Go system helper checks non-system SATA HDDs every 30 seconds. It measures continuous idle time
+from kernel read, write, discard and flush counters and in-flight I/O, then requests standby after
+the configured timeout. It disables hardware standby timers on managed disks and does not change
+APM settings. Normal filesystem access wakes a disk, which can take a few seconds.
 
-Alert responses include a severity classification independently of whether the
-alert is active. Task notifications expose the original job details and recovery
-context. Known failures before mutation can be recorded as requiring no review;
-failed or interrupted operations with uncertain outcomes remain reviewable.
-Acknowledging an operation resolves its task alert, and resolved notifications
-can be dismissed per user. Clearing notification history does not acknowledge
-unreviewed work or reset an active hardware condition.
+Disks backing system, boot or swap are excluded, including disks below encrypted RAID. RAID
+maintenance and SMART self-tests postpone standby, and the helper only stops a disk whose SMART
+status it can read. PaNasMs RAID and SMART operations share a lock with the controller. A restart,
+disk replacement, configuration change or monitoring gap restarts the idle interval. Observations
+live in `/run`, so monitoring never writes to data disks. The legacy storage API reaches the Go
+controller through a small Python bridge.
 
-## Core contracts, migrations and interruption safety
+## Shared folders
 
-The [management API contract](api/openapi.yaml) documents the core query schemas,
-preview/submission protocol and persistent task lifecycle. `ManagementViews` maps
-query names to response schemas; module queries and action parameters belong to
-the owning module. Native smartctl and Samba fields remain extensible. Generate
-frontend types with `npm run generate:api` in the adjacent frontend checkout.
+`management/sharing.py` manages local SMB and NFS publications as part of core. External SMB/NFS
+mounts are a separate storage feature. The `/sharing` page has folder and connection tabs, and each
+user's SMB access and password sync status is on their Security tab in Users. A folder can be
+published over SMB, NFS, both or neither. Removing a publication never removes files. Legacy NFS
+exports stay visible and editable.
 
-Core state and agent jobs use separate SQLite databases with WAL, FULL synchronous
-writes and one atomic migration transaction. Append migrations; never edit an
-applied migration. The checksum journal rejects changed, gapped or future schemas.
-The legacy core `schema_version=1` marker is retained for compatibility; the
-`panasms_migrations` journal is authoritative. Downgrades restore the matching
-package/configuration/database snapshot through the updater instead of rewriting
-new schemas with old migrations.
+- SMB access is enabled per Linux user. A share grants read or write access to users and groups,
+  and Linux permissions remain the upper limit. Editing a folder's owner, group or mode is
+  non-recursive and separate from publishing.
+- A successful PAM login, own-password change or administrator reset updates the SMB password. The
+  plaintext passes only through stdin in memory and is never stored in settings, jobs or logs. A
+  failed sync shows on the account and in a login notification. A partial own-password failure
+  still revokes sessions.
+- `panasms-sharing.timer` checks Linux account state every 30 seconds (with up to five seconds of
+  timer slack). Locks, expiry, UID changes and password changes made outside the panel revoke stale
+  SMB access. Users without SMB access need no Samba credentials.
+- NFS uses explicit client IP or subnet allowlists, numeric UID/GID and `root_squash`, without
+  Kerberos, so use it only on trusted networks. Remote root does not administer a published folder.
+  Per-user SMB restrictions do not apply to NFS, which uses Unix permissions.
+- Shares published over both SMB and NFS disable Samba oplocks and use strict locking. Tests with
+  real SMB3 and NFS4 byte-range lock conflicts cover the deployed kernel. SMB-only shares keep
+  Samba's caching defaults.
+- The managed files are `/etc/samba/panasms-shares.conf` and
+  `/etc/exports.d/panasms-shares.exports`, and the root-only state is `/etc/panasms/sharing.json`.
+  A persistent transaction journal restores the previous files and state after a failure or on
+  agent startup. If someone edits a managed file by hand, the panel blocks further edits until an
+  administrator restores it. The panel leaves unrelated configuration alone.
+- A new installation replaces the Samba config only if it is the verified distribution default,
+  and keeps the original. A customized Samba server needs manual review and the managed include.
+  Guest access and automatic home or printer shares stay off. Removal stops managed publication,
+  keeps user files and restores an unchanged installer-owned global config from its backup.
 
-A job must be durably marked running before its helper starts. If journal writes
-fail, new mutations are suspended until database access is restored and the agent
-is restarted. Running helpers reach their own safe completion points. On restart,
-queued jobs are cancelled and running jobs become interrupted, requiring inspection;
-operation credentials and commands are never replayed. Interrupted formatting or
-RAID changes are inspected, not advertised as automatically reversible.
+A published folder must already exist on a mounted local data volume. The root filesystem and
+re-exports of remote mounts are rejected. Export paths with spaces or configuration metacharacters
+are not supported. SMB volume UUID checks and NFS mountpoint guards stop the panel from publishing
+the empty directory left when a mount disappears. Published folders block destructive operations
+on their volume.
 
-The regression suite includes legacy adoption, failed/future migrations, process
-crashes inside migration and job execution, journal write failures, cooperative
-cancellation, conflicting work ordering and independent work concurrency. API
-contract tests require `python3-yaml` and `python3-jsonschema` in addition to the
-existing native/Python test dependencies. Run `make check` and `make check-race`.
-These tests use temporary data; physical power-loss and hardware-controller behavior
-remain separate installation acceptance checks.
+References: [smb.conf](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html),
+[smbpasswd](https://www.samba.org/samba/docs/current/man-html/smbpasswd.8.html).
 
-## Native system-operation workers
+## Network
 
-The agent routes account/group/SSH/session operations, services, system packages,
-power operations and HTTP-port changes to `panasms-system-helper` in the host mount
-namespace. The helper rechecks Linux identity and access, updater state and the
-confirmed plan before crossing the mutation boundary. Interrupted operations are
-inspected, never automatically replayed. `panasms-system-helper routes` prints the
-complete native/legacy inventory; a native failure never falls back to Python.
+Network changes need confirmation within two minutes, or they roll back. Each interface keeps its
+existing manager. NetworkManager uses D-Bus checkpoints. Native systemd-networkd gets a dedicated
+`.network` file, and Netplan-backed Ethernet gets a dedicated YAML file instead of edits to
+generated files. An independent service restores unconfirmed networkd and Netplan changes, also
+after a reboot, from a durable rollback record written before the change. The editor selects
+physical interfaces individually and protects Docker and other system interfaces. Configurations
+it cannot represent are read-only.
 
-`panasms-keys` performs SSH-key edits and home-content removal in a separate process
-with the target user's credentials. The parent only removes the verified, empty
-home directory. Host PAM/password rules remain authoritative.
+NetworkManager is optional. Without it, on an active networkd system, the Go native service uses
+wpa_supplicant for Wi-Fi authentication, hostapd for access points, dnsmasq for DHCP and DNS, and
+policy routing with nftables for NAT on the selected uplink. Radio state is per adapter. Sharing
+overlays do not rewrite wildcard interface definitions.
 
-Other domains still use the explicit legacy dispatcher. In particular, bulk home
-relocation (`homes.*`), storage, networking and Samba/NFS have not been migrated.
-The narrow `management/account_dependencies.py` bridge preserves Samba account
-status, disconnect/disable/remove and password synchronization until that domain
-moves to Go. This is not a fallback for an account operation.
-
-`make check-accounts-integration` builds the workers and runs disposable account
-and PAM tests in user/mount/PID/network namespaces. It needs Linux user namespaces,
-`newuidmap`/`newgidmap` with subordinate UID/GID ranges, PAM development headers and
-standard account tools. Host accounts are never modified. Account commands, PAM,
-keys and home moves/deletion are real; systemd and storage discovery use fixtures.
-The tests compare native queries, plans and recovery reports with the legacy
-contract. Live hardware and service-manager deployment remain separate checks.
-
-## External connections
-
-Google and GitHub account linking and optional panel sign-in, plus Dropbox account linking, use NAS-specific OAuth credentials. See the [architecture, setup and Cloud Sync handoff](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md).
-
-See [storage capabilities and recovery](docs/storage.md).
-
-Cooling settings use read-only hardware capability detection, separately from the
-controller heartbeat. CPU profiles require the supported writable active thermal
-trip points; disk-bay GPIO control currently requires Raspberry Pi 5 with RP1 GPIO.
-The installation hardware report includes `supportedCooling`; the cooling API
-rechecks capabilities at runtime. Temperature sensors alone do not enable fan
-controls. A supported GPIO controller does not prove that a fan is connected:
-new installations still default to no disk-bay cooling. SMART/temperature polling
-remains configurable on systems without supported fan control.
+A packaged udev rule uses `usb-modeswitch` to switch Realtek USB Ethernet adapters that first
+appear as a driver CD-ROM (`0bda:8152`) to Ethernet mode. It matches only devices with a USB
+mass-storage interface and targets the exact bus and device address, so ordinary RTL8152
+interfaces are untouched. The rule runs on attachment and during installation, and package
+removal deletes it. The switch message comes from the
+[USB_ModeSwitch device discussion](https://www.draisberghof.de/usb_modeswitch/bb/viewtopic.php?t=2972).
 
 ### Portable access
 
-`panasms-network-access.service` is a Go controller for fallback Wi-Fi and direct
-USB Ethernet. Configure it under **Settings → Network**. New installations enable
-fallback Wi-Fi when an AP-capable adapter is found, with a random SSID/password and
-90-second wait. Local Ethernet, Wi-Fi or USB connectivity is sufficient; internet
-reachability is not tested. Docker interfaces do not count. An active fallback AP
-is retained while clients are connected, even after another link returns. Saved
-Wi-Fi connections are not deleted. Stop the fallback network before selecting a
-saved network manually. Connection-sharing adapters are excluded.
+`panasms-network-access.service` is a Go controller for fallback Wi-Fi and direct USB Ethernet,
+configured in Settings > Network. On a new installation with an AP-capable adapter, it enables
+fallback Wi-Fi with a random SSID and password after a 90-second wait without a local Ethernet,
+Wi-Fi or USB link. It does not test internet reachability, and Docker interfaces do not count. An
+active fallback access point stays up while clients are connected, even after another link
+returns. Saved Wi-Fi connections are kept. Stop the fallback network before choosing a saved
+network by hand. Connection-sharing adapters are excluded. A manual Stop suppresses fallback until
+reboot or until settings are applied again.
 
-Save the generated Wi-Fi credentials before taking the NAS offline. They are
-available in the settings and, for a local administrator, through
-`sudo /usr/lib/panasms/panasms-system-helper network-access credentials`.
-An interactive `panasms-configure` also prints them. Keep this output private.
-Manual Stop suppresses fallback until reboot or applying settings again.
+Save the generated Wi-Fi credentials before taking the NAS offline. They are shown in the settings,
+printed by an interactive `panasms-configure`, and available to a local administrator through
+`sudo /usr/lib/panasms/panasms-system-helper network-access credentials`. Keep this output
+private.
 
-USB networking is enabled on supported Pi 4/5 USB-C and Pi Zero data ports, or a
-single already enabled, unused Linux USB device controller. Pi boot configuration
-changes require a reboot. Other boards requiring a board-specific overlay are
-reported as unsupported, not modified speculatively. Multiple/busy controllers
-are left alone. The installer owns only its marked boot block and PaNasMs profiles.
-A data cable and the NAS's normal independent power supply are required. This
-exposes Ethernet, **not raw storage**: use the web panel or existing shared folders.
-Linux/macOS use the gadget network directly; Windows may need an RNDIS driver.
-USB and fallback Wi-Fi also provide captive-portal discovery. Known operating-system
-connectivity probe names resolve to a dedicated `.2` address within that direct
-network and redirect HTTP probes to the NAS gateway and its current web port.
-The redirect never accepts credentials; authentication remains in the normal panel.
-Regular DNS queries are forwarded, the panel gateway itself is not intercepted,
-and LAN, ordinary access points, connection sharing, and HTTPS are not redirected.
-Discovery uses the existing dnsmasq/nftables dependencies on both NetworkManager
-and native networkd/Netplan. The controller removes its listeners, alias and rules
-when direct access stops and reconciles them after restart or interface recovery.
+USB networking works on the Pi 4/5 USB-C port, Pi Zero data ports, or a single enabled and unused
+Linux USB device controller. Pi boot configuration changes need a reboot. Boards that need a
+board-specific overlay are reported as unsupported and left unchanged, as are systems with several
+or busy controllers. The installer owns only its marked boot block and the PaNasMs profiles. You
+need a data cable and the NAS's own power supply. The link carries Ethernet, not raw storage, so
+use the web panel or shared folders. Linux and macOS use the gadget network directly; Windows may
+need an RNDIS driver.
 
-Opening a browser or a “Sign in to network” notification is controlled by the client
-OS and is not guaranteed, particularly when another connection already provides
-internet access. The panel address remains usable manually. This is legacy HTTP
-probe discovery, not an RFC 8908/8910 CAPPORT API: no DHCP option 114 is advertised
-without a trusted HTTPS API endpoint. `.2` is reserved for discovery; automatically
-allocated direct-network DHCP leases begin at `.20`.
+USB and fallback Wi-Fi also answer captive-portal probes. Known OS connectivity-check names resolve
+to a reserved `.2` address in the direct network, which redirects HTTP probes to the panel on its
+current port. The redirect never accepts credentials. Other DNS queries are forwarded, and LAN,
+ordinary access points, connection sharing and HTTPS are not redirected. This is legacy HTTP probe
+discovery, not an RFC 8908/8910 CAPPORT API, so DHCP option 114 is not advertised. Whether the
+client OS opens a "Sign in to network" prompt is up to the client, especially when another
+connection already has internet access. The panel address shown in Network can always be opened by hand.
+Direct-network DHCP leases start at `.20` in an unused private subnet.
 
-Use the NAS address displayed in Network; direct USB DHCP uses an unused private
-subnet. The configured web port and authentication still apply.
+The controller's root-only configuration is `/var/lib/panasms-agent/network-access/config.json`.
+Transient state is in `/run`, so polling does not write to data disks. The controller respects
+network rollback and package-maintenance locks, removes its listeners, alias and rules when direct
+access stops, and restores them after a restart or interface recovery. Package removal stops only
+its own profiles and removes its own USB configuration; boot changes take effect on reboot.
 
-Controller configuration is root-only at
-`/var/lib/panasms-agent/network-access/config.json`; transient state is under
-`/run` and polling does not write to data disks. The service cooperates with
-network rollback and package-maintenance locks. Removal stops only its own
-profiles and removes its own USB configuration; boot changes take effect on reboot.
+## Cooling
 
+The `panasms-cooling` package keeps disk cooling running independently of the panel. A new
+cooling configuration does not control any disk-bay GPIO. Advanced disk settings select external
+power PWM (two-wire, GPIO27 by default) or built-in fan PWM (four-wire, GPIO18 at 25 kHz with a
+GPIO24 tachometer). Pin numbers are BCM. Disk-bay GPIO control requires a Raspberry Pi 5 with RP1
+GPIO. Mode changes check pin ownership and wait for the controller to acknowledge them, and restore
+the previous configuration on failure. CPU cooling is configured separately in Settings > General
+and requires writable active thermal trip points.
 
-### Network configuration ownership
+Capability detection is read-only and separate from the controller heartbeat. The installation
+hardware report includes `supportedCooling`, and the cooling API rechecks it at runtime. A
+temperature sensor alone does not enable fan controls, and a supported GPIO controller does not
+prove a fan is connected. SMART and temperature polling stay configurable without fan control.
 
-IP configuration is handled in Go. Each interface keeps its existing manager:
-NetworkManager uses D-Bus checkpoints, native systemd-networkd uses a dedicated
-`.network` definition, and Netplan-backed Ethernet uses a dedicated YAML definition
-instead of editing generated files. Changes require confirmation within two minutes;
-unconfirmed networkd/Netplan changes are restored by an independent service, including
-after reboot. Physical interfaces are selected individually; Docker and other system
-interfaces remain protected.
+## Modules and catalog sources
 
-Existing advanced configurations that cannot be represented by the IP editor are
-read-only. NetworkManager is no longer a mandatory runtime dependency and is not
-started by PaNasMs network units. When NetworkManager is absent and networkd is
-active, the Go native service handles Wi-Fi authentication with wpa_supplicant,
-access points with hostapd, DHCP/DNS with dnsmasq, and selected-uplink NAT with
-policy routing and nftables. Netplan installations retain YAML as their configuration
-source; native networkd installations use dedicated network definitions. Existing
-NetworkManager installations continue to use their existing adapter.
+Administrators manage catalog URLs from the repository icon in Modules. The official
+`https://panasms.github.io/module-registry/` source is added by default. Removing a source keeps
+installed modules, and with no sources the panel still accepts module archive uploads. The list is
+stored in `/etc/panasms/module-sources.json`.
 
-Native changes keep a durable rollback record before modifying configuration.
-Unconfirmed changes are restored after a timeout or reboot. Radio state is per
-adapter. Sharing overlays do not rewrite wildcard OS interface definitions.
+A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
+`catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a
+unique publisher id; `panasms-*` is reserved. The catalog and module archives must be signed with
+that publisher's key. The add dialog shows the key's SHA-256 fingerprint before trusting it, so
+compare it with a fingerprint the publisher supplied separately. Changing the key requires explicit
+reconfiguration, and the panel rejects a known publisher id with a different key.
 
-Hardware tests are opt-in: `PANASMS_NATIVE_TEST_WIFI=wlan0` enables radio, scan and
-AP tests in `internal/systemops/networknative`; `PANASMS_NATIVE_TEST_UPLINK=end0`
-enables an isolated veth/NAT test. Run only on an authorized test host, as root,
-with NetworkManager stopped and independent recovery arranged. The AP check verifies
-service readiness, not association or a DHCP lease from a physical client.
+Use the official registry as a template. Each module has `id` and `releases`, and each stable
+release lists its signed `manifest`, HTTPS archive `url`, byte `size`, `sha256` and
+`channel: stable`. Archives use the PaNasMs bundle format and the
+[Module SDK](https://github.com/PaNasMs/module-sdk) signing procedure. Size limits, hashes,
+signatures, compatibility and dependency checks are the same for every source. Downloads may
+redirect over HTTPS, for example to GitHub release assets. Repository URLs cannot contain
+credentials, query parameters, fragments or nonstandard ports.
 
-Run `make check-network-integration` only as root on an authorized test host with
-NetworkManager. It creates and removes a temporary veth pair and tests native Go
-checkpoint handling without changing the management connection.
+Sources have priority in configured order. A duplicate module id from a later source is reported
+and ignored, and an update cannot replace a module with another publisher's module. An unavailable
+source reports its own error while the others keep working. Removing the last source of a custom
+publisher removes its trusted key but keeps its installed modules running.
 
-### Shared local data volumes
+## System updates
 
-PaNasMs grants local, non-service users membership of the `users` group. Writable
-local data volumes mounted below `/srv`, `/mnt` or `/media` grant that group
-write access at the filesystem root and inherit this access in new directories
-through default ACLs. Existing children and their explicit permissions are not
-recursively rewritten. Files created explicitly private by an application remain
-private. Administrators can still manage individual folder permissions.
+Settings > System updates handles signed stable and testing releases, checks, downloads, automatic
+installation windows and rollback. The default is the stable channel with notifications only. A
+separate systemd worker with its own journal performs the update and survives package replacement.
+It updates the core package and does not upgrade the Linux distribution. It stops if APT would
+install or remove other system packages; update those dependencies separately first. The
+[update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
+documents publication, trust, backup and recovery.
 
-The Go `panasms-volume-access` service reconciles newly mounted volumes, including
-boot and on-demand mounts. It reads the kernel mount table and local account
-metadata; it does not walk files or repeatedly touch already processed volumes.
-The currently running system's filesystems, their aliases, system fstab targets,
-read-only volumes and bind-mounted subdirectories are excluded. A data partition
-on the system disk remains eligible. FAT/exFAT/NTFS use a shared group and mount
-masks instead of POSIX ACLs. Previously mounted FAT/exFAT/NTFS volumes with
-private masks must be detached and attached through Disks once; busy volumes are
-never forcibly unmounted by the reconciler. Remote SMB/NFS permissions remain controlled by the
-remote server; this policy cannot override them.
+## Jobs, cancellation and recovery
+
+Account and storage changes go through a plan, confirmation and run workflow, and each run is a
+persistent job. The agent marks a job as running in its database before the helper starts. If
+journal writes fail, the agent refuses new changes until database access returns and the agent is
+restarted.
+
+The job list exposes `canCancel`, `cancelRequested`, `needsReview` and an optional `recovery`
+report. Queued jobs can be cancelled. Running helpers accept cancellation only at safe checkpoints,
+which exist for module download and staging, home-copy preparation and Files staged copies.
+Partition writes, formatting, package configuration and committed changes always run to
+completion. RAID maintenance has separate pause and resume controls.
+
+When the agent restarts, queued jobs become cancelled and running jobs become interrupted. The agent
+never replays commands or credentials. The administrator inspects the actual state, runs a pending
+home or module recovery or finishes package configuration, then acknowledges the result.
+Inspection waits until no other task runs. Interrupted formatting or RAID changes are inspected and
+never presented as reversible.
+
+`POST /api/v1/manage?view=cancel|recover|acknowledge` takes `{ "id": "..." }`. Recovery reads
+current state and does not repeat the original operation. Explicit recovery actions use the same
+plan, confirmation and run workflow as other jobs.
+
+Files publishes a copy from a sibling staging directory only after copying finishes. Cancellation
+deletes the staging copy and keeps the source. An interrupted cross-filesystem move can leave both
+copies and a journal, so inspect them before deleting or retrying. This is not a snapshot and
+cannot undo formatting, deletion, changes to the source during the copy or power loss.
+
+Alerts carry a severity whether or not they are active. Task notifications include the job details
+and recovery context. Failures detected before any change can be recorded as needing no review.
+Failed or interrupted operations with an uncertain outcome stay reviewable. Acknowledging an
+operation resolves its task alert, and each user can dismiss resolved notifications. Clearing
+notification or job history keeps unreviewed failures, interrupted operations and idempotency
+records, and does not reset an active hardware condition.
+
+## Native system-operation workers
+
+The agent sends account, group, SSH, session, service, package, power and HTTP-port operations to
+`panasms-system-helper` in the host mount namespace. The helper rechecks Linux identity and access,
+updater state and the confirmed plan before it changes anything. `panasms-system-helper routes`
+prints which operations are native and which still use Python. A native failure never falls back
+to Python.
+
+`panasms-keys` edits SSH keys and removes home contents in a separate process running with the
+target user's credentials. The parent process only removes the verified, empty home directory.
+
+Bulk home relocation (`homes.*`), storage, networking and Samba/NFS still use the Python
+dispatcher. `management/account_dependencies.py` keeps Samba account status, disconnect, disable,
+remove and password sync working until Samba moves to Go. It is not a fallback for account
+operations.
+
+## API contract and migrations
+
+[api/openapi.yaml](api/openapi.yaml) documents the core query schemas, the preview and submission
+protocol and the job lifecycle. `ManagementViews` maps query names to response schemas. Module
+queries and action parameters belong to each module. Native smartctl and Samba fields stay open to
+extension. Generate frontend types with `npm run generate:api` in the frontend checkout. The API
+contract tests need `python3-yaml` and `python3-jsonschema`.
+
+Core state and agent jobs use separate SQLite databases with WAL, `synchronous=FULL` and one
+atomic transaction per migration. Append new migrations and never edit an applied one. The
+checksum journal `panasms_migrations` rejects changed, missing or future schemas. The legacy core
+`schema_version=1` marker remains for compatibility. A downgrade restores the matching package,
+configuration and database snapshot through the updater instead of running old migrations on a
+new schema.
+
+## External connections
+
+Google and GitHub account linking and optional panel sign-in, and Dropbox account linking, use
+OAuth credentials registered for each NAS. See
+[external connections](https://github.com/PaNasMs/panasms/blob/main/documentation/external-connections.md)
+for the architecture, setup and Cloud Sync handoff.
+
+## Related repositories
+
+[PaNasMs](https://github.com/PaNasMs/panasms) ·
+[Frontend](https://github.com/PaNasMs/frontend) ·
+[Module SDK](https://github.com/PaNasMs/module-sdk) ·
+[Module registry](https://github.com/PaNasMs/module-registry) ·
+[Updates](https://github.com/PaNasMs/updates)
+
+## License
+
+Original code is licensed under [PolyForm Noncommercial 1.0.0](LICENSE). See [NOTICE](NOTICE) for
+third-party components.

@@ -102,8 +102,14 @@ func Refresh(ctx context.Context, client *http.Client, clientID, secret string, 
 }
 
 func RefreshProvider(ctx context.Context, client *http.Client, provider, clientID, secret string, token *oauth2.Token) (*oauth2.Token, error) {
+	if provider == "github" && token != nil && token.Expiry.IsZero() {
+		if token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") {
+			return nil, ErrReconnect
+		}
+		return token, validateGitHubToken(ctx, client, token)
+	}
 	c := Config(clientID, secret)
-	if provider == "dropbox" {
+	if provider == "dropbox" || provider == "github" {
 		c = providerConfig(provider, clientID, secret)
 	} else if provider != "google" {
 		return nil, ErrReconnect
@@ -122,6 +128,9 @@ func RefreshProvider(ctx context.Context, client *http.Client, provider, clientI
 	}
 	if updated.RefreshToken == "" {
 		updated.RefreshToken = token.RefreshToken
+	}
+	if provider == "github" {
+		return updated, validateGitHubToken(ctx, client, updated)
 	}
 	return updated, nil
 }

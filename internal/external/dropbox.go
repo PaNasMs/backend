@@ -16,6 +16,11 @@ func AuthorizeProviderGrant(provider, clientID, state, nonce, verifier, subject,
 	if provider == "google" {
 		return AuthorizeGrant(clientID, state, nonce, verifier, subject, scope)
 	}
+	if provider == "github" && scope == GitHubRepoScope {
+		c := providerConfig(provider, clientID, "")
+		c.Scopes = []string{"read:user", GitHubRepoScope}
+		return c.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("prompt", "select_account"))
+	}
 	if provider != "dropbox" || scope != DropboxFilesScope {
 		return ""
 	}

@@ -21,6 +21,7 @@ var grantPolicies = map[string]map[string]grantPolicy{
 		"dropbox-files": {Scope: external.DropboxFilesScope, Provider: "dropbox"},
 	},
 	"cloud-sync": {
+		"github-repositories":   {Scope: external.GitHubRepoScope, Provider: "github"},
 		"dropbox-files":         {Scope: external.DropboxFilesScope, Provider: "dropbox"},
 		"google-drive":          {Scope: external.DriveScope, Provider: "google"},
 		"google-drive-readonly": {Scope: external.DriveReadScope, Provider: "google"},

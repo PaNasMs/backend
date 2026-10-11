@@ -364,7 +364,7 @@ func (m *Manager) clearHistoryFor(user string, admin bool) error {
 }
 func userAction(action string, params map[string]any, user string) bool {
 	switch action {
-	case "file.mkdir", "file.copy", "file.move", "file.rename", "file.trash", "file.restore", "file.delete":
+	case "file.git-switch", "file.mkdir", "file.copy", "file.move", "file.rename", "file.trash", "file.restore", "file.delete":
 		return true
 	case "user.session.end":
 		return params["target"] == user

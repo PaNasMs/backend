@@ -44,7 +44,7 @@ def dispatch(mode, user, request):
     policy = accounts.account_policy.entry(account)
     require(not policy.get('disabled') and policy.get('panel', admin), 'Panel access is disabled')
     require(not accounts.account_policy.expired(accounts.account_policy.shadow(user)) and not accounts.account_policy.password_inactive(accounts.account_policy.shadow(user)), 'Linux account has expired')
-    own_files = {'file.mkdir','file.copy','file.move','file.rename','file.trash','file.restore','file.delete'}
+    own_files = {'file.git-switch','file.mkdir','file.copy','file.move','file.rename','file.trash','file.restore','file.delete'}
     if not admin:
         if mode == 'query':
             require(request.get('view') in ('files','modules','account-sessions','account-details','storage-options'), 'Administrator permissions required')

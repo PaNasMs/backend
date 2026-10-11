@@ -339,13 +339,23 @@ GPIO. Mode changes check pin ownership and wait for the controller to acknowledg
 the previous configuration on failure. CPU cooling is configured separately in Settings > General
 and requires writable active thermal trip points.
 
-While all disks sleep, the controller tries to read each disk's temperature without waking it. The
-first standby read of a disk is a probe: if the disk stays in standby, its temperature keeps steering
-the fan as in normal operation, and the fan stops below 35 °C and starts again from 37 °C. If the read
-wakes the disk, `/var/lib/panasms-cooling/sleep-reads.json` records that and the disk is not read in
-standby again. As long as any sleeping disk cannot be read, the fan follows the CPU temperature
-instead: off below 50 °C (on again from 52 °C), 25 % up to 60 °C, 50 % up to 65 °C, 75 % up to 70 °C
-and full speed above. SMART reads do not change the block I/O counters the idle controller watches.
+While all disks sleep, the controller probes whether SMART temperature reads preserve standby.
+Readable temperatures steer the fan, with off/on hysteresis at 35/37 °C. For unreadable sleeping
+disks, CPU temperature supplies a fallback: off below 50 °C (on again from 52 °C), 25 % below
+60 °C, 50 % below 65 °C, 75 % below 70 °C and full speed from 70 °C. With mixed disks, the highest
+demand wins: an unreadable sleeping disk never cancels cooling required by another disk.
+
+The controller uses explicit power-state exit codes and treats command failures as unknown, not
+asleep. Timeouts, missing readings and concurrent block I/O cause retries with a persisted backoff
+from two minutes to one hour. A successful probe that wakes the disk with unchanged kernel I/O
+marks it unsupported in `/var/lib/panasms-cooling/sleep-reads.json`; subsequent standby probes stop.
+A disk that leaves standby is reported as unknown until a fresh sample confirms its state. Legacy
+negative cache entries are retried once because older versions also cached transient failures.
+SMART reads do not change the block I/O counters used by the idle controller.
+
+Standby temperature freshness (`observedAt`, `stale`, `sleepTemperature`) is independent of full
+SMART health/attribute freshness (`smartObservedAt`, `smartStale`). A fresh temperature does not
+make cached SMART attributes current; the UI labels their original observation time separately.
 
 Capability detection is read-only and separate from the controller heartbeat. The installation
 hardware report includes `supportedCooling`, and the cooling API rechecks it at runtime. A

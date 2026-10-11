@@ -45,7 +45,7 @@ func target(profile string, disks []Disk, sensor *float64, starting bool, elapse
 			}
 		}
 		if d.State == "sleeping" {
-			if d.SleepTemperature && d.Temperature != nil {
+			if d.SleepTemperature && !d.Stale && d.Temperature != nil {
 				if *d.Temperature > maximum {
 					maximum = *d.Temperature
 				}
@@ -72,39 +72,41 @@ func target(profile string, disks []Disk, sensor *float64, starting bool, elapse
 	if sensor == nil {
 		return 1, "system-temperature"
 	}
-	if !active {
-		if sleepingKnown {
-			if (running && maximum < sleepingOff) || (!running && maximum < sleepingOn) {
-				return 0, "all-disks-sleeping"
-			}
-			for i, t := range thresholds {
-				if maximum < t {
-					return float64(i+1) / 4, "sleeping-disk-temperature"
-				}
-			}
-			return 1, "sleeping-disk-temperature"
+	duty, reason := 0.0, "all-disks-sleeping"
+	if active || maximum >= sleepingOn || (running && maximum >= sleepingOff) {
+		duty, reason = 1, "automatic"
+		if !active {
+			reason = "sleeping-disk-temperature"
 		}
+		for i, t := range thresholds {
+			if maximum < t {
+				duty = float64(i+1) / 4
+				break
+			}
+		}
+		if active && maximum < 30 && *sensor < 65 {
+			duty, reason = 0, "disks-cool"
+		}
+	}
+	if !sleepingKnown {
+		cpuDuty := 0.0
 		cpu := *sensor
 		switch {
 		case (running && cpu < cpuOff) || (!running && cpu < cpuOn):
-			return 0, "all-disks-sleeping"
 		case cpu < 60:
-			return .25, "system-temperature"
+			cpuDuty = .25
 		case cpu < 65:
-			return .5, "system-temperature"
+			cpuDuty = .5
+		default:
+			cpuDuty = .75
 		}
-		return .75, "system-temperature"
-	}
-	if maximum < 30 && *sensor < 65 {
-		return 0, "disks-cool"
-	}
-	for i, t := range thresholds {
-		if maximum < t {
-			return float64(i+1) / 4, "automatic"
+		if cpuDuty > duty {
+			duty, reason = cpuDuty, "system-temperature"
 		}
 	}
-	return 1, "automatic"
+	return duty, reason
 }
+
 func applyCPU(profile, root string) (map[string]any, error) {
 	thresholds, ok := cpuProfiles[profile]
 	if !ok || readText(filepath.Join(root, "type")) != "cpu-thermal" {

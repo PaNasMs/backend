@@ -1897,9 +1897,17 @@ components:
                     - unknown
                   stale:
                     type: boolean
+                  smartObservedAt:
+                    description: Time of the last full SMART reading, independent of standby temperature reads.
+                    type:
+                    - number
+                    - 'null'
+                  smartStale:
+                    description: Health and attributes are cached from a previous full SMART reading.
+                    type: boolean
                   sleepReadable:
                     type: boolean
-                    description: Known after the first standby read; true when SMART can be read without waking the disk.
+                    description: Confirmed standby read capability; omitted while inconclusive or awaiting a retry.
                   sleepTemperature:
                     type: boolean
                     description: The temperature was read while the disk stayed in standby.

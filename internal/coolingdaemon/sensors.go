@@ -13,17 +13,19 @@ import (
 )
 
 type Disk struct {
-	Path         string      `json:"path"`
-	Device       string      `json:"device"`
-	State        string      `json:"state"`
-	Temperature  *float64    `json:"temperature"`
-	Health       string      `json:"health"`
-	Warnings     []string    `json:"warnings"`
-	Attributes   []Attribute `json:"attributes"`
-	PowerOnHours *float64    `json:"powerOnHours"`
-	ObservedAt   *float64    `json:"observedAt"`
-	Stale        bool        `json:"stale"`
-	Error        string      `json:"error,omitempty"`
+	Path            string      `json:"path"`
+	Device          string      `json:"device"`
+	State           string      `json:"state"`
+	Temperature     *float64    `json:"temperature"`
+	Health          string      `json:"health"`
+	Warnings        []string    `json:"warnings"`
+	Attributes      []Attribute `json:"attributes"`
+	PowerOnHours    *float64    `json:"powerOnHours"`
+	ObservedAt      *float64    `json:"observedAt"`
+	Stale           bool        `json:"stale"`
+	SmartObservedAt *float64    `json:"smartObservedAt"`
+	SmartStale      bool        `json:"smartStale"`
+	Error           string      `json:"error,omitempty"`
 	// SleepReadable is known after the first SMART read of this disk in standby: true when the read
 	// kept it asleep, false when it woke the disk. SleepTemperature marks a reading taken in standby.
 	SleepReadable    *bool `json:"sleepReadable,omitempty"`
@@ -59,48 +61,6 @@ func readDisk(ctx context.Context, path string) Disk {
 	return parseDisk(path, raw, code)
 }
 
-// sleepCapabilityPath remembers per disk whether a SMART read in standby keeps it asleep, so a disk
-// that wakes up is probed only once, also across restarts.
-const sleepCapabilityPath = "/var/lib/panasms-cooling/sleep-reads.json"
-
-func loadSleepCapabilities(path string) map[string]bool {
-	result := map[string]bool{}
-	raw, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(raw, &result)
-	}
-	return result
-}
-
-// standby reports whether the disk is in standby without waking it. smartctl exits with 2 when
-// "-n standby" skips a sleeping disk.
-func standby(ctx context.Context, path string) bool {
-	sub, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	err := exec.CommandContext(sub, "/usr/sbin/smartctl", "-n", "standby", "-d", "ata", "-i", path).Run()
-	e, ok := err.(*exec.ExitError)
-	return ok && e.ExitCode() == 2
-}
-
-// readSleeping reads the temperature of a sleeping disk and checks that it is still asleep afterwards.
-// It returns the temperature (nil if unavailable) and whether the disk stayed in standby.
-func readSleeping(ctx context.Context, path string) (*float64, bool) {
-	sub, cancel := context.WithTimeout(ctx, 10*time.Second)
-	raw, err := exec.CommandContext(sub, "/usr/sbin/smartctl", "-d", "ata", "-A", "-j", path).Output()
-	cancel()
-	code := 0
-	if e, ok := err.(*exec.ExitError); ok {
-		code = e.ExitCode()
-	} else if err != nil {
-		return nil, standby(ctx, path)
-	}
-	asleep := standby(ctx, path)
-	if code&7 != 0 {
-		return nil, asleep
-	}
-	return sleepTemperature(raw), asleep
-}
-
 func sleepTemperature(raw []byte) *float64 {
 	var data struct {
 		Temperature struct {
@@ -130,7 +90,7 @@ func sleepTemperature(raw []byte) *float64 {
 }
 
 func unknownDisk(path string, err error) Disk {
-	return Disk{Path: path, State: "unknown", Health: "unknown", Warnings: []string{}, Attributes: []Attribute{}, Stale: true, Error: err.Error()}
+	return Disk{Path: path, State: "unknown", Health: "unknown", Warnings: []string{}, Attributes: []Attribute{}, Stale: true, SmartStale: true, Error: err.Error()}
 }
 func parseDisk(path string, raw []byte, code int) Disk {
 	var data struct {
@@ -209,7 +169,7 @@ func parseDisk(path string, raw []byte, code int) Disk {
 	if attrs == nil {
 		attrs = []Attribute{}
 	}
-	return Disk{Path: path, State: "active", Temperature: temp, Health: health, Warnings: warnings, Attributes: attrs, PowerOnHours: data.Power.Hours, ObservedAt: &now}
+	return Disk{Path: path, State: "active", Temperature: temp, Health: health, Warnings: warnings, Attributes: attrs, PowerOnHours: data.Power.Hours, ObservedAt: &now, SmartObservedAt: &now}
 }
 func cachedDisk(row Disk, previous Disk) Disk {
 	if row.State != "active" && previous.ObservedAt != nil {
@@ -219,6 +179,8 @@ func cachedDisk(row Disk, previous Disk) Disk {
 		row.Warnings = previous.Warnings
 		row.Attributes = previous.Attributes
 		row.PowerOnHours = previous.PowerOnHours
+		row.SmartObservedAt = previous.SmartObservedAt
+		row.SmartStale = true
 		if !row.SleepTemperature {
 			row.Temperature = previous.Temperature
 			row.ObservedAt = previous.ObservedAt

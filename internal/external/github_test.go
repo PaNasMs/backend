@@ -14,7 +14,7 @@ import (
 
 func TestGitHubRepositoryGrant(t *testing.T) {
 	u, _ := url.Parse(AuthorizeProviderGrant("github", "id", "state", "nonce", "verifier", "123", GitHubRepoScope))
-	if u.Query().Get("scope") != "read:user repo" || u.Query().Get("code_challenge") == "" {
+	if u.Query().Get("scope") != "read:user repo" || u.Query().Get("code_challenge") == "" || u.Query().Get("prompt") != "select_account" {
 		t.Fatal(u)
 	}
 	for _, scope := range []string{"read:user,repo", "repo", "read:user", "public_repo"} {

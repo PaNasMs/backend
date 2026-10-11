@@ -1,27 +1,24 @@
-Required Notice: PaNasMs original software is licensed under the PolyForm Noncommercial License 1.0.0.
+Based on PaNasMs — Pavlo's NAS Management System, by Pavlo Matviienko
+and contributors. Original project: https://github.com/PaNasMs/panasms
 
-License: PolyForm-Noncommercial-1.0.0
-License text: LICENSE
-Official terms: https://polyformproject.org/licenses/noncommercial/1.0.0
+Original PaNasMs material is licensed under the PaNasMs Source-Available
+License 1.0 (LicenseRef-PaNasMs-Source-Available-1.0). See LICENSE for the
+complete combined terms. This is not unmodified Apache 2.0 or standard
+Commons Clause, and no Apache-only alternative is offered for covered material.
 
-This license applies to original PaNasMs software in frontend/, backend/ and
-modules/, including the original translations, tests and build tooling.
-Copyright remains with the respective authors. This notice does not assign
-ownership or grant rights that a contributor does not hold.
+Personal and internal business use, free redistribution, and independent paid
+installation/support on customer-owned equipment are permitted by LICENSE.
+Selling covered software or including it in a paid product requires prior
+written approval and a separate written agreement with the relevant Licensor.
 
-Third-party software, libraries, icons, fonts, images and other assets retain
-their own licenses and copyright notices. Bundling or interacting with a
-third-party component does not relicense it under PolyForm Noncommercial.
-Separately identified third-party or derived code is excluded from this grant.
+Copyright remains with the respective authors. Third-party software, libraries,
+icons, fonts, images and separately identified derived code retain their own
+licenses and copyright notices. This notice does not relicense third-party
+material, assign ownership, or grant rights a contributor does not hold.
 
-In the development workspace, historical CasaOS patches, vendor materials,
-reference documents, and chassis/CAD files are outside this software grant.
-Their presence does not grant additional rights to them.
-
-Commercial use outside the purposes permitted by this license requires a
-separate license from the relevant rights holders. No commercial license is
-granted by this notice. The LICENSE text controls the permitted purposes,
-including its express permissions for specified types of organizations.
+Historical CasaOS patches, vendor materials, reference documents and chassis/CAD
+files are outside this software grant. Existing released copies retain their
+original license terms. LICENSE controls; this NOTICE is informational.
 
 
 --- github.com/coreos/go-oidc/v3 v3.21.0 (Apache-2.0) ---

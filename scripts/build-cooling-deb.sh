@@ -18,6 +18,8 @@ done
 dtc -@ -I dts -O dtb -o "$stage/usr/lib/panasms-cooling/pwm-enable.dtbo" cooling/pwm-enable.dts
 install -m644 cooling/panasms-cooling.service "$stage/usr/lib/systemd/system/"
 install -m755 cooling/panasms-cooling-configure "$stage/usr/sbin/"
+install -m644 LICENSE "$stage/usr/share/doc/panasms-cooling/LICENSE"
+install -m644 NOTICE "$stage/usr/share/doc/panasms-cooling/copyright"
 install -m644 third_party/raspberrypi-utils/LICENCE "$stage/usr/share/doc/panasms-cooling/raspberrypi-utils.LICENCE"
 install -m644 third_party/raspberrypi-utils/README.md "$stage/usr/share/doc/panasms-cooling/hardware-helpers.md"
 install -m755 cooling/preinst "$stage/DEBIAN/preinst"

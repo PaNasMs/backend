@@ -40,9 +40,17 @@ func TestGitHubRepositoryGrant(t *testing.T) {
 
 func TestGitHubNonExpiringToken(t *testing.T) {
 	token := &oauth2.Token{AccessToken: "secret", TokenType: "bearer"}
-	updated, err := RefreshProvider(context.Background(), nil, "github", "id", "secret", token)
+	status := 200
+	client := &http.Client{Transport: transport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Header: http.Header{"X-Oauth-Scopes": []string{"repo, read:user"}}, Body: io.NopCloser(strings.NewReader(`{"id":123}`))}, nil
+	})}
+	updated, err := RefreshProvider(context.Background(), client, "github", "id", "secret", token)
 	if err != nil || updated != token || !updated.Expiry.IsZero() {
 		t.Fatal("must preserve actual lifetime", err)
+	}
+	status = 401
+	if _, err = RefreshProvider(context.Background(), client, "github", "id", "secret", token); err != ErrReconnect {
+		t.Fatal("revoked token must invalidate reusable authorization", err)
 	}
 	expired := &oauth2.Token{AccessToken: "secret", TokenType: "bearer", Expiry: time.Now().Add(-time.Hour)}
 	if _, err = RefreshProvider(context.Background(), http.DefaultClient, "github", "id", "secret", expired); err == nil {

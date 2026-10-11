@@ -3,6 +3,7 @@ package external
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,35 @@ import (
 )
 
 const GitHubRepoScope = "repo"
+
+func validateGitHubToken(ctx context.Context, client *http.Client, token *oauth2.Token) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	res, err := client.Do(req)
+	if err != nil {
+		return errors.New("external.refreshUnavailable")
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+	if res.StatusCode == http.StatusUnauthorized {
+		return ErrReconnect
+	}
+	if res.StatusCode != http.StatusOK {
+		return errors.New("external.refreshUnavailable")
+	}
+	if scopes := res.Header.Get("X-OAuth-Scopes"); scopes != "" {
+		for _, scope := range strings.Split(scopes, ",") {
+			if strings.TrimSpace(scope) == GitHubRepoScope {
+				return nil
+			}
+		}
+		return ErrReconnect
+	}
+	return nil
+}
 
 func ExchangeGitHubGrant(ctx context.Context, client *http.Client, clientID, secret, code, verifier, scope string) (Authorization, error) {
 	if scope != GitHubRepoScope {

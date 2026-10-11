@@ -106,7 +106,7 @@ func RefreshProvider(ctx context.Context, client *http.Client, provider, clientI
 		if token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") {
 			return nil, ErrReconnect
 		}
-		return token, nil
+		return token, validateGitHubToken(ctx, client, token)
 	}
 	c := Config(clientID, secret)
 	if provider == "dropbox" || provider == "github" {
@@ -128,6 +128,9 @@ func RefreshProvider(ctx context.Context, client *http.Client, provider, clientI
 	}
 	if updated.RefreshToken == "" {
 		updated.RefreshToken = token.RefreshToken
+	}
+	if provider == "github" {
+		return updated, validateGitHubToken(ctx, client, updated)
 	}
 	return updated, nil
 }

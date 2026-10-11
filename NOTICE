@@ -1,15 +1,19 @@
 Based on PaNasMs — Pavlo's NAS Management System, by Pavlo Matviienko
 and contributors. Original project: https://github.com/PaNasMs/panasms
 
-Original PaNasMs material is licensed under the PaNasMs Source-Available
-License 1.0 (LicenseRef-PaNasMs-Source-Available-1.0). See LICENSE for the
-complete combined terms. This is not unmodified Apache 2.0 or standard
-Commons Clause, and no Apache-only alternative is offered for covered material.
+Original PaNasMs material is licensed under the Sustainable Use License
+Version 1.0 (SPDX: SUL-1.0). See LICENSE for the complete, unmodified terms.
+This is source-available software, not OSI-approved open-source software.
 
-Personal and internal business use, free redistribution, and independent paid
-installation/support on customer-owned equipment are permitted by LICENSE.
-Selling covered software or including it in a paid product requires prior
-written approval and a separate written agreement with the relevant Licensor.
+Additional permission for services
+
+For original material they license here, the PaNasMs licensors also permit
+charging for independent installation, configuration, maintenance, training
+and technical support on equipment already owned by the customer. The customer
+must use the software within the permissions of LICENSE. This permission does
+not authorize selling or renting copies of the software or supplying it with
+hardware or software products for sale. It adds permission, not restrictions,
+and does not limit any right already granted by LICENSE.
 
 Copyright remains with the respective authors. Third-party software, libraries,
 icons, fonts, images and separately identified derived code retain their own
@@ -18,7 +22,9 @@ material, assign ownership, or grant rights a contributor does not hold.
 
 Historical CasaOS patches, vendor materials, reference documents and chassis/CAD
 files are outside this software grant. Existing released copies retain their
-original license terms. LICENSE controls; this NOTICE is informational.
+original license terms. Apart from the express additional permission above,
+this NOTICE is informational; LICENSE governs the underlying grant.
+
 
 
 --- github.com/coreos/go-oidc/v3 v3.21.0 (Apache-2.0) ---

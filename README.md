@@ -487,3 +487,7 @@ for the architecture, setup and Cloud Sync handoff.
 
 Original code is licensed under [Sustainable Use License 1.0](LICENSE). See [NOTICE](NOTICE) for
 third-party components.
+
+Files 0.3.16 introduces the user-scoped `file.git-switch` management action.
+Core 0.2.20 authorizes it for panel users; the module enforces filesystem access,
+clean-tree checks and repository locking under the user's Linux identity.

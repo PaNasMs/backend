@@ -351,3 +351,76 @@ func TestSlowRefreshDoesNotBlockOAuthAndCannotUndoRevocation(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 }
+
+func TestGitHubGrantBindingAndBroker(t *testing.T) {
+	for _, wrongIdentity := range []bool{false, true} {
+		t.Run(fmt.Sprint(wrongIdentity), func(t *testing.T) {
+			s, session := grantFixture(t)
+			if err := s.Store.SaveExternalConfig("github", store.ExternalConfig{ClientID: "github-id", ClientSecret: "secret", Enabled: true, Revision: "github-revision"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Store.LinkExternal(store.ExternalConnection{ID: "github-connection", Provider: "github", Subject: "123", Username: "alice", UID: 1000, Principal: "principal", Email: "alice@example.test"}); err != nil {
+				t.Fatal(err)
+			}
+			s.external.client = &http.Client{Transport: externalTransport(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Host {
+				case "panasms-oauth-gateway.panasms.workers.dev":
+					return externalJSON(200, map[string]string{"code": "one-time-code"}), nil
+				case "github.com":
+					if r.URL.Path == "/login/oauth/access_token" {
+						return externalJSON(200, map[string]any{"access_token": "private-access", "token_type": "bearer", "scope": external.GitHubRepoScope}), nil
+					}
+				case "api.github.com":
+					subject := 123
+					if wrongIdentity {
+						subject = 456
+					}
+					return externalJSON(200, map[string]any{"id": subject, "login": "alice"}), nil
+				default:
+					t.Fatal("unexpected endpoint", r.URL)
+					return nil, nil
+				}
+				return nil, fmt.Errorf("unexpected endpoint")
+			})}
+			r := externalRequest("POST", "github/start", `{"purpose":"grant","password":"test","connectionId":"github-connection","consumer":"cloud-sync","capability":"github-repositories"}`)
+			r.AddCookie(session)
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			flow := w.Result().Cookies()[0]
+			r = externalRequest("POST", "github/poll", `{}`)
+			r.AddCookie(session)
+			r.AddCookie(flow)
+			w = httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if wrongIdentity {
+				if w.Code != 403 {
+					t.Fatal("wrong account accepted", w.Code)
+				}
+				return
+			}
+			if w.Code != 200 || strings.Contains(w.Body.String(), "private") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			var result map[string]string
+			json.Unmarshal(w.Body.Bytes(), &result)
+			if tokenGrant(s, result["grantId"], "cloud-sync", "alice").Code != 200 {
+				t.Fatal("GitHub broker denied valid grant")
+			}
+			if tokenGrant(s, result["grantId"], "cloud-sync", "bob").Code != 403 {
+				t.Fatal("owner isolation failed")
+			}
+			// Changing Google's configuration must not invalidate GitHub permissions.
+			s.Store.SaveExternalConfig("google", store.ExternalConfig{Enabled: false, Revision: "changed"})
+			r = externalRequest("GET", "grants", "")
+			r = r.WithContext(context.WithValue(r.Context(), identityKey{}, auth.Identity{Username: "alice", UID: 1000, Principal: "principal", Epoch: "epoch"}))
+			w = httptest.NewRecorder()
+			s.externalGrants(w, r)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"active"`) {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		})
+	}
+}

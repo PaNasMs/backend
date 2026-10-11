@@ -181,7 +181,12 @@ func (s *Server) serveGrantToken(w http.ResponseWriter, r *http.Request, consume
 		fail(w, 503, "external.unavailable")
 		return
 	}
-	jsonResponse(w, 200, map[string]any{"accessToken": updated.AccessToken, "tokenType": "Bearer", "expiresAt": updated.Expiry.UTC(), "scope": g.Scope})
+	expires := updated.Expiry
+	if owner.Provider == "github" && expires.IsZero() {
+		// Bound consumer caching without pretending the provider token expires.
+		expires = time.Now().Add(5 * time.Minute)
+	}
+	jsonResponse(w, 200, map[string]any{"accessToken": updated.AccessToken, "tokenType": "Bearer", "expiresAt": expires.UTC(), "scope": g.Scope})
 }
 
 func (s *Server) ServeGrantBroker(ctx context.Context, path string) error {

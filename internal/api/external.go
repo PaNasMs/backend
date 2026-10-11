@@ -201,7 +201,7 @@ func (s *Server) externalStart(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if (body.Purpose == "login" && !external.LoginSupported(provider)) || (body.Purpose == "grant" && provider != "google" && provider != "dropbox") {
+	if (body.Purpose == "login" && !external.LoginSupported(provider)) || (body.Purpose == "grant" && provider != "google" && provider != "dropbox" && provider != "github") {
 		fail(w, 400, "external.unsupportedPurpose")
 		return
 	}
@@ -418,6 +418,8 @@ func (s *Server) externalPoll(w http.ResponseWriter, r *http.Request) {
 	if flow.Scope != "" {
 		if flow.Provider == "dropbox" {
 			authorization, err = external.ExchangeDropboxGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Verifier, flow.Scope)
+		} else if flow.Provider == "github" {
+			authorization, err = external.ExchangeGitHubGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Verifier, flow.Scope)
 		} else {
 			authorization, err = s.external.exchangeGrant(r.Context(), s.external.client, config.ClientID, config.ClientSecret, result.Code, flow.Nonce, flow.Verifier, flow.Scope)
 		}

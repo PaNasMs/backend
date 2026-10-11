@@ -3,8 +3,8 @@
 This repository is the Linux server side of [PaNasMs](https://github.com/PaNasMs/panasms)
 (Pavlo's NAS Management System). It contains the Go HTTP/WebSocket core, the privileged Go agent
 and system helpers, the Python system-management adapters, and the scripts that build the
-`panasms-prototype` (core) and `panasms-cooling` Debian packages. The current version is 0.2.15,
-the first stable release.
+`panasms-prototype` (core) and `panasms-cooling` Debian packages. The development base version is recorded in [VERSION](VERSION); published stable versions
+are listed in the [project releases](https://github.com/PaNasMs/panasms/releases).
 
 End users install PaNasMs with the one-command installer described on the
 [project website](https://panasms.github.io/) and in the

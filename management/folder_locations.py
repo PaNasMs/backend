@@ -1,4 +1,5 @@
 from common import *
+import pwd
 
 LINUX_FILESYSTEMS = ('ext2', 'ext3', 'ext4', 'xfs', 'btrfs')
 
@@ -95,6 +96,31 @@ def folders(target, data_only=False):
             children.append({'name': entry.name, 'path': entry.path, 'reason': reason})
             if len(children) >= 1000:
                 break
+    return {'roots': roots, 'path': str(path), 'folders': sorted(children, key=lambda row: row['name'].casefold())}
+
+
+def personal_folders(target, username):
+    account = pwd.getpwnam(username)
+    home = Path(account.pw_dir)
+    require(home.is_absolute() and home.is_dir() and not any(p.is_symlink() for p in [home, *home.parents]), 'Home folder is unavailable')
+    roots = [{'name': 'Home', 'path': str(home)}]
+    if not target:
+        return {'roots': roots, 'path': '', 'folders': []}
+    path = clean_path(target)
+    require(within(str(path), str(home)) and path.is_dir() and not any(p.is_symlink() for p in [path, *path.parents]), 'Choose a folder inside your home without symbolic links')
+    if os.geteuid() == 0:
+        os.initgroups(username, account.pw_gid)
+        os.setgid(account.pw_gid)
+        os.setuid(account.pw_uid)
+    else:
+        require(os.geteuid() == account.pw_uid, 'Access denied')
+    children = []
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name != 'lost+found':
+                children.append({'name': entry.name, 'path': entry.path})
+                if len(children) >= 1000:
+                    break
     return {'roots': roots, 'path': str(path), 'folders': sorted(children, key=lambda row: row['name'].casefold())}
 
 

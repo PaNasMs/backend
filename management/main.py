@@ -47,7 +47,7 @@ def dispatch(mode, user, request):
     own_files = {'file.git-switch','file.mkdir','file.copy','file.move','file.rename','file.trash','file.restore','file.delete'}
     if not admin:
         if mode == 'query':
-            require(request.get('view') in ('files','modules','account-sessions','account-details','storage-options'), 'Administrator permissions required')
+            require(request.get('view') in ('files','modules','account-sessions','account-details','storage-options','personal-folders'), 'Administrator permissions required')
             if request.get('view') in ('account-sessions','account-details'): request['target'] = user
         else:
             require(request.get('action') in own_files or (request.get('action') == 'user.session.end' and request.get('params',{}).get('target') == user), 'Administrator permissions required')
@@ -69,6 +69,7 @@ def dispatch(mode, user, request):
         if view == "share-folders": return sharing.folders(target, user)
         if view == "data-folders": return accounts.folder_locations.folders(target, data_only=True)
         if view == "home-folders": return accounts.folder_locations.folders(target)
+        if view == "personal-folders": return accounts.folder_locations.personal_folders(target, user)
         if view == "mount-folders": return accounts.folder_locations.mount_folders(target)
         if view == "network":
             raise Rejected('Network inventory is managed by the native network handler')
@@ -78,7 +79,7 @@ def dispatch(mode, user, request):
             return accounts.homes.query()
         if view == "modules":
             result = module_manager.list_modules()
-            if not admin: result['installed'] = [m for m in result['installed'] if m['id'] == 'files']
+            if not admin: result['installed'] = [m for m in result['installed'] if m['id'] == 'files' or m.get('memberAccess')]
             return result
         if view == "module-sources": return {"sources": module_sources.sources()}
         if view == "module-catalog":

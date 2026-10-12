@@ -59,7 +59,17 @@ func (s *Server) moduleUpload(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) moduleAPI(w http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(identityKey{}).(auth.Identity)
-	if id.Role != "admin" {
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/v1/module-api/"), "/", 2)
+	if len(parts) != 2 || parts[0] == "files" || parts[0] == "terminal" {
+		fail(w, 404, "Not found")
+		return
+	}
+	module, ok := modules.Read()[parts[0]]
+	if !ok || !module.Enabled {
+		fail(w, 404, "Module disabled")
+		return
+	}
+	if id.Role != "admin" && !module.MemberAccess {
 		fail(w, 403, "Administrator permissions required")
 		return
 	}
@@ -73,12 +83,7 @@ func (s *Server) moduleAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/v1/module-api/"), "/", 2)
-	if len(parts) != 2 || parts[0] == "files" || parts[0] == "terminal" {
-		fail(w, 404, "Not found")
-		return
-	}
-	client, e := modules.Client(parts[0])
+	client, e := s.ModuleClient(parts[0])
 	if e != nil {
 		fail(w, 404, "Module disabled")
 		return

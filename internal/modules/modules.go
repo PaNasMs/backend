@@ -20,6 +20,7 @@ type Manifest struct {
 	Title        string            `json:"title"`
 	Version      string            `json:"version"`
 	Enabled      bool              `json:"enabled"`
+	MemberAccess bool              `json:"memberAccess"`
 	Widgets      map[string][2]int `json:"widgets"`
 	Files        map[string]string `json:"files"`
 }

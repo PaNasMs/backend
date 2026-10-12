@@ -1,5 +1,8 @@
 import sys
 from pathlib import Path
+import os
+import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
@@ -8,6 +11,27 @@ from common import Rejected
 
 
 class FolderLocationsTest(unittest.TestCase):
+    def test_personal_picker_stays_inside_the_users_home(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root) / 'home'
+            home.mkdir()
+            (home / 'Visible').mkdir()
+            (home / '.hidden').mkdir()
+            outside = Path(root) / 'outside'
+            outside.mkdir()
+            (home / 'link').symlink_to(outside, target_is_directory=True)
+            account = SimpleNamespace(pw_dir=str(home), pw_uid=os.geteuid(), pw_gid=os.getegid())
+            with patch.object(locations.pwd, 'getpwnam', return_value=account), \
+                 patch.object(locations.os, 'initgroups'), \
+                 patch.object(locations.os, 'setgid'), \
+                 patch.object(locations.os, 'setuid'):
+                self.assertEqual(locations.personal_folders('', 'member')['roots'][0]['path'], str(home))
+                result = locations.personal_folders(str(home), 'member')
+                self.assertEqual([item['name'] for item in result['folders']], ['Visible'])
+                for target in (str(outside), str(home / 'link')):
+                    with self.subTest(target=target), self.assertRaises(Rejected):
+                        locations.personal_folders(target, 'member')
+
     def state(self, *, number='9:127', fstype='ext4', options='rw', persistent=True, removable=False):
         return ([{'target': '/', 'fstype': 'ext4', 'options': 'rw', 'maj:min': '179:2'},
                  {'target': '/srv/data', 'fstype': fstype, 'options': options, 'maj:min': number}],

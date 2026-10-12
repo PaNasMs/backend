@@ -1,0 +1,9 @@
+[Unit]
+Description=Track local-name network interface changes
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+
+[Install]
+WantedBy=timers.target

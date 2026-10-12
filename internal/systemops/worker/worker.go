@@ -12,6 +12,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/host"
+	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/webaccess"
 )
 
@@ -160,6 +161,8 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 		return accounts.Query(ctx, target)
 	case "account-sessions":
 		return accounts.Sessions(ctx, target)
+	case "hostname":
+		return hostname.Query()
 	case "web-access":
 		return webaccess.Default().Query()
 	}
@@ -174,6 +177,9 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	}
 	if accounts.IsNative(action) {
 		return accounts.Plan(ctx, action, p, user)
+	}
+	if action == "system.hostname" {
+		return hostname.Default().Plan(p)
 	}
 	if action == "system.web-port" {
 		return webaccess.Default().Plan(action, p)
@@ -190,6 +196,9 @@ func execute(ctx context.Context, action string, p map[string]any, r *systemops.
 	}
 	if accounts.IsNative(action) {
 		return accounts.Execute(ctx, action, p, r)
+	}
+	if action == "system.hostname" {
+		return hostname.Default().Execute(p)
 	}
 	if action == "system.web-port" {
 		return webaccess.Default().Execute(p)

@@ -671,7 +671,7 @@ paths:
           type: string
         description: 'Core views: job, jobs, accounts, account-details, account-sessions,
           homes, homes-check, sharing, share-folders, home-folders, data-folders, mount-folders, modules,
-          module-sources, module-catalog, web-access, system-updates, network, storage-options,
+          module-sources, module-catalog, hostname, web-access, system-updates, network, storage-options,
           raid-candidates, smart, services, journal, updates, nfs, power. Additional
           module queries require an enabled module.'
       - in: query
@@ -3542,6 +3542,15 @@ components:
           $ref: '#/components/schemas/ModuleSources'
         module-catalog:
           $ref: '#/components/schemas/ModuleCatalog'
+        hostname:
+          type: object
+          required: [hostname, networkName, state, port, scheme]
+          properties:
+            hostname: {type: string}
+            networkName: {type: string}
+            state: {type: string, enum: [ready, unavailable]}
+            port: {type: integer}
+            scheme: {type: string, enum: [http, https]}
         web-access:
           $ref: '#/components/schemas/WebAccess'
         system-updates:

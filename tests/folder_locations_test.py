@@ -20,8 +20,11 @@ class FolderLocationsTest(unittest.TestCase):
             outside = Path(root) / 'outside'
             outside.mkdir()
             (home / 'link').symlink_to(outside, target_is_directory=True)
-            account = SimpleNamespace(pw_dir=str(home), pw_uid=os.geteuid())
-            with patch.object(locations.pwd, 'getpwnam', return_value=account):
+            account = SimpleNamespace(pw_dir=str(home), pw_uid=os.geteuid(), pw_gid=os.getegid())
+            with patch.object(locations.pwd, 'getpwnam', return_value=account), \
+                 patch.object(locations.os, 'initgroups'), \
+                 patch.object(locations.os, 'setgid'), \
+                 patch.object(locations.os, 'setuid'):
                 self.assertEqual(locations.personal_folders('', 'member')['roots'][0]['path'], str(home))
                 result = locations.personal_folders(str(home), 'member')
                 self.assertEqual([item['name'] for item in result['folders']], ['Visible'])

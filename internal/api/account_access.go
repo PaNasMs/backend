@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/modules"
 	"strings"
 )
 
@@ -21,12 +22,25 @@ func userRoute(id auth.Identity, r *http.Request) bool {
 			return true
 		}
 		switch r.URL.Query().Get("view") {
-		case "jobs", "files", "modules", "account-details", "account-sessions", "storage-options":
+		case "jobs", "files", "modules", "account-details", "account-sessions", "storage-options", "personal-folders":
 			return true
 		}
 		return false
 	}
-	return r.Method == "GET" && strings.HasPrefix(path, "module-assets/files/")
+	if strings.HasPrefix(path, "module-assets/files/") {
+		return r.Method == http.MethodGet
+	}
+	for _, prefix := range []string{"module-api/", "module-assets/"} {
+		if strings.HasPrefix(path, prefix) {
+			name, _, ok := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+			if !ok {
+				return false
+			}
+			module, found := modules.Read()[name]
+			return found && module.Enabled && module.MemberAccess
+		}
+	}
+	return false
 }
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	actor := r.Context().Value(identityKey{}).(auth.Identity)

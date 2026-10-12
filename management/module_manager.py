@@ -112,6 +112,7 @@ def manifest(m):
         m.get("userShell", False) in (True, False),
         'Invalid user-shell capability',
     )
+    require(type(m.get("memberAccess", False)) is bool, 'Invalid member-access capability')
     for package, minimum in m.get("packages", {}).items():
         require(re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,79}", package), 'Invalid OS package name')
         require(

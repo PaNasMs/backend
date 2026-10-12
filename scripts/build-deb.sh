@@ -42,6 +42,7 @@ install -m 0644 packaging/pam "$stage/etc/pam.d/panasms"
 install -d "$stage/usr/lib/udev/rules.d"
 install -m 0644 packaging/*.rules "$stage/usr/lib/udev/rules.d/"
 install -m 0644 packaging/*.service packaging/*.timer "$stage/usr/lib/systemd/system/"
+install -D -m 0644 packaging/panasms-mdns.conf "$stage/usr/lib/systemd/system/avahi-daemon.service.d/panasms-mdns.conf"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"
@@ -57,7 +58,7 @@ Section: admin
 Priority: optional
 Architecture: $arch
 Maintainer: PaNasMs local development
-Depends: apt, gpgv, dpkg-repack, $shared_deps, libpam-runtime, libpam-modules, libpam-systemd, systemd, adduser, openssl, ca-certificates, util-linux, mount, fdisk, initramfs-tools, udev, usb-modeswitch, python3, python3-dbus, hostapd | network-manager, wpasupplicant, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, systemd-cryptsetup | systemd (<< 256), cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
+Depends: avahi-daemon, apt, gpgv, dpkg-repack, $shared_deps, libpam-runtime, libpam-modules, libpam-systemd, systemd, adduser, openssl, ca-certificates, util-linux, mount, fdisk, initramfs-tools, udev, usb-modeswitch, python3, python3-dbus, hostapd | network-manager, wpasupplicant, iproute2, iw, dnsmasq-base, nftables, openssh-client, passwd, mdadm, parted, e2fsprogs, dosfstools, exfatprogs, xfsprogs, btrfs-progs, cryptsetup-bin, systemd-cryptsetup | systemd (<< 256), cifs-utils, nfs-common, nfs-kernel-server, samba, samba-common-bin, smbclient, acl, smartmontools, psmisc, hdparm, rsync
 Description: PaNasMs management panel, PAM login and Linux system operations
 CONTROL
 dpkg-deb --root-owner-group --build "$stage" "dist/panasms-prototype_${version}_${arch}.deb"

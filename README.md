@@ -491,3 +491,20 @@ third-party components.
 Files 0.3.16 introduces the user-scoped `file.git-switch` management action.
 Core 0.2.20 authorizes it for panel users; the module enforces filesystem access,
 clean-tree checks and repository locking under the user's Linux identity.
+
+## Local network name
+
+Settings → General allows administrators to change the system hostname. The panel
+shows its actual mDNS address, for example `http://panasms.local/`, including a
+custom HTTP port. The package installs Avahi and preserves the existing hostname.
+It advertises on physical Ethernet/Wi-Fi, USB gadget networking and bridges/VLANs
+backed by those interfaces; Docker-only interfaces are excluded. Both wired and
+wireless connections may advertise the same name. Clients choose an address;
+existing connections do not migrate seamlessly when an interface disconnects.
+
+Discovery requires mDNS support on the client and multicast on the local network.
+Guest isolation and routed networks can prevent it; the IP address remains usable.
+Avahi may choose a suffixed name if another device already uses the requested name;
+the settings page shows the actual advertised name. HTTPS certificates must cover
+the chosen name. Hostname changes retain a recovery journal and restore previous
+settings after an interrupted or failed change.

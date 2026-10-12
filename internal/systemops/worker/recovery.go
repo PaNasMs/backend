@@ -6,6 +6,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/host"
+	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
@@ -72,6 +73,17 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		if req.Action == "user.password" {
 			message = "A password change cannot be verified from stored credentials. Sign in or set a new password through Users."
 		}
+	case req.Action == "system.hostname":
+		route = "/settings/general"
+		if err := hostname.Default().Recover(); err != nil {
+			return nil, err
+		}
+		raw, err := hostname.Query()
+		if err != nil {
+			return nil, err
+		}
+		add("Hostname", raw)
+		message = "Review the current network name before changing it again."
 	case req.Action == "system.web-port":
 		route = "/settings/general"
 		raw, err := webaccess.Default().Query()

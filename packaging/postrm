@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 systemctl daemon-reload || true
+if [ "${1:-}" = remove ] || [ "${1:-}" = purge ]; then systemctl try-restart avahi-daemon.service || true; fi
 udevadm control --reload-rules || true
 if [ "${1:-}" = purge ]; then
  for dir in /etc/panasms /var/lib/panasms /var/lib/panasms-installer /var/lib/panasms-agent; do
@@ -70,6 +71,7 @@ for timer in Path('/etc/systemd/system').glob('panasms-smart-*.timer'):
         timer.unlink(missing_ok=True);timer.with_suffix('.service').unlink(missing_ok=True)
 CLEAN
  systemctl daemon-reload || true
+if [ "${1:-}" = remove ] || [ "${1:-}" = purge ]; then systemctl try-restart avahi-daemon.service || true; fi
  rmdir /var/lib/panasms-agent 2>/dev/null || true
  rmdir /etc/panasms /var/lib/panasms 2>/dev/null || true
  if [ -f /var/lib/panasms-installer/created-user ]; then

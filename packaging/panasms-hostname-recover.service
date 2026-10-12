@@ -1,0 +1,11 @@
+[Unit]
+Description=Recover interrupted PaNasMs hostname changes
+After=avahi-daemon.service
+Before=panasms-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/panasms/panasms-system-helper hostname recover
+
+[Install]
+WantedBy=multi-user.target

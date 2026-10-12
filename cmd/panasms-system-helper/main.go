@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/disksleep"
+	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networknative"
 	"panasms.local/backend/internal/systemops/volumeaccess"
@@ -27,6 +28,17 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "hostname" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := hostname.CLI(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "disk-sleep" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

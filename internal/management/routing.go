@@ -33,6 +33,7 @@ const (
 // and management/main.py's query dispatch.
 var queryViews = map[string]impl{
 	"system-updates": legacy,
+	"hostname":       goNative,
 	"web-access":     goNative,
 	// Samba status is obtained through the explicit GO-06 dependency bridge.
 	"accounts":          goNative,
@@ -162,6 +163,7 @@ var actionModules = map[string]impl{
 	"system.update.install":     legacy,
 	"system.update.rollback":    legacy,
 	"system.update.settings":    legacy,
+	"system.hostname":           goNative,
 	"system.web-port":           goNative,
 	"updates.install":           goNative,
 	"updates.refresh":           goNative,

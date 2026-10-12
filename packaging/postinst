@@ -33,6 +33,10 @@ case "${1:-}" in
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
   getent group users >/dev/null || groupadd --system users
   systemctl daemon-reload
+  systemctl enable avahi-daemon.service panasms-hostname-recover.service
+  systemctl restart avahi-daemon.service
+  systemctl start panasms-hostname-recover.service
+  systemctl enable --now panasms-mdns.timer
   udevadm control --reload-rules
   udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=0bda --attr-match=idProduct=8152
   /usr/lib/panasms/panasms-system-helper network-access initialize || echo 'Direct network access setup incomplete; review Network settings.' >&2

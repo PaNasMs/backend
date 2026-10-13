@@ -166,6 +166,17 @@ func TestDesktopRejectsOverlapAndOutOfBounds(t *testing.T) {
 	}
 }
 
+func TestDesktopTileConfiguration(t *testing.T) {
+	layout := map[string][]store.DesktopTile{"mobile": {{ID: "a", Kind: "cpu", Config: map[string]string{"connectionId": "one", "primary": "sensor.room"}}}}
+	if !validDesktop(layout) {
+		t.Fatal("widget configuration rejected")
+	}
+	layout["mobile"][0].Config["secret key"] = "invalid"
+	if validDesktop(layout) {
+		t.Fatal("invalid configuration key accepted")
+	}
+}
+
 func TestTaskbarPreferences(t *testing.T) {
 	if !validTaskbar(nil) {
 		t.Fatal("legacy preferences rejected")

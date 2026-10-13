@@ -71,10 +71,11 @@ func (s *Store) Revoke(token string) error {
 }
 
 type DesktopTile struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	X    int    `json:"x"`
-	Y    int    `json:"y"`
+	ID     string            `json:"id"`
+	Kind   string            `json:"kind"`
+	X      int               `json:"x"`
+	Y      int               `json:"y"`
+	Config map[string]string `json:"config,omitempty"`
 }
 type Preferences struct {
 	FilePins          []string                 `json:"filePins,omitempty"`

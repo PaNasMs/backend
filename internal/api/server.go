@@ -769,6 +769,14 @@ func validDesktop(layouts map[string][]store.DesktopTile) bool {
 		seen := map[string]bool{}
 		cells := map[[2]int]bool{}
 		for _, t := range tiles {
+			if len(t.Config) > 16 {
+				return false
+			}
+			for key, value := range t.Config {
+				if len(key) > 64 || len(value) > 512 || !validWidgetKey(key) {
+					return false
+				}
+			}
 			size, ok := tileSize(t.Kind)
 			if !ok || t.ID == "" || len(t.ID) > 100 || seen[t.ID] || t.X < 0 || t.Y < 0 || t.X+size[0] > cols || t.Y+size[1] > 100 {
 				return false

@@ -1,6 +1,28 @@
 package system
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestReadDiskTemperaturesUsesOnlyCurrentReadings(t *testing.T) {
+	now := time.Now()
+	path := filepath.Join(t.TempDir(), "status.json")
+	status := fmt.Sprintf(`{"observedAt":%d,"disks":[{"device":"/dev/sda","state":"active","temperature":42},{"device":"/dev/sdb","state":"sleeping","temperature":38,"sleepTemperature":true},{"device":"/dev/sdc","state":"sleeping","temperature":37},{"device":"/dev/sdd","state":"active","temperature":48,"stale":true}]}`, now.Unix())
+	if err := os.WriteFile(path, []byte(status), 0600); err != nil {
+		t.Fatal(err)
+	}
+	readings := readDiskTemperatures(path, now)
+	if len(readings) != 2 || readings["/dev/sda"] != 42 || readings["/dev/sdb"] != 38 {
+		t.Fatalf("unexpected current readings: %v", readings)
+	}
+	if readings := readDiskTemperatures(path, now.Add(10*time.Second)); len(readings) != 0 {
+		t.Fatalf("outdated controller status included: %v", readings)
+	}
+}
 
 func TestInvalidLayouts(t *testing.T) {
 	for _, v := range []map[string][]string{nil, {"huge": {}}, {"wide": {"cpu", "cpu", "cooling", "system", "users", "storage"}}, {"wide": {"bad"}}} {

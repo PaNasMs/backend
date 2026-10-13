@@ -1530,6 +1530,11 @@ components:
           type:
           - number
           - 'null'
+        diskTemperatures:
+          description: Current disk temperatures from the cooling controller, keyed by device path. Stale readings are omitted.
+          type: object
+          additionalProperties:
+            type: number
         observedAt:
           type: string
         cpuFanPercent:

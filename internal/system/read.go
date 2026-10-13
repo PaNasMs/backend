@@ -271,20 +271,51 @@ func readMDProgress(a *Array, mdstat string) {
 }
 
 type Metrics struct {
-	Disks           map[string]Transfer `json:"disks"`
-	Network         map[string]Transfer `json:"network"`
-	SystemTotal     uint64              `json:"systemTotal"`
-	SystemAvailable uint64              `json:"systemAvailable"`
-	Hostname        string              `json:"hostname"`
-	CPU             *float64            `json:"cpu"`
-	MemoryTotal     uint64              `json:"memoryTotal"`
-	MemoryUsed      uint64              `json:"memoryUsed"`
-	Uptime          float64             `json:"uptime"`
-	CPUTemperature  *float64            `json:"cpuTemperature"`
-	CPUFanPercent   *int                `json:"cpuFanPercent"`
-	CPUFanRPM       *int                `json:"cpuFanRpm"`
-	ObservedAt      time.Time           `json:"observedAt"`
+	Disks            map[string]Transfer `json:"disks"`
+	Network          map[string]Transfer `json:"network"`
+	SystemTotal      uint64              `json:"systemTotal"`
+	SystemAvailable  uint64              `json:"systemAvailable"`
+	Hostname         string              `json:"hostname"`
+	CPU              *float64            `json:"cpu"`
+	MemoryTotal      uint64              `json:"memoryTotal"`
+	MemoryUsed       uint64              `json:"memoryUsed"`
+	Uptime           float64             `json:"uptime"`
+	CPUTemperature   *float64            `json:"cpuTemperature"`
+	DiskTemperatures map[string]float64  `json:"diskTemperatures"`
+	CPUFanPercent    *int                `json:"cpuFanPercent"`
+	CPUFanRPM        *int                `json:"cpuFanRpm"`
+	ObservedAt       time.Time           `json:"observedAt"`
 }
+
+func readDiskTemperatures(path string, now time.Time) map[string]float64 {
+	result := map[string]float64{}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	var status struct {
+		ObservedAt float64 `json:"observedAt"`
+		Disks      []struct {
+			Device           string   `json:"device"`
+			State            string   `json:"state"`
+			Temperature      *float64 `json:"temperature"`
+			Stale            bool     `json:"stale"`
+			SleepTemperature bool     `json:"sleepTemperature"`
+		} `json:"disks"`
+	}
+	if json.Unmarshal(raw, &status) != nil || status.ObservedAt <= 0 ||
+		now.Sub(time.UnixMilli(int64(status.ObservedAt*1000))) > 5*time.Second {
+		return result
+	}
+	for _, disk := range status.Disks {
+		if disk.Device != "" && disk.Temperature != nil && !disk.Stale &&
+			(disk.State == "active" || disk.State == "sleeping" && disk.SleepTemperature) {
+			result[disk.Device] = *disk.Temperature
+		}
+	}
+	return result
+}
+
 type Collector struct {
 	diskCounters, netCounters map[string]counters
 	lastSample                time.Time
@@ -296,6 +327,7 @@ func (c *Collector) Read() (Metrics, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	m := Metrics{ObservedAt: time.Now().UTC()}
+	m.DiskTemperatures = readDiskTemperatures("/run/panasms-cooling/status.json", m.ObservedAt)
 	m.Hostname, _ = os.Hostname()
 	c.rates(&m)
 	hwmons, _ := filepath.Glob("/sys/class/hwmon/hwmon*")

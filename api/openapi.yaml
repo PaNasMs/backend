@@ -1634,6 +1634,10 @@ components:
                 kind: {type: string}
                 x: {type: integer}
                 y: {type: integer}
+                config:
+                  type: object
+                  description: Personal display settings for this widget instance. Do not store credentials here.
+                  additionalProperties: {type: string, maxLength: 512}
 
         filePins:
           type: array

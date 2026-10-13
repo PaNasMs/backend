@@ -97,6 +97,7 @@ func (s *Server) moduleAPI(w http.ResponseWriter, r *http.Request) {
 		p.Out.URL.RawQuery = v.Encode()
 		p.Out.Header.Del("Cookie")
 		p.Out.Header.Del("Authorization")
+		p.Out.Header.Set("X-PaNasMs-Role", id.Role)
 	}}
 	proxy.ServeHTTP(w, r)
 }

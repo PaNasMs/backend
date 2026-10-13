@@ -209,7 +209,7 @@ func TestPreferencesBodyFitsSupportedLimits(t *testing.T) {
 }
 
 func TestTileSizesCoverModuleWidgets(t *testing.T) {
-	for kind, want := range map[string][2]int{"app-network": {1, 1}, "clock": {2, 1}, "cpu": {2, 2}, "hddCooling": {2, 2}, "network": {2, 2}, "disks": {2, 2}, "users": {1, 1}} {
+	for kind, want := range map[string][2]int{"app-network": {1, 1}, "clock": {2, 1}, "cpu": {2, 2}, "hddCooling": {2, 2}, "network": {2, 2}, "disks": {2, 2}, "volumes": {2, 2}, "smart": {2, 2}, "sharingConnections": {2, 2}, "users": {1, 1}} {
 		if size, ok := tileSize(kind); !ok || size != want {
 			t.Fatalf("%s: %v %v", kind, size, ok)
 		}

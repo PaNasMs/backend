@@ -151,7 +151,7 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			passive := r.Method == http.MethodGet && (r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/module-api/containers/events")
+			passive := r.Method == http.MethodGet && (r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/module-api/containers/events" || r.URL.Path == "/api/v1/module-api/backup/state")
 			if strings.HasPrefix(r.URL.Path, "/api/") && !passive {
 				release, err := maintenance.Acquire()
 				if err != nil {

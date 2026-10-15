@@ -424,3 +424,21 @@ func TestGitHubGrantBindingAndBroker(t *testing.T) {
 		})
 	}
 }
+
+func TestBackupUsesExplicitWriteGrants(t *testing.T) {
+	policies := grantPolicies["backup"]
+	for capability, provider := range map[string]string{"google-drive": "google", "dropbox-files": "dropbox", "github-repositories": "github"} {
+		if policies[capability].Provider != provider || policies[capability].Scope == "" {
+			t.Fatalf("missing explicit %s policy", capability)
+		}
+	}
+	if len(policies) != 3 {
+		t.Fatal("unexpected backup capability")
+	}
+	if peerConsumer("0::/system.slice/panasms-module-backup.service") != "backup" {
+		t.Fatal("backup service denied")
+	}
+	if peerConsumer("0::/user.slice/panasms-module-backup.service") != "" {
+		t.Fatal("user process impersonated backup service")
+	}
+}

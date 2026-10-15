@@ -55,6 +55,8 @@ func TestMaintenanceAllowsPassiveEventsButBlocksOperations(t *testing.T) {
 	}{
 		{"GET", "events", 401},
 		{"GET", "module-api/containers/events", 401},
+		{"GET", "module-api/backup/state", 401},
+		{"POST", "module-api/backup/state", 503},
 		{"POST", "module-api/containers/events", 503},
 		{"GET", "module-api/containers/jobs", 503},
 		{"POST", "module-api/containers/action", 503},

@@ -14,7 +14,7 @@ func TestOrdinaryUserRouteBoundary(t *testing.T) {
 		method, path string
 		allowed      bool
 	}{
-		{"GET", "users", false}, {"GET", "network", false}, {"POST", "power", false}, {"PUT", "cooling", false},
+		{"GET", "users", false}, {"GET", "network", false}, {"POST", "power", false}, {"PUT", "cooling", false}, {"GET", "oled", false}, {"PUT", "oled", false},
 		{"GET", "terminal", false}, {"GET", "module-assets/terminal/main.js", false}, {"GET", "manage?view=accounts", false},
 		{"GET", "manage?view=network", false}, {"GET", "manage?view=module-catalog", false},
 		{"GET", "profile", true}, {"POST", "profile", true}, {"GET", "sessions", true}, {"GET", "metrics", true},

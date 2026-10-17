@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"panasms.local/backend/internal/oled"
 	"path/filepath"
 	"sync"
 	"time"
@@ -111,6 +112,15 @@ func Save(settings Settings) error {
 	}
 	if err := validateCapabilities(old, settings, DetectCapabilities("/")); err != nil {
 		return err
+	}
+	if settings.HardwareMode != "none" {
+		display, e := oled.Read()
+		if e != nil {
+			return fmt.Errorf("Cannot check OLED GPIO ownership: %w", e)
+		}
+		if display.Config.Enabled && (settings.ControlGPIO == display.Config.SDA || settings.ControlGPIO == display.Config.SCL || settings.TachGPIO != nil && (*settings.TachGPIO == display.Config.SDA || *settings.TachGPIO == display.Config.SCL)) {
+			return errors.New("Selected GPIO pins are assigned to the OLED display")
+		}
 	}
 	cfg.Settings = settings
 	raw, err = json.MarshalIndent(cfg, "", "  ")

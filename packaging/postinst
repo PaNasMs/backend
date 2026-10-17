@@ -33,6 +33,7 @@ case "${1:-}" in
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
   getent group users >/dev/null || groupadd --system users
   systemctl daemon-reload
+  /usr/lib/panasms/panasms-oled restore || echo 'OLED display could not start; review Display settings.' >&2
   systemctl enable avahi-daemon.service panasms-hostname-recover.service
   systemctl restart avahi-daemon.service
   systemctl start panasms-hostname-recover.service

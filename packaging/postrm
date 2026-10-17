@@ -56,6 +56,8 @@ if sources.is_file() and not sources.is_symlink() and keys.is_dir() and not keys
 sources.unlink(missing_ok=True)
 Path('/etc/panasms/updates.json').unlink(missing_ok=True)
 Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)
+Path('/etc/panasms/oled.json').unlink(missing_ok=True)
+Path('/run/lock/panasms-oled-config.lock').unlink(missing_ok=True)
 Path('/etc/panasms/sharing.json').unlink(missing_ok=True)
 Path('/var/lib/panasms-agent/sharing-transaction.json').unlink(missing_ok=True)
 root=Path('/var/lib/panasms-agent/backups')

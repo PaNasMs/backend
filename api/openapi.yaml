@@ -595,6 +595,35 @@ paths:
         schema:
           type: string
           const: '1'
+  /api/v1/oled:
+    get:
+      operationId: getOLED
+      security:
+      - session: []
+      responses: &oledResponse
+        '200':
+          description: Administrator-only display configuration and observed hardware state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OLEDState'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setOLED
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OLEDSettings'
+      responses: *oledResponse
   /api/v1/cooling:
     get:
       operationId: getCooling
@@ -1791,6 +1820,39 @@ components:
             $ref: '#/components/schemas/Array'
         observedAt:
           type: string
+    OLEDSettings:
+      type: object
+      additionalProperties: false
+      required: [enabled, brightness, rotation, bus, sda, scl, address, controller, showIP, showCPU, showDisks]
+      properties:
+        enabled: {type: boolean, default: false}
+        brightness: {type: integer, minimum: 1, maximum: 100, default: 25}
+        rotation: {type: integer, enum: [0, 180], default: 0}
+        bus: {type: integer, enum: [0, 1, 2, 3], default: 1}
+        sda: {type: integer, enum: [2, 4, 6, 8, 10, 12, 14, 22], default: 2}
+        scl: {type: integer, enum: [3, 5, 7, 9, 11, 13, 15, 23], default: 3}
+        address: {type: integer, enum: [60, 61], default: 60}
+        controller: {type: string, enum: [ssd1306, sh1106], default: ssd1306}
+        showIP: {type: boolean, default: true}
+        showCPU: {type: boolean, default: true}
+        showDisks: {type: boolean, default: true}
+    OLEDState:
+      type: object
+      required: [config, supported, state, status]
+      properties:
+        config: {$ref: '#/components/schemas/OLEDSettings'}
+        supported: {type: boolean}
+        state: {type: string, enum: [disabled, unavailable, starting, error, active]}
+        status:
+          type: object
+          required: [observedAt, applied, error, lines]
+          properties:
+            observedAt: {type: string, format: date-time}
+            applied: {$ref: '#/components/schemas/OLEDSettings'}
+            error: {type: string}
+            lines:
+              type: array
+              items: {type: string}
     CoolingSettings:
       type: object
       required:

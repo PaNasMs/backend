@@ -7,6 +7,7 @@ check-race:
 	go test -buildvcs=false -tags pam -race ./...
 build:
 	mkdir -p bin
+	go build -buildvcs=false -trimpath -o bin/panasms-oled ./cmd/panasms-oled
 	go build -buildvcs=false -trimpath -o bin/panasms-core ./cmd/panasms-core
 	go build -buildvcs=false -trimpath -tags pam -o bin/panasms-agent ./cmd/panasms-agent
 	go build -buildvcs=false -trimpath -o bin/panasms-system-helper ./cmd/panasms-system-helper

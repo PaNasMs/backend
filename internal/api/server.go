@@ -376,6 +376,8 @@ func (s *Server) Handler() http.Handler {
 		r.Delete("/api/v1/avatar", s.avatar)
 		r.Get("/api/v1/profile", s.profile)
 		r.Post("/api/v1/profile", s.profile)
+		r.Get("/api/v1/oled", s.oled)
+		r.Put("/api/v1/oled", s.oled)
 		r.Get("/api/v1/cooling", s.cooling)
 		r.Put("/api/v1/cooling", s.cooling)
 	})

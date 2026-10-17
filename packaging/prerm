@@ -31,6 +31,8 @@ CHECK
   systemctl disable --now panasms-network-access.service
   /usr/lib/panasms/panasms-system-helper network-access remove
  fi
+ systemctl stop panasms-oled.service || true
+ if [ "$1" = remove ]; then systemctl disable panasms-oled.service || true; fi
  systemctl stop 'panasms-fs-check@*.service' || true
  systemctl stop panasms-volume-access.service || true
  if [ "$1" = remove ]; then systemctl disable panasms-volume-access.service || true; fi

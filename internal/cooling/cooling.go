@@ -113,7 +113,7 @@ func Save(settings Settings) error {
 	if err := validateCapabilities(old, settings, DetectCapabilities("/")); err != nil {
 		return err
 	}
-	if settings.HardwareMode != "none" {
+	if settings.HardwareMode != "none" && (old.HardwareMode != settings.HardwareMode || old.ControlGPIO != settings.ControlGPIO || !samePin(old.TachGPIO, settings.TachGPIO)) {
 		display, e := oled.Read()
 		if e != nil {
 			return fmt.Errorf("Cannot check OLED GPIO ownership: %w", e)

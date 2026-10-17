@@ -1,0 +1,23 @@
+[Unit]
+Description=PaNasMs OLED status display
+After=local-fs.target systemd-modules-load.service
+ConditionPathExists=/etc/panasms/oled.json
+
+[Service]
+ExecStart=/usr/lib/panasms/panasms-oled
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+RuntimeDirectory=panasms-oled
+RuntimeDirectoryMode=0755
+UMask=0022
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/run/panasms-oled /sys/kernel/config
+
+[Install]
+WantedBy=multi-user.target

@@ -287,7 +287,7 @@ type Metrics struct {
 	ObservedAt       time.Time           `json:"observedAt"`
 }
 
-func readDiskTemperatures(path string, now time.Time) map[string]float64 {
+func ReadDiskTemperatures(path string, now time.Time) map[string]float64 {
 	result := map[string]float64{}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -327,7 +327,7 @@ func (c *Collector) Read() (Metrics, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	m := Metrics{ObservedAt: time.Now().UTC()}
-	m.DiskTemperatures = readDiskTemperatures("/run/panasms-cooling/status.json", m.ObservedAt)
+	m.DiskTemperatures = ReadDiskTemperatures("/run/panasms-cooling/status.json", m.ObservedAt)
 	m.Hostname, _ = os.Hostname()
 	c.rates(&m)
 	hwmons, _ := filepath.Glob("/sys/class/hwmon/hwmon*")
@@ -394,18 +394,7 @@ func (c *Collector) Read() (Metrics, error) {
 	if len(up) > 0 {
 		m.Uptime, _ = strconv.ParseFloat(up[0], 64)
 	}
-	zones, _ := filepath.Glob("/sys/class/thermal/thermal_zone*")
-	for _, z := range zones {
-		t := text(z + "/type")
-		if t == "cpu-thermal" || t == "x86_pkg_temp" {
-			n, e := strconv.ParseFloat(text(z+"/temp"), 64)
-			if e == nil {
-				v := n / 1000
-				m.CPUTemperature = &v
-			}
-			break
-		}
-	}
+	m.CPUTemperature = CPUTemperature()
 	return m, nil
 }
 func Watch(ctx context.Context, notify func(string)) {
@@ -585,4 +574,20 @@ func readMDReshape(a *Array, dir string) {
 	}
 	percent := min(100.0, float64(position)/(2*float64(component))/float64(disks-parity)*100)
 	a.SyncPercent = &percent
+}
+
+func CPUTemperature() *float64 {
+	zones, _ := filepath.Glob("/sys/class/thermal/thermal_zone*")
+	for _, z := range zones {
+		t := text(z + "/type")
+		if t == "cpu-thermal" || t == "x86_pkg_temp" {
+			n, e := strconv.ParseFloat(text(z+"/temp"), 64)
+			if e == nil {
+				v := n / 1000
+				return &v
+			}
+			break
+		}
+	}
+	return nil
 }

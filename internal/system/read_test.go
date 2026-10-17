@@ -15,11 +15,11 @@ func TestReadDiskTemperaturesUsesOnlyCurrentReadings(t *testing.T) {
 	if err := os.WriteFile(path, []byte(status), 0600); err != nil {
 		t.Fatal(err)
 	}
-	readings := readDiskTemperatures(path, now)
+	readings := ReadDiskTemperatures(path, now)
 	if len(readings) != 2 || readings["/dev/sda"] != 42 || readings["/dev/sdb"] != 38 {
 		t.Fatalf("unexpected current readings: %v", readings)
 	}
-	if readings := readDiskTemperatures(path, now.Add(10*time.Second)); len(readings) != 0 {
+	if readings := ReadDiskTemperatures(path, now.Add(10*time.Second)); len(readings) != 0 {
 		t.Fatalf("outdated controller status included: %v", readings)
 	}
 }

@@ -29,7 +29,7 @@ func testServer(t *testing.T) *Server {
 }
 func TestProtectedEndpoints(t *testing.T) {
 	s := testServer(t)
-	for _, p := range []string{"wallpaper", "wallpaper/image", "session", "users", "storage", "metrics", "preferences", "events", "cooling", "profile", "manage", "terminal", "files/content", "metrics/history"} {
+	for _, p := range []string{"wallpaper", "wallpaper/image", "session", "users", "storage", "metrics", "preferences", "events", "cooling", "oled", "profile", "manage", "terminal", "files/content", "metrics/history"} {
 		r := httptest.NewRequest("GET", "/api/v1/"+p, nil)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)

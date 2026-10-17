@@ -323,7 +323,7 @@ def apt_plan(paths):
 
 
 def services():
-    units=['panasms-core.service','panasms-agent.service','panasms-sharing.timer','panasms-sharing.service']
+    units=['panasms-core.service','panasms-agent.service','panasms-sharing.timer','panasms-sharing.service','panasms-oled.service']
     units+=run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain','panasms-module-*.service']).splitlines()
     units=[u.split()[0] for u in units]
     return [u for u in units if active(u)]
@@ -415,6 +415,8 @@ def restore(boot=False):
         if p.exists():shutil.rmtree(p)
     for suffix in ('','-wal','-shm'):Path('/var/lib/panasms-agent/jobs.db'+suffix).unlink(missing_ok=True)
     run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/'],timeout=180)
+    display=Path('/usr/lib/panasms/panasms-oled')
+    if display.is_file():run([str(display),'restore'],timeout=30)
     if not boot:start(b['units']);healthy()
 
 

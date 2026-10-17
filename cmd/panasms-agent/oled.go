@@ -22,7 +22,7 @@ func oledHandler(allowed map[string]bool) http.HandlerFunc {
 			return
 		}
 		if r.Method == "PUT" {
-			var cfg oled.Settings
+			cfg := oled.Defaults()
 			d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			d.DisallowUnknownFields()
 			if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Validate() != nil {

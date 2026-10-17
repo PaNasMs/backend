@@ -1823,8 +1823,10 @@ components:
     OLEDSettings:
       type: object
       additionalProperties: false
-      required: [enabled, brightness, rotation, bus, sda, scl, address, controller, showIP, showCPU, showDisks]
+      required: [layout, pageSeconds, enabled, brightness, rotation, bus, sda, scl, address, controller, showIP, showCPU, showDisks]
       properties:
+        layout: {type: string, enum: [compact, large, disks, pages], default: compact}
+        pageSeconds: {type: integer, minimum: 4, maximum: 60, default: 6}
         enabled: {type: boolean, default: false}
         brightness: {type: integer, minimum: 1, maximum: 100, default: 25}
         rotation: {type: integer, enum: [0, 180], default: 0}

@@ -1,9 +1,11 @@
 package oled
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,21 +14,61 @@ import (
 	"panasms.local/backend/internal/system"
 )
 
-func Readings(s Settings) []string {
-	host, _ := os.Hostname()
-	var cpu *float64
-	disks := map[string]float64{}
+type Disk struct {
+	Label       string
+	Temperature *float64
+}
+type Snapshot struct {
+	Host, IP string
+	CPU      *float64
+	Disks    []Disk
+	Uptime   string
+}
+
+func ReadSnapshot(s Settings) Snapshot {
+	var data Snapshot
+	data.Host, _ = os.Hostname()
+	if s.ShowIP {
+		data.IP = primaryIP()
+	}
 	if s.ShowCPU {
-		cpu = system.CPUTemperature()
+		data.CPU = system.CPUTemperature()
 	}
 	if s.ShowDisks {
-		disks = system.ReadDiskTemperatures("/run/panasms-cooling/status.json", time.Now())
+		const path = "/run/panasms-cooling/status.json"
+		temperatures := system.ReadDiskTemperatures(path, time.Now())
+		raw, _ := os.ReadFile(path)
+		var status struct {
+			Disks []struct {
+				Device string `json:"device"`
+			} `json:"disks"`
+		}
+		_ = json.Unmarshal(raw, &status)
+		for _, d := range status.Disks {
+			label := d.Device
+			if resolved, e := filepath.EvalSymlinks(label); e == nil {
+				label = resolved
+			}
+			disk := Disk{Label: filepath.Base(label)}
+			if value, ok := temperatures[d.Device]; ok {
+				disk.Temperature = &value
+			}
+			data.Disks = append(data.Disks, disk)
+		}
+		sort.Slice(data.Disks, func(i, j int) bool { return data.Disks[i].Label < data.Disks[j].Label })
 	}
-	ip := ""
-	if s.ShowIP {
-		ip = primaryIP()
+	if s.Layout == "compact" {
+		raw, _ := os.ReadFile("/proc/uptime")
+		fields := strings.Fields(string(raw))
+		if len(fields) > 0 {
+			seconds, e := strconv.ParseFloat(fields[0], 64)
+			if e == nil {
+				minutes := int64(seconds) / 60
+				data.Uptime = fmt.Sprintf("%dD %02d:%02d", minutes/1440, minutes/60%24, minutes%60)
+			}
+		}
 	}
-	return lines(s, host, ip, cpu, disks)
+	return data
 }
 func lines(s Settings, host, ip string, cpu *float64, disks map[string]float64) []string {
 	result := []string{host}

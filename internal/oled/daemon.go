@@ -37,6 +37,7 @@ func Run(ctx context.Context) error {
 	}()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	started := time.Now()
 	for {
 		status := Status{ObservedAt: time.Now().UTC(), Applied: cfg, Lines: []string{}}
 		if device == nil {
@@ -46,8 +47,11 @@ func Run(ctx context.Context) error {
 			}
 		}
 		if e == nil {
-			status.Lines = Readings(cfg)
-			e = device.Display(Render(status.Lines, cfg.Rotation, int(time.Now().Unix()/60%2)))
+			scene := Compose(cfg, ReadSnapshot(cfg), int(time.Since(started).Seconds())/cfg.PageSeconds)
+			for _, text := range scene {
+				status.Lines = append(status.Lines, text.Value)
+			}
+			e = device.Display(RenderScene(scene, cfg.Rotation, int(time.Now().Unix()/60%2)))
 		}
 		if e != nil {
 			status.Error = e.Error()

@@ -16,16 +16,26 @@ var glyphs = map[rune][5]byte{
 	'Y': {7, 8, 112, 8, 7}, 'Z': {97, 81, 73, 69, 67}, '?': {2, 1, 81, 9, 6},
 }
 
+type Text struct {
+	Value       string
+	X, Y, Scale int
+}
+
 func Render(lines []string, rotation, shift int) [1024]byte {
-	var frame [1024]byte
+	var scene []Text
 	for row, line := range lines {
 		if row >= 5 {
 			break
 		}
-		for column, char := range []rune(strings.ToUpper(line)) {
-			if column >= 20 {
-				break
-			}
+		scene = append(scene, Text{short(line, 20), 2, 2 + row*12, 1})
+	}
+	return RenderScene(scene, rotation, shift)
+}
+
+func RenderScene(scene []Text, rotation, shift int) [1024]byte {
+	var frame [1024]byte
+	for _, text := range scene {
+		for column, char := range []rune(strings.ToUpper(text.Value)) {
 			glyph, ok := glyphs[char]
 			if !ok {
 				glyph = glyphs['?']
@@ -35,11 +45,18 @@ func Render(lines []string, rotation, shift int) [1024]byte {
 					if bits&(1<<y) == 0 {
 						continue
 					}
-					px, py := 2+shift+column*6+x, 2+shift+row*12+y
-					if rotation == 180 {
-						px, py = 127-px, 63-py
+					for dx := 0; dx < text.Scale; dx++ {
+						for dy := 0; dy < text.Scale; dy++ {
+							px, py := text.X+shift+(column*6+x)*text.Scale+dx, text.Y+shift+y*text.Scale+dy
+							if px < 2 || px > 125 || py < 2 || py > 61 {
+								continue
+							}
+							if rotation == 180 {
+								px, py = 127-px, 63-py
+							}
+							frame[py/8*128+px] |= 1 << uint(py%8)
+						}
 					}
-					frame[py/8*128+px] |= 1 << uint(py%8)
 				}
 			}
 		}

@@ -595,6 +595,40 @@ paths:
         schema:
           type: string
           const: '1'
+  /api/v1/power-control:
+    get:
+      operationId: getPowerControl
+      security:
+      - session: []
+      responses: &powerControlResponse
+        '200':
+          description: Administrator-only power control configuration and active shutdown GPIO
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PowerControlState'
+        default:
+          description: Failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: setPowerControl
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema: {type: string, const: '1'}
+      security:
+      - session: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PowerControlUpdate'
+      responses: *powerControlResponse
   /api/v1/oled:
     get:
       operationId: getOLED
@@ -1838,6 +1872,29 @@ components:
         showIP: {type: boolean, default: true}
         showCPU: {type: boolean, default: true}
         showDisks: {type: boolean, default: true}
+    PowerControlSettings:
+      type: object
+      additionalProperties: false
+      required: [enabled, gpio]
+      properties:
+        enabled: {type: boolean, default: false}
+        gpio: {type: integer, minimum: 2, maximum: 27, default: 25}
+    PowerControlUpdate:
+      type: object
+      additionalProperties: false
+      required: [enabled, gpio, expected]
+      properties:
+        enabled: {type: boolean}
+        gpio: {type: integer, minimum: 2, maximum: 27}
+        expected: {$ref: '#/components/schemas/PowerControlSettings'}
+    PowerControlState:
+      type: object
+      required: [config, supported, activeGPIO, rebootRequired]
+      properties:
+        config: {$ref: '#/components/schemas/PowerControlSettings'}
+        supported: {type: boolean}
+        activeGPIO: {type: [integer, 'null']}
+        rebootRequired: {type: boolean}
     OLEDState:
       type: object
       required: [config, supported, state, status]

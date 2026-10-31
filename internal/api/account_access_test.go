@@ -38,3 +38,15 @@ func TestSessionEndpointRejectsOtherUser(t *testing.T) {
 		}
 	}
 }
+
+func TestPowerControlIsAdministratorOnly(t *testing.T) {
+	for _, method := range []string{"GET", "PUT"} {
+		req := httptest.NewRequest(method, "/api/v1/power-control", nil)
+		if userRoute(auth.Identity{Role: "member"}, req) {
+			t.Fatal("member may access power control")
+		}
+		if !userRoute(auth.Identity{Role: "admin"}, req) {
+			t.Fatal("administrator denied")
+		}
+	}
+}

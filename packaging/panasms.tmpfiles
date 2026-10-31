@@ -1,1 +1,2 @@
 f /run/lock/panasms-maintenance.lock 0644 root root -
+d /run/panasms-hardware 0700 root root -

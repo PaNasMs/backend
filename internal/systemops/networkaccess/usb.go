@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"panasms.local/backend/internal/bootconfig"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/networknative"
 )
@@ -65,6 +66,11 @@ func usbCapability() USBCapability {
 	return c
 }
 func configureUSB(enabled bool) error {
+	unlock, e := bootconfig.Lock()
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	const modules = "/etc/modules-load.d/panasms-usb.conf"
 	const boot = "/boot/firmware/config.txt"
 	if enabled {

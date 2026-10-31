@@ -143,8 +143,53 @@ func TestDecodeRequiresExplicitSettings(t *testing.T) {
 			t.Fatalf("accepted %s", raw)
 		}
 	}
-	s, e := Decode(strings.NewReader(`{"enabled":true,"gpio":25}`))
-	if e != nil || s != (Settings{true, 25}) {
+	s, e := Decode(strings.NewReader(`{"enabled":true,"gpio":25,"expected":{"enabled":false,"gpio":25}}`))
+	if e != nil || s.Settings != (Settings{true, 25}) {
 		t.Fatalf("%+v %v", s, e)
+	}
+}
+
+func TestRenderPreservesFollowingBlocks(t *testing.T) {
+	raw, _ := render([]byte("[pi5]\ndtoverlay=nospi10\n"), Settings{true, 25})
+	tail := "\n# USB settings added later\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n"
+	raw = append(raw, []byte(tail)...)
+	next, e := render(raw, Settings{false, 26})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !bytes.HasSuffix(next, []byte(tail)) {
+		t.Fatal("following block changed")
+	}
+	s, _, e := parse(next)
+	if e != nil || s != (Settings{false, 26}) {
+		t.Fatalf("%+v %v", s, e)
+	}
+}
+func TestRejectEscapingIncludeSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	write(t, outside, []byte("# outside\n"))
+	if e := os.Symlink(outside, filepath.Join(root, "extra.txt")); e != nil {
+		t.Fatal(e)
+	}
+	main := filepath.Join(root, "config.txt")
+	write(t, main, []byte("include extra.txt\n"))
+	if e := checkIncludes(main, root, map[string]bool{}, true); e == nil {
+		t.Fatal("followed escaping symlink")
+	}
+}
+
+func TestConcurrentAdministratorSaveRejected(t *testing.T) {
+	raw, _ := render(nil, Defaults())
+	first, e := renderUpdate(raw, Update{Settings: Settings{true, 25}, Expected: Defaults()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = renderUpdate(first, Update{Settings: Settings{false, 26}, Expected: Defaults()}); e != ErrConflict {
+		t.Fatalf("stale save accepted: %v", e)
+	}
+	current, _, _ := parse(first)
+	if current != (Settings{true, 25}) {
+		t.Fatal("first save changed")
 	}
 }

@@ -615,6 +615,11 @@ paths:
                 $ref: '#/components/schemas/Error'
     put:
       operationId: setPowerControl
+      parameters:
+      - name: X-PaNasMs-Request
+        in: header
+        required: true
+        schema: {type: string, const: '1'}
       security:
       - session: []
       requestBody:
@@ -622,7 +627,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PowerControlSettings'
+              $ref: '#/components/schemas/PowerControlUpdate'
       responses: *powerControlResponse
   /api/v1/oled:
     get:
@@ -1874,6 +1879,14 @@ components:
       properties:
         enabled: {type: boolean, default: false}
         gpio: {type: integer, minimum: 2, maximum: 27, default: 25}
+    PowerControlUpdate:
+      type: object
+      additionalProperties: false
+      required: [enabled, gpio, expected]
+      properties:
+        enabled: {type: boolean}
+        gpio: {type: integer, minimum: 2, maximum: 27}
+        expected: {$ref: '#/components/schemas/PowerControlSettings'}
     PowerControlState:
       type: object
       required: [config, supported, activeGPIO, rebootRequired]

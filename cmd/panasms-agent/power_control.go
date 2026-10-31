@@ -37,7 +37,11 @@ func powerControlHandler(allowed map[string]bool) http.HandlerFunc {
 				if message == "" {
 					message = "Could not apply power control settings: " + err.Error()
 				}
-				http.Error(w, message, 503)
+				status := 503
+				if message == powercontrol.ErrConflict.Error() {
+					status = 409
+				}
+				http.Error(w, message, status)
 				return
 			}
 		} else if r.Method != "GET" {

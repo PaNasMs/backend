@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+	"panasms.local/backend/internal/bootconfig"
 )
 
 const bootPath = "/boot/firmware/config.txt"
@@ -57,9 +58,6 @@ func parse(raw []byte) (Settings, string, error) {
 	}
 	if start < 0 || finish < start || strings.Count(text, begin) != 1 || strings.Count(text, end) != 1 {
 		return s, "", errors.New("Invalid managed power control block in boot configuration")
-	}
-	if strings.TrimSpace(text[finish+len(end):]) != "" {
-		return s, "", errors.New("Managed power control block must be last in boot configuration")
 	}
 	block := text[start+len(begin) : finish]
 	var declared *int
@@ -108,15 +106,20 @@ func parse(raw []byte) (Settings, string, error) {
 	return s, text[:start] + text[finish+len(end):], s.Validate()
 }
 func render(raw []byte, s Settings) ([]byte, error) {
-	_, outside, e := parse(raw)
-	if e != nil {
+	if _, _, e := parse(raw); e != nil {
 		return nil, e
 	}
-	block := fmt.Sprintf("\n%s\n[all]\n# GPIO=%d\n", begin, s.GPIO)
+	block := fmt.Sprintf("%s\n[all]\n# GPIO=%d\n", begin, s.GPIO)
 	if s.Enabled {
 		block += fmt.Sprintf("dtoverlay=gpio-poweroff,gpiopin=%d\n", s.GPIO)
 	}
-	return []byte(strings.TrimRight(outside, "\n") + "\n" + block + end + "\n"), nil
+	block += end
+	text := string(raw)
+	if start := strings.Index(text, begin); start >= 0 {
+		finish := strings.Index(text, end) + len(end)
+		return []byte(text[:start] + block + text[finish:]), nil
+	}
+	return []byte(strings.TrimRight(text, "\n") + "\n\n" + block + "\n"), nil
 }
 func supported() bool {
 	model, e := os.ReadFile("/proc/device-tree/model")
@@ -232,7 +235,18 @@ func checkUnmanaged(path string, seen map[string]bool) error {
 	return checkIncludes(path, firmware, seen, true)
 }
 func checkIncludes(path, firmware string, seen map[string]bool, main bool) error {
-	path = filepath.Clean(path)
+	var e error
+	firmware, e = filepath.EvalSymlinks(firmware)
+	if e != nil {
+		return e
+	}
+	path, e = filepath.EvalSymlinks(path)
+	if e != nil {
+		return e
+	}
+	if !strings.HasPrefix(path, firmware+string(os.PathSeparator)) {
+		return errors.New("Cannot verify GPIO configuration outside the firmware directory")
+	}
 	if seen[path] {
 		return nil
 	}
@@ -266,24 +280,37 @@ func checkIncludes(path, firmware string, seen map[string]bool, main bool) error
 	}
 	return nil
 }
-func Decode(in io.Reader) (Settings, error) {
+
+type Update struct {
+	Settings
+	Expected Settings `json:"expected"`
+}
+
+var ErrConflict = errors.New("Power control settings changed; reload before saving")
+
+func Decode(in io.Reader) (Update, error) {
 	var body struct {
-		Enabled *bool `json:"enabled"`
-		GPIO    *int  `json:"gpio"`
+		Enabled  *bool     `json:"enabled"`
+		GPIO     *int      `json:"gpio"`
+		Expected *Settings `json:"expected"`
 	}
 	d := json.NewDecoder(io.LimitReader(in, 4097))
 	d.DisallowUnknownFields()
-	if d.Decode(&body) != nil || d.Decode(new(any)) != io.EOF || body.Enabled == nil || body.GPIO == nil {
-		return Settings{}, errors.New("Invalid power control settings")
+	if d.Decode(&body) != nil || d.Decode(new(any)) != io.EOF || body.Enabled == nil || body.GPIO == nil || body.Expected == nil {
+		return Update{}, errors.New("Invalid power control settings")
 	}
 	s := Settings{Enabled: *body.Enabled, GPIO: *body.GPIO}
-	return s, s.Validate()
+	if e := body.Expected.Validate(); e != nil {
+		return Update{}, e
+	}
+	return Update{Settings: s, Expected: *body.Expected}, s.Validate()
 }
 func Configure(in io.Reader) error {
-	s, e := Decode(in)
+	update, e := Decode(in)
 	if e != nil {
 		return e
 	}
+	s := update.Settings
 	unlock, e := Lock()
 	if e != nil {
 		return e
@@ -292,6 +319,11 @@ func Configure(in io.Reader) error {
 	if !supported() {
 		return errors.New("Power control requires Raspberry Pi 5 and the gpio-poweroff overlay")
 	}
+	unlockBoot, e := bootconfig.Lock()
+	if e != nil {
+		return e
+	}
+	defer unlockBoot()
 	if e = checkUnmanaged(bootPath, map[string]bool{}); e != nil {
 		return e
 	}
@@ -313,7 +345,7 @@ func Configure(in io.Reader) error {
 	if e != nil {
 		return e
 	}
-	next, e := render(raw, s)
+	next, e := renderUpdate(raw, update)
 	if e != nil {
 		return e
 	}
@@ -347,4 +379,15 @@ func Configure(in io.Reader) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func renderUpdate(raw []byte, update Update) ([]byte, error) {
+	current, _, e := parse(raw)
+	if e != nil {
+		return nil, e
+	}
+	if current != update.Expected {
+		return nil, ErrConflict
+	}
+	return render(raw, update.Settings)
 }

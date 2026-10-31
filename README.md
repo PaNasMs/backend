@@ -519,7 +519,8 @@ to OFF and a 10 kΩ pull-down from OFF to the shared ground. Do not connect 12 V
 to a GPIO. The external board must actually cut the supply after OFF is asserted.
 
 The administrator-only `GET/PUT /api/v1/power-control` API accepts
-`{"enabled":true,"gpio":25}`. It persists a marked block at the end of
+`{"enabled":true,"gpio":25,"expected":{"enabled":false,"gpio":25}}`.
+`expected` is the configuration read before editing; a stale save returns HTTP 409. It persists a marked block in
 `/boot/firmware/config.txt`, using `dtoverlay=gpio-poweroff,gpiopin=25`.
 Configuration changes require a restart; saving does not drive GPIO or load/remove
 a live overlay. The kernel keeps the line low while running and asserts it at the

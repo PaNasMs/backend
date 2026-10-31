@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"panasms.local/backend/internal/powercontrol"
 )
 
 const ConfigPath = "/etc/panasms/oled.json"
@@ -151,6 +152,11 @@ func run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 func Configure(ctx context.Context, in io.Reader) error {
+	unlock, e := powercontrol.Lock()
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	s := Defaults()
 	d := json.NewDecoder(io.LimitReader(in, 4097))
 	d.DisallowUnknownFields()

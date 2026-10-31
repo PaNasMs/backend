@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+	"panasms.local/backend/internal/powercontrol"
 )
 
 type Device struct {
@@ -18,6 +19,9 @@ type Device struct {
 }
 
 func checkCooling(s Settings) error {
+	if e := powercontrol.CheckPins(s.SDA, s.SCL); e != nil {
+		return e
+	}
 	var cooling struct {
 		HardwareMode string `json:"hardwareMode"`
 		ControlGPIO  int    `json:"controlGPIO"`

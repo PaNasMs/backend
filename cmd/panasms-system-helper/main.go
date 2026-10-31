@@ -24,10 +24,22 @@ import (
 	"panasms.local/backend/internal/systemops/worker"
 
 	"panasms.local/backend/internal/management"
+	"panasms.local/backend/internal/powercontrol"
 	"panasms.local/backend/internal/systemops"
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "power-control" && os.Args[2] == "configure" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := powercontrol.Configure(os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "hostname" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

@@ -143,6 +143,7 @@ func main() {
 		json.NewEncoder(w).Encode(id)
 	})
 
+	mux.HandleFunc("/power-control", powerControlHandler(allowed))
 	mux.HandleFunc("/oled", oledHandler(allowed))
 	mux.HandleFunc("/cooling", func(w http.ResponseWriter, r *http.Request) {
 		if id, err := auth.LookupPanel(r.URL.Query().Get("user"), allowed); err != nil || (r.Method != "GET" && id.Role != "admin") {

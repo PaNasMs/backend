@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"panasms.local/backend/internal/oled"
+	"panasms.local/backend/internal/powercontrol"
 	"path/filepath"
 	"sync"
 	"time"
@@ -97,6 +98,11 @@ func Save(settings Settings) error {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	unlock, lockErr := powercontrol.Lock()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
@@ -120,6 +126,15 @@ func Save(settings Settings) error {
 		}
 		if display.Config.Enabled && (settings.ControlGPIO == display.Config.SDA || settings.ControlGPIO == display.Config.SCL || settings.TachGPIO != nil && (*settings.TachGPIO == display.Config.SDA || *settings.TachGPIO == display.Config.SCL)) {
 			return errors.New("Selected GPIO pins are assigned to the OLED display")
+		}
+	}
+	if settings.HardwareMode != "none" {
+		pins := []int{settings.ControlGPIO}
+		if settings.TachGPIO != nil {
+			pins = append(pins, *settings.TachGPIO)
+		}
+		if e := powercontrol.CheckPins(pins...); e != nil {
+			return e
 		}
 	}
 	cfg.Settings = settings

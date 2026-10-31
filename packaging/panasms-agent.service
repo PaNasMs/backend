@@ -26,7 +26,7 @@ ProtectHome=no
 PrivateTmp=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-ReadWritePaths=/var/lib/panasms-modules /run/panasms-agent /etc -/home /var/log -/var/lib/samba
+ReadWritePaths=/run/lock /var/lib/panasms-modules /run/panasms-agent /etc -/home /var/log -/var/lib/samba
 
 [Install]
 WantedBy=multi-user.target

@@ -508,3 +508,31 @@ Avahi may choose a suffixed name if another device already uses the requested na
 the settings page shows the actual advertised name. HTTPS certificates must cover
 the chosen name. Hostname changes retain a recovery journal and restore previous
 settings after an interrupted or failed change.
+
+## External shutdown power board
+
+On Raspberry Pi 5, Settings > General > Power control can configure an external
+power board with an active-high OFF input. BCM GPIO25 (physical header pin 22) is
+the default; support is disabled until explicitly enabled. Wire the board before
+enabling this feature. The Pololu circuit uses a 1 kΩ series resistor from GPIO
+to OFF and a 10 kΩ pull-down from OFF to the shared ground. Do not connect 12 V
+to a GPIO. The external board must actually cut the supply after OFF is asserted.
+
+The administrator-only `GET/PUT /api/v1/power-control` API accepts
+`{"enabled":true,"gpio":25}`. It persists a marked block at the end of
+`/boot/firmware/config.txt`, using `dtoverlay=gpio-poweroff,gpiopin=25`.
+Configuration changes require a restart; saving does not drive GPIO or load/remove
+a live overlay. The kernel keeps the line low while running and asserts it at the
+final power-off stage, after normal OS shutdown. A restart does not request power
+cut-off. This does not turn a physical ON-only button into a shutdown button.
+
+The response separates `config` from `activeGPIO` and reports `rebootRequired`.
+Until a restart, the previous active pin remains reserved as well as the newly
+configured pin. Cooling and OLED settings share this reservation and a cross-process
+lock. Other kernel consumers and active pin functions are checked before enabling
+a new pin. Existing unmanaged gpio-poweroff overlays are rejected rather than
+silently replaced. Move wiring only with the power supply disconnected.
+
+To disable, save `enabled:false` and restart; the active driver remains installed
+until that restart. Verify both orderly power-off and restart on the assembled
+hardware before relying on unattended shutdown.

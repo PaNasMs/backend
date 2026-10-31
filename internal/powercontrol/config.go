@@ -39,7 +39,7 @@ func (s Settings) Validate() error {
 	return nil
 }
 func Lock() (func(), error) {
-	f, e := os.OpenFile("/run/lock/panasms-gpio-settings.lock", os.O_CREATE|os.O_RDWR, 0600)
+	f, e := os.OpenFile("/run/panasms-hardware/gpio-settings.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
 		return nil, e
 	}

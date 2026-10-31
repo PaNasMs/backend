@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-func Lock() (func(), error) { return lock("/run/lock/panasms-boot-config.lock") }
+func Lock() (func(), error) { return lock("/run/panasms-hardware/boot-config.lock") }
 func lock(path string) (func(), error) {
 	f, e := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {

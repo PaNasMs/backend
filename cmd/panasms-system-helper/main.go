@@ -17,6 +17,7 @@ import (
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/disksleep"
 	"panasms.local/backend/internal/systemops/hostname"
+	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networknative"
 	"panasms.local/backend/internal/systemops/volumeaccess"
@@ -84,29 +85,51 @@ func main() {
 		return
 	}
 
-	if len(os.Args) == 3 && (os.Args[1] == "network-native" || os.Args[1] == "network-services") {
-		if os.Geteuid() != 0 || (os.Args[2] != "run" && os.Args[2] != "recover") {
+	if len(os.Args) >= 3 && os.Args[1] == "network-services" {
+		if os.Geteuid() != 0 {
 			os.Exit(1)
 		}
 		var e error
-		nm := exec.Command("systemctl", "is-active", "--quiet", "NetworkManager").Run() == nil
-		if os.Args[1] == "network-services" && nm {
-			script, args := "network_sharing.py", []string{"--service"}
-			if os.Args[2] == "recover" {
-				script, args = "wifi.py", []string{"--recover"}
-			}
-			cmd := exec.Command("/usr/bin/python3", append([]string{"-B", "/usr/lib/panasms/management/" + script}, args...)...)
-			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-			e = cmd.Run()
-		} else {
-			switch os.Args[2] {
-			case "run":
+		switch {
+		case len(os.Args) == 4 && os.Args[2] == "rollback":
+			e = network.RecoverNMServices(os.Args[3])
+		case len(os.Args) == 3 && os.Args[2] == "check-removal":
+			e = network.CheckServiceRemoval()
+		case len(os.Args) == 3 && os.Args[2] == "remove":
+			e = network.RemoveNMServices()
+		case len(os.Args) == 3 && (os.Args[2] == "run" || os.Args[2] == "recover"):
+			if exec.Command("systemctl", "is-active", "--quiet", "NetworkManager").Run() == nil {
+				if os.Args[2] == "run" {
+					e = network.RunNMServices()
+				} else {
+					e = network.RecoverNMServices("")
+				}
+			} else if os.Args[2] == "run" {
 				e = networknative.Service()
-			case "recover":
+			} else {
 				e = networknative.Recover(false)
-			default:
-				e = fmt.Errorf("Unknown native network command")
 			}
+		default:
+			e = fmt.Errorf("Unknown native network command")
+		}
+		if e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "network-native" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		var e error
+		switch os.Args[2] {
+		case "run":
+			e = networknative.Service()
+		case "recover":
+			e = networknative.Recover(false)
+		default:
+			e = fmt.Errorf("Unknown native network command")
 		}
 		if e != nil {
 			fmt.Fprintln(os.Stderr, e)

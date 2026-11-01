@@ -96,12 +96,12 @@ func TestOLEDAcknowledgedCRCUsesCurrentAdminsAndPreservesOtherWarnings(t *testin
 			return auth.Identity{Username: user, Role: role}, nil
 		}
 		now := time.Now().UTC()
-		alerts := []store.Alert{{ID: "smart:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}, {ID: "heat:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}}
+		alerts := []store.Alert{{ID: "smart:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}, {ID: "heat:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}, {ID: "cooling-stale", Active: true, Updated: now.Format(time.RFC3339)}}
 		s.applyOLEDCRCAcknowledgements(alerts, []smartAlertDisk{disk}, storage)
 		a := oledActivity(storage, true, nil, alerts, now)
-		want := 2
+		want := 3
 		if role == "admin" {
-			want = 1
+			want = 2
 		}
 		if len(a.Events) != want {
 			t.Fatalf("%s: %+v", role, a.Events)

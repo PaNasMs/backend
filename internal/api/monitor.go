@@ -34,9 +34,7 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 		json.Unmarshal(raw, &v)
 		s.Store.Alert("cooling-stale", "Cooling telemetry is out of date", !v.Available)
 		for _, d := range v.Status.Disks {
-			if v.Available {
-				oledDisks = append(oledDisks, d.smartAlertDisk)
-			}
+			oledDisks = append(oledDisks, d.smartAlertDisk)
 			message := "SMART warning: " + d.Path
 			if d.Health == "failed" {
 				message = "SMART: disk failure: " + d.Path

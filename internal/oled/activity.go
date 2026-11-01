@@ -141,7 +141,7 @@ func (d *ActivityDisplay) Scene(cfg Settings, data Snapshot, a Activity, fresh b
 	}
 	if d.current != nil {
 		e := *d.current
-		return rows([]string{label(cfg.Language, e.Severity), label(cfg.Language, e.Kind), short(label(cfg.Language, e.Target), 20), label(cfg.Language, "details-web")}, 2, 15)
+		return rows([]string{label(cfg.Language, e.Severity), label(cfg.Language, e.Kind), short(label(cfg.Language, e.Target), 20)}, 2, 15)
 	}
 	if now.Sub(d.pageAt) >= time.Duration(cfg.PageSeconds)*time.Second {
 		d.page++
@@ -222,7 +222,7 @@ func (d *ActivityDisplay) enqueue(e Event) {
 	}
 }
 func eventPage(cfg Settings, e Event) []Text {
-	return rows([]string{label(cfg.Language, "attention"), label(cfg.Language, e.Kind), short(label(cfg.Language, e.Target), 20), label(cfg.Language, "details-web")}, 2, 15)
+	return rows([]string{label(cfg.Language, "attention"), label(cfg.Language, e.Kind), short(label(cfg.Language, e.Target), 20)}, 2, 15)
 }
 func taskPage(cfg Settings, t Task, index, total int, now time.Time) []Text {
 	headline := label(cfg.Language, t.Kind)

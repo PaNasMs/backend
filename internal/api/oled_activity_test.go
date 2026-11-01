@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/management"
 	"panasms.local/backend/internal/store"
 	"panasms.local/backend/internal/system"
@@ -75,5 +76,41 @@ func TestOLEDExcludesOldInactiveAlertsAndAcknowledgedJobFailures(t *testing.T) {
 		if e.ID != "device:new" && e.ID != "heat:/dev/sda" && e.ID != "job:other" {
 			t.Fatal(e)
 		}
+	}
+}
+
+func TestOLEDAcknowledgedCRCUsesCurrentAdminsAndPreservesOtherWarnings(t *testing.T) {
+	s := testServer(t)
+	storage := system.Storage{Devices: []map[string]any{{"path": "/dev/sdd", "model": "WDC", "serial": "serial"}}}
+	prefs := store.DefaultPreferences()
+	prefs.SmartCrcBaselines = map[string]uint64{"WDC:serial": 7}
+	if err := s.Store.Save("owner", prefs); err != nil {
+		t.Fatal(err)
+	}
+	disk := smartAlertDisk{Path: "/dev/disk/by-id/disk", Device: "/dev/sdd", Health: "warning", Warnings: []string{"UDMA_CRC_Error_Count"}}
+	if err := json.Unmarshal([]byte(`[{"id":199,"raw":{"value":7}}]`), &disk.Attributes); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"member", "admin"} {
+		s.lookupIdentity = func(user string, _ map[string]bool) (auth.Identity, error) {
+			return auth.Identity{Username: user, Role: role}, nil
+		}
+		now := time.Now().UTC()
+		alerts := []store.Alert{{ID: "smart:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}, {ID: "heat:" + disk.Path, Active: true, Updated: now.Format(time.RFC3339)}, {ID: "cooling-stale", Active: true, Updated: now.Format(time.RFC3339)}}
+		s.applyOLEDCRCAcknowledgements(alerts, []smartAlertDisk{disk}, storage)
+		a := oledActivity(storage, true, nil, alerts, now)
+		want := 3
+		if role == "admin" {
+			want = 2
+		}
+		if len(a.Events) != want {
+			t.Fatalf("%s: %+v", role, a.Events)
+		}
+	}
+	*disk.Attributes[0].Raw.Value = 8
+	alerts := []store.Alert{{ID: "smart:" + disk.Path, Active: true}}
+	s.applyOLEDCRCAcknowledgements(alerts, []smartAlertDisk{disk}, storage)
+	if !alerts[0].Active {
+		t.Fatal("new CRC errors hidden")
 	}
 }

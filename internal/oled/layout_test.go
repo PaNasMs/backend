@@ -13,7 +13,7 @@ func TestLayoutMigrationAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err := readConfig(path)
-	if err != nil || cfg.Layout != "compact" || cfg.PageSeconds != 6 || !cfg.Enabled || cfg.Brightness != 40 || cfg.SDA != 12 {
+	if err != nil || cfg.Layout != "large" || cfg.PageSeconds != 6 || !cfg.Enabled || cfg.Brightness != 40 || cfg.SDA != 12 {
 		t.Fatalf("migration: %+v %v", cfg, err)
 	}
 	for _, mutate := range []func(*Settings){func(s *Settings) { s.Layout = "unknown" }, func(s *Settings) { s.PageSeconds = 3 }, func(s *Settings) { s.PageSeconds = 61 }} {
@@ -115,5 +115,19 @@ func TestDiskPagesAndReadingSelection(t *testing.T) {
 	cfg.Layout = "compact"
 	if len(Compose(cfg, data, 0)) != 5 {
 		t.Fatal("overview missing fifth row")
+	}
+}
+
+func TestOldLayoutsNormalizeToLarge(t *testing.T) {
+	for _, layout := range []string{"compact", "disks", "pages", "storage"} {
+		cfg := Defaults()
+		cfg.Layout = layout
+		cfg.Enabled = true
+		cfg.ShowIP, cfg.ShowCPU, cfg.ShowDisks = false, false, false
+		cfg.Brightness = 5
+		cfg.NormalizeLayout()
+		if cfg.Layout != "large" || cfg.Brightness != 5 || !cfg.ShowIP || cfg.Validate() != nil {
+			t.Fatal(cfg)
+		}
 	}
 }

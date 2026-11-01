@@ -1859,7 +1859,7 @@ components:
       additionalProperties: false
       required: [layout, pageSeconds, enabled, brightness, rotation, bus, sda, scl, address, controller, showIP, showCPU, showDisks, language, showTasks, showEvents, eventSeconds]
       properties:
-        layout: {type: string, enum: [compact, large, disks, pages, storage], default: compact}
+        layout: {type: string, enum: [large, compact, disks, pages, storage], default: large, description: "Legacy layout values are accepted on input and normalized to large."}
         pageSeconds: {type: integer, minimum: 4, maximum: 60, default: 6}
         language: {type: string, enum: [en, ru, uk], default: en}
         showTasks: {type: boolean, default: true}

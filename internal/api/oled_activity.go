@@ -116,6 +116,9 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 		}
 	}
 	for _, alert := range alerts {
+		if strings.HasPrefix(alert.Message, "CRC count acknowledged: ") {
+			continue
+		}
 		kind := oledAlertKind(alert)
 		if kind == "" {
 			continue
@@ -194,11 +197,14 @@ func oledAlertKind(a store.Alert) string {
 	}
 	return ""
 }
-func (s *Server) publishOLED(storage system.Storage, storageOK bool, jobs []management.Job, update *oled.Task) {
+func (s *Server) publishOLED(storage system.Storage, storageOK bool, jobs []management.Job, disks []smartAlertDisk, update *oled.Task) {
 	now := time.Now().UTC()
 	alerts, err := s.Store.Alerts()
 	if err != nil {
 		return
+	}
+	if storageOK {
+		s.applyOLEDCRCAcknowledgements(alerts, disks, storage)
 	}
 	activity := oledActivity(storage, storageOK, jobs, alerts, now)
 	activity.Tasks = append(activity.Tasks, s.transferSnapshot(now)...)
@@ -212,3 +218,16 @@ func (s *Server) publishOLED(storage system.Storage, storageOK bool, jobs []mana
 }
 
 func transferEventID(id uint64) string { return fmt.Sprintf("transfer:%d", id) }
+
+func (s *Server) applyOLEDCRCAcknowledgements(alerts []store.Alert, disks []smartAlertDisk, storage system.Storage) {
+	baselines, err := s.Store.SmartCRCBaselines()
+	if err != nil {
+		return
+	}
+	for user, values := range baselines {
+		identity, err := s.lookupIdentity(user, s.Allowed)
+		if err == nil && identity.Role == "admin" {
+			applyCRCAcknowledgements(alerts, values, disks, storage)
+		}
+	}
+}

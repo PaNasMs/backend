@@ -121,6 +121,10 @@ if name=='findmnt':
   if row['target']=='/srv/data':row['maj:min']='8:2'
   if row['target']=='/':row['maj:min']='8:1'
  print(json.dumps(value));sys.exit(0)
+if name=='du' and Path('/fixture/replace-parent').exists():
+ parent=Path('/srv/data/pending');parent.rename('/srv/data/previous-parent');parent.mkdir();Path('/fixture/replace-parent').unlink()
+if name=='du' and Path('/fixture/replace-source').exists():
+ Path('/home').rename('/home-original');Path('/home').mkdir();Path('/home/alice').mkdir();Path('/home/bob').mkdir();Path('/fixture/replace-source').unlink()
 real='/usr/sbin/'+name if name in ('usermod','useradd') else '/usr/bin/'+name
 if name in ('mount','umount'):
  result=subprocess.run([real,*args],capture_output=True,text=True)
@@ -167,7 +171,7 @@ def namespace(root, loop, binary, nonce):
     (root / 'etc/shells').write_text('/bin/bash\n/usr/sbin/nologin\n')
     (root / 'tmp').chmod(0o1777)
     (root / 'fixture/nonce').write_text(nonce)
-    for tool in ('mount', 'umount', 'rsync', 'usermod', 'useradd', 'sync', 'systemctl', 'findmnt', 'lsblk'):
+    for tool in ('du', 'mount', 'umount', 'rsync', 'usermod', 'useradd', 'sync', 'systemctl', 'findmnt', 'lsblk'):
         path = root / 'fixture/bin' / tool
         path.write_text(TOOL)
         path.chmod(0o755)
@@ -193,7 +197,7 @@ def invoke(mode, body):
 
 def reset():
     assert not JOURNAL.exists(), JOURNAL.read_text() if JOURNAL.exists() else ''
-    for path in ('/home', TARGET, '/srv/data/pending', '/srv/data/previous-parent'):
+    for path in ('/home', '/home-original', TARGET, '/srv/data/pending', '/srv/data/previous-parent'):
         if Path(path).exists():
             shutil.rmtree(path)
     Path('/home').mkdir(mode=0o755)
@@ -220,7 +224,7 @@ def reset():
             stream.seek(5 * 1024 * 1024)
             stream.write(b'end')
         os.chown(sparse, uid, uid)
-    for path in ('/fixture/pause', '/fixture/event', '/run/nologin'):
+    for path in ('/fixture/pause', '/fixture/event', '/fixture/replace-parent', '/fixture/replace-source', '/run/nologin'):
         Path(path).unlink(missing_ok=True)
 
 
@@ -366,6 +370,23 @@ def scenarios():
     rejected = invoke('execute', request)
     assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
     print('PASS replaced destination-parent stale plan rejected', flush=True)
+    reset()
+    parent = Path('/srv/data/pending')
+    parent.mkdir()
+    request = plan(str(parent / 'homes'))
+    Path('/fixture/replace-parent').touch()
+    rejected = invoke('execute', request)
+    assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
+    assert not (parent / 'homes').exists() and not Path('/run/nologin').exists()
+    print('PASS destination-parent replacement during du rejected before journal', flush=True)
+    reset()
+    original = snapshot('/home')
+    request = plan()
+    Path('/fixture/replace-source').touch()
+    rejected = invoke('execute', request)
+    assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
+    assert snapshot('/home-original') == original and not Path(TARGET).exists() and not Path('/run/nologin').exists()
+    print('PASS source replacement during du rejected with original retained', flush=True)
     reset()
     request = plan()
     command('/usr/bin/fallocate', '-l', '110M', '/srv/data/full')

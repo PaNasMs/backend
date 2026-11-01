@@ -332,15 +332,33 @@ func (s *homeService) executeVerified(ctx context.Context, action string, params
 	if action == "homes.recover" {
 		return s.recover(ctx, r)
 	}
-	return s.execute(ctx, params, r)
+	return s.execute(ctx, params, expected, r)
 }
 
-func (s *homeService) execute(ctx context.Context, params map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+func (s *homeService) execute(ctx context.Context, params map[string]any, expected string, r *systemops.Reporter) (json.RawMessage, error) {
 	source, target, users, err := s.inspect(ctx, stringParam(params, "destination"))
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
-	raw, err := s.run(ctx, []string{"du", "-sx", "--block-size=1", "--", source}, systemops.CommandOptions{Timeout: 24 * time.Hour})
+	sourceDir, err := homePin(source, nil)
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	defer sourceDir.Close()
+	parent, err := homePin(filepath.Dir(target), nil)
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	defer parent.Close()
+	sourceIdentity, err := homeIdentity(homePinnedPath(sourceDir))
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	parentIdentity, err := homeIdentity(homePinnedPath(parent))
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	raw, err := s.run(ctx, []string{"du", "-sx", "--block-size=1", "--", homePinnedPath(sourceDir) + "/"}, systemops.CommandOptions{Timeout: 24 * time.Hour})
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
@@ -353,20 +371,34 @@ func (s *homeService) execute(ctx context.Context, params map[string]any, r *sys
 		return nil, systemops.BeforeMutation(err)
 	}
 	var fs unix.Statfs_t
-	if err := unix.Statfs(filepath.Dir(target), &fs); err != nil {
+	if err := unix.Fstatfs(int(parent.Fd()), &fs); err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
 	if fs.Bavail*uint64(fs.Bsize) <= size+64*1024*1024 {
 		return nil, systemops.BeforeMutation(reject("Not enough free space to copy home folders"))
 	}
+	// Size calculation can be lengthy; revalidate consent before creating state.
+	planned, err := s.plan(ctx, "homes.move", params)
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	var current struct{ Fingerprint string }
+	if err := systemops.Decode(planned, &current); err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	if current.Fingerprint != expected {
+		return nil, systemops.BeforeMutation(reject("State has changed. Review a new operation plan."))
+	}
+	for path, identity := range map[string][]uint64{source: sourceIdentity, filepath.Dir(target): parentIdentity} {
+		if err := homeCheckIdentity(path, identity); err != nil {
+			return nil, systemops.BeforeMutation(err)
+		}
+	}
 	if _, err := os.Lstat(s.nologin); !os.IsNotExist(err) {
 		return nil, systemops.BeforeMutation(reject("System maintenance is already in progress"))
 	}
 	state := homeJournal{Source: source, Target: target, Phase: "copying", Users: []homeJournalUser{}, Nologin: "PaNasMs is moving home folders. Please try again shortly.\n"}
-	state.SourceIdentity, err = homeIdentity(source)
-	if err != nil {
-		return nil, systemops.BeforeMutation(err)
-	}
+	state.SourceIdentity = sourceIdentity
 	for _, u := range users {
 		uid, gid := u.UID, u.GID
 		state.Users = append(state.Users, homeJournalUser{Name: u.Name, Old: u.Dir, New: target + strings.TrimPrefix(u.Dir, source), UID: &uid, GID: &gid})
@@ -383,7 +415,7 @@ func (s *homeService) execute(ctx context.Context, params map[string]any, r *sys
 		os.Remove(state.Backup)
 		return nil, systemops.BeforeMutation(err)
 	}
-	if err := s.move(ctx, &state, users, r); err != nil {
+	if err := s.move(ctx, &state, users, parent, parentIdentity, r); err != nil {
 		if _, recoveryErr := s.recover(context.WithoutCancel(ctx), r); recoveryErr != nil {
 			return nil, reject("Home move interrupted. Recovery is required; original data was preserved.")
 		}
@@ -392,7 +424,7 @@ func (s *homeService) execute(ctx context.Context, params map[string]any, r *sys
 	return marshal(map[string]any{"message": "Home folders moved and user paths updated"})
 }
 
-func (s *homeService) move(ctx context.Context, state *homeJournal, users []passwdUser, r *systemops.Reporter) error {
+func (s *homeService) move(ctx context.Context, state *homeJournal, users []passwdUser, parent *os.File, parentIdentity []uint64, r *systemops.Reporter) error {
 	source, err := homePin(state.Source, state.SourceIdentity)
 	if err != nil {
 		return err
@@ -432,10 +464,18 @@ func (s *homeService) move(ctx context.Context, state *homeJournal, users []pass
 	if err := s.idle(ctx, state.Source, users); err != nil {
 		return err
 	}
-	if err := os.Mkdir(state.Target, 0700); err != nil {
+	if err := homeCheckIdentity(filepath.Dir(state.Target), parentIdentity); err != nil {
 		return err
 	}
-	target, err := homePin(state.Target, nil)
+	created := filepath.Join(homePinnedPath(parent), filepath.Base(state.Target))
+	if err := os.Mkdir(created, 0700); err != nil {
+		return err
+	}
+	createdIdentity, err := homeIdentity(created)
+	if err != nil {
+		return err
+	}
+	target, err := homePin(state.Target, createdIdentity)
 	if err != nil {
 		return err
 	}

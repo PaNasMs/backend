@@ -28,6 +28,8 @@ import (
 )
 
 type Server struct {
+	transfers             sync.Map
+	transferID            atomic.Uint64
 	deliveryMu            sync.Mutex
 	catalogOnce           sync.Once
 	catalog               *notify.Catalog

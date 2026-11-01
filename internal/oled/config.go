@@ -20,19 +20,23 @@ const ConfigPath = "/etc/panasms/oled.json"
 const StatusPath = "/run/panasms-oled/status.json"
 
 type Settings struct {
-	Layout      string `json:"layout"`
-	PageSeconds int    `json:"pageSeconds"`
-	Enabled     bool   `json:"enabled"`
-	Brightness  int    `json:"brightness"`
-	Rotation    int    `json:"rotation"`
-	Bus         int    `json:"bus"`
-	SDA         int    `json:"sda"`
-	SCL         int    `json:"scl"`
-	Address     int    `json:"address"`
-	Controller  string `json:"controller"`
-	ShowIP      bool   `json:"showIP"`
-	ShowCPU     bool   `json:"showCPU"`
-	ShowDisks   bool   `json:"showDisks"`
+	Language     string `json:"language"`
+	ShowTasks    bool   `json:"showTasks"`
+	ShowEvents   bool   `json:"showEvents"`
+	EventSeconds int    `json:"eventSeconds"`
+	Layout       string `json:"layout"`
+	PageSeconds  int    `json:"pageSeconds"`
+	Enabled      bool   `json:"enabled"`
+	Brightness   int    `json:"brightness"`
+	Rotation     int    `json:"rotation"`
+	Bus          int    `json:"bus"`
+	SDA          int    `json:"sda"`
+	SCL          int    `json:"scl"`
+	Address      int    `json:"address"`
+	Controller   string `json:"controller"`
+	ShowIP       bool   `json:"showIP"`
+	ShowCPU      bool   `json:"showCPU"`
+	ShowDisks    bool   `json:"showDisks"`
 }
 type Status struct {
 	ObservedAt time.Time `json:"observedAt"`
@@ -48,20 +52,26 @@ type State struct {
 }
 
 func Defaults() Settings {
-	return Settings{Layout: "compact", PageSeconds: 6, Brightness: 25, Bus: 1, SDA: 2, SCL: 3, Address: 0x3c, Controller: "ssd1306", ShowIP: true, ShowCPU: true, ShowDisks: true}
+	return Settings{Language: "en", ShowTasks: true, ShowEvents: true, EventSeconds: 20, Layout: "compact", PageSeconds: 6, Brightness: 25, Bus: 1, SDA: 2, SCL: 3, Address: 0x3c, Controller: "ssd1306", ShowIP: true, ShowCPU: true, ShowDisks: true}
 }
 func (s Settings) Validate() error {
-	if s.Layout != "compact" && s.Layout != "large" && s.Layout != "disks" && s.Layout != "pages" {
+	if s.Layout != "compact" && s.Layout != "large" && s.Layout != "disks" && s.Layout != "pages" && s.Layout != "storage" {
 		return errors.New("Invalid OLED layout")
 	}
 	if s.PageSeconds < 4 || s.PageSeconds > 60 {
 		return errors.New("OLED page interval must be 4..60 seconds")
 	}
+	if s.Language != "en" && s.Language != "ru" && s.Language != "uk" {
+		return errors.New("Invalid OLED language")
+	}
+	if s.EventSeconds < 15 || s.EventSeconds > 60 {
+		return errors.New("OLED event duration must be 15..60 seconds")
+	}
 	bus, validPins := map[int]int{2: 1, 10: 1, 4: 2, 12: 2, 6: 3, 14: 3, 22: 3, 8: 0}[s.SDA]
 	if s.Brightness < 1 || s.Brightness > 100 || (s.Rotation != 0 && s.Rotation != 180) || !validPins || s.SCL != s.SDA+1 || s.Bus != bus || (s.Address != 0x3c && s.Address != 0x3d) || (s.Controller != "ssd1306" && s.Controller != "sh1106") {
 		return errors.New("Invalid OLED settings")
 	}
-	if s.Enabled && !s.ShowIP && !s.ShowCPU && !s.ShowDisks {
+	if s.Enabled && s.Layout != "storage" && !s.ShowIP && !s.ShowCPU && !s.ShowDisks {
 		return errors.New("Select at least one OLED reading")
 	}
 	return nil

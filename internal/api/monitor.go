@@ -93,8 +93,9 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 			s.Store.Alert("job:"+j.ID, "Operation "+j.Action+": "+j.Stage, j.NeedsReview)
 		}
 	}
-	s.monitorDevices(ctx, jobs)
-	s.monitorUpdates(ctx)
+	storage, storageErr := s.monitorDevices(ctx, jobs)
+	update := s.monitorUpdates(ctx)
+	s.publishOLED(storage, storageErr == nil, jobs, update)
 	if alerts, err := s.Store.Alerts(); err == nil {
 		data, _ := json.Marshal(alerts)
 		sum := sha256.Sum256(data)
@@ -153,12 +154,13 @@ func (s *Server) deviceEvent(message string, warning bool) {
 	id := fmt.Sprintf("device:%d", time.Now().UnixNano())
 	s.Store.Inform(id, message)
 }
-func (s *Server) monitorDevices(ctx context.Context, jobs []management.Job) {
+func (s *Server) monitorDevices(ctx context.Context, jobs []management.Job) (system.Storage, error) {
 	snapshot, err := system.StorageRead(ctx)
 	if err != nil {
-		return
+		return snapshot, err
 	}
 	s.recordDevices(diskSnapshots(snapshot), jobs)
+	return snapshot, nil
 }
 
 func (s *Server) recordDevices(current map[string]deviceSnapshot, jobs []management.Job) {

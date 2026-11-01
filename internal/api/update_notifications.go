@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"panasms.local/backend/internal/oled"
 )
 
-func (s *Server) monitorUpdates(ctx context.Context) {
+func (s *Server) monitorUpdates(ctx context.Context) *oled.Task {
 	req, err := http.NewRequestWithContext(ctx, "GET", "http://agent/update-feed", nil)
 	if err != nil {
-		return
+		return nil
 	}
 	resp, err := s.Agent.Do(req)
 	if err != nil {
-		return
+		return nil
 	}
 	defer resp.Body.Close()
 	var update struct {
@@ -25,7 +26,7 @@ func (s *Server) monitorUpdates(ctx context.Context) {
 		Error     string `json:"error"`
 	}
 	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&update) != nil {
-		return
+		return nil
 	}
 	if update.Available {
 		s.Store.Inform("update:available:"+update.Version, "PaNasMs update available: "+update.Version)
@@ -36,4 +37,9 @@ func (s *Server) monitorUpdates(ctx context.Context) {
 			s.Store.Inform("update:result:"+update.ID, "PaNasMs update: "+update.Phase+" · "+update.Error)
 		}
 	}
+	switch update.Phase {
+	case "queued", "checking", "downloading", "preparing", "backing-up", "installing", "verifying", "rolling-back":
+		return &oled.Task{ID: "update:" + update.ID, Kind: "update", State: update.Phase}
+	}
+	return nil
 }

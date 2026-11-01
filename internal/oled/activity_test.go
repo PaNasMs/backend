@@ -122,7 +122,7 @@ func TestActivityFreshnessAndSettingsMigration(t *testing.T) {
 	cfg.ShowIP = false
 	cfg.ShowCPU = false
 	cfg.ShowDisks = false
-	cfg.normalizeLayout()
+	cfg.NormalizeLayout()
 	if err = cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +199,10 @@ func TestEventFramesOmitWebUIFooter(t *testing.T) {
 	for _, language := range []string{"en", "ru", "uk"} {
 		cfg := Defaults()
 		cfg.Language = language
-		event := Event{ID: "test", Kind: "smart", Severity: "warning", Active: true, At: time.Now()}
+		event := Event{ID: "test", Revision: "1", Kind: "smart", Severity: "warning", Active: true, At: time.Now()}
 		d := &ActivityDisplay{}
 		scene := d.Scene(cfg, Snapshot{}, Activity{Events: []Event{event}}, true, event.At)
-		if len(scene) != 3 || len(eventPage(cfg, event)) != 3 {
+		if len(scene) != 3 || scene[1].Value != label(language, "smart") || d.current == nil || len(eventPage(cfg, event)) != 3 {
 			t.Fatalf("unexpected footer: %+v", scene)
 		}
 	}

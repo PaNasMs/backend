@@ -88,7 +88,7 @@ func readConfig(path string) (Settings, error) {
 	if e = json.Unmarshal(raw, &s); e != nil {
 		return s, e
 	}
-	s.normalizeLayout()
+	s.NormalizeLayout()
 	return s, s.Validate()
 }
 func Supported() bool {
@@ -174,7 +174,7 @@ func Configure(ctx context.Context, in io.Reader) error {
 	if d.Decode(&s) != nil || d.Decode(new(any)) != io.EOF {
 		return errors.New("Invalid OLED settings")
 	}
-	s.normalizeLayout()
+	s.NormalizeLayout()
 	if e := s.Validate(); e != nil {
 		return e
 	}
@@ -235,7 +235,7 @@ func Restore(ctx context.Context) error {
 	return applyService(ctx, s)
 }
 
-func (s *Settings) normalizeLayout() {
+func (s *Settings) NormalizeLayout() {
 	switch s.Layout {
 	case "compact", "disks", "pages", "storage":
 		s.Layout = "large"

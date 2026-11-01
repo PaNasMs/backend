@@ -125,7 +125,7 @@ func TestOldLayoutsNormalizeToLarge(t *testing.T) {
 		cfg.Enabled = true
 		cfg.ShowIP, cfg.ShowCPU, cfg.ShowDisks = false, false, false
 		cfg.Brightness = 5
-		cfg.normalizeLayout()
+		cfg.NormalizeLayout()
 		if cfg.Layout != "large" || cfg.Brightness != 5 || !cfg.ShowIP || cfg.Validate() != nil {
 			t.Fatal(cfg)
 		}

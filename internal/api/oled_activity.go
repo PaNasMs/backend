@@ -115,12 +115,16 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 			continue
 		}
 		at, _ := time.Parse(time.RFC3339Nano, alert.Updated)
+		target := ""
+		if strings.HasPrefix(alert.ID, "smart:/dev/") || strings.HasPrefix(alert.ID, "heat:/dev/") {
+			target = filepath.Base(alert.ID)
+		}
 		severity := alert.Severity
 		if !alert.Active && (strings.HasPrefix(alert.ID, "smart:") || strings.HasPrefix(alert.ID, "heat:") || alert.ID == "cpu-hot" || alert.ID == "system-full" || alert.ID == "cooling-stale") {
 			kind = "problem-resolved"
 			severity = "success"
 		}
-		a.Events = append(a.Events, oled.Event{ID: alert.ID, Revision: alert.Updated, Kind: kind, Severity: severity, Active: alert.Active, At: at})
+		a.Events = append(a.Events, oled.Event{ID: alert.ID, Revision: alert.Updated, Kind: kind, Target: target, Severity: severity, Active: alert.Active, At: at})
 	}
 	unique := map[string]oled.Event{}
 	for _, e := range a.Events {

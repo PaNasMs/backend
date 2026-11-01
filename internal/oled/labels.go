@@ -1,6 +1,7 @@
 package oled
 
 var labels = map[string][3]string{
+	"network": {"NETWORK", "СЕТЬ", "МЕРЕЖА"}, "cpu-temperature": {"CPU TEMPERATURE", "ТЕМПЕРАТУРА CPU", "ТЕМПЕРАТУРА CPU"}, "disk-temperature": {"DISK TEMPERATURE", "ТЕМПЕРАТУРА ДИСКА", "ТЕМПЕРАТУРА ДИСКА"}, "disk": {"DISK", "ДИСК", "ДИСК"},
 	"read-only":         {"READ ONLY", "ТОЛЬКО ЧТЕНИЕ", "ЛИШЕ ЧИТАННЯ"},
 	"starting-services": {"STARTING SERVICES", "ЗАПУСК СЛУЖБ", "ЗАПУСК СЛУЖБ"},
 	"checking":          {"CHECKING", "ПРОВЕРКА", "ПЕРЕВІРКА"}, "downloading": {"DOWNLOADING", "ЗАГРУЗКА", "ЗАВАНТАЖЕННЯ"}, "preparing": {"PREPARING", "ПОДГОТОВКА", "ПІДГОТОВКА"}, "backing-up": {"BACKING UP", "РЕЗЕРВНАЯ КОПИЯ", "РЕЗЕРВНА КОПІЯ"}, "installing": {"INSTALLING", "УСТАНОВКА", "ВСТАНОВЛЕННЯ"}, "verifying": {"VERIFYING", "ПРОВЕРКА", "ПЕРЕВІРКА"}, "rolling-back": {"ROLLING BACK", "ОТКАТ", "ВІДКОЧУВАННЯ"}, "problem-resolved": {"PROBLEM RESOLVED", "ПРОБЛЕМА УСТРАНЕНА", "ПРОБЛЕМУ УСУНЕНО"},

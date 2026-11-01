@@ -171,19 +171,23 @@ func (d *ActivityDisplay) Scene(cfg Settings, data Snapshot, a Activity, fresh b
 		}
 		return taskPage(cfg, tasks[index], index, len(tasks), now)
 	}
-	if problems := activeProblems(a); cfg.ShowEvents && len(problems) > 0 && d.page%2 == 1 {
-		return eventPage(cfg, problems[(d.page/2)%len(problems)])
+	page := d.page
+	if problems := activeProblems(a); cfg.ShowEvents && len(problems) > 0 {
+		if page%2 == 1 {
+			return eventPage(cfg, problems[(page/2)%len(problems)])
+		}
+		page /= 2
 	}
 	if cfg.Layout == "storage" {
-		return storagePage(cfg, a, d.page)
-	}
-	if cfg.Layout == "pages" && d.page%2 == 1 {
-		return storagePage(cfg, a, d.page/2)
+		return storagePage(cfg, a, page)
 	}
 	if cfg.Layout == "pages" {
-		return Compose(cfg, data, d.page/2)
+		if page%2 == 1 {
+			return storagePage(cfg, a, page/2)
+		}
+		return Compose(cfg, data, page/2)
 	}
-	return Compose(cfg, data, d.page)
+	return Compose(cfg, data, page)
 }
 func activeProblems(a Activity) []Event {
 	var result []Event
@@ -232,7 +236,7 @@ func taskPage(cfg Settings, t Task, index, total int, now time.Time) []Text {
 	}
 	scene = append(scene, fitted(value, 26, 2))
 	detail := label(cfg.Language, "working")
-	if t.Remaining != nil && *t.Remaining >= 0 && !math.IsInf(*t.Remaining, 0) && !math.IsNaN(*t.Remaining) {
+	if t.State == "running" && t.Remaining != nil && *t.Remaining >= 0 && !math.IsInf(*t.Remaining, 0) && !math.IsNaN(*t.Remaining) {
 		detail = fmt.Sprintf("~ %.0f %s", math.Ceil(*t.Remaining/60), label(cfg.Language, "min-left"))
 	} else if !t.Started.IsZero() && !now.Before(t.Started) {
 		detail = fmt.Sprintf("%s %dm", label(cfg.Language, "elapsed"), int(now.Sub(t.Started).Minutes()))

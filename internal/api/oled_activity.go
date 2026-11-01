@@ -20,8 +20,12 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 	for _, ar := range storage.Arrays {
 		state := "unknown"
 		switch ar.State {
-		case "clean", "active", "active-idle", "readonly", "read-auto":
-			state = "healthy"
+		case "clean", "active", "active-idle", "read-auto":
+			if ar.Degraded == "0" {
+				state = "healthy"
+			}
+		case "readonly":
+			state = "read-only"
 		case "inactive", "clear", "suspended":
 			state = "inactive"
 		}
@@ -34,7 +38,11 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 		}
 		a.Arrays = append(a.Arrays, oled.ArrayStatus{Name: name, State: state})
 		if state != "healthy" {
-			a.Events = append(a.Events, oled.Event{ID: "raid:" + name, Revision: state, Kind: "raid-problem", Target: name, Severity: "critical", Active: true, At: now})
+			severity := "critical"
+			if state == "unknown" || state == "read-only" {
+				severity = "warning"
+			}
+			a.Events = append(a.Events, oled.Event{ID: "raid:" + name, Revision: state, Kind: "raid-problem", Target: name, Severity: severity, Active: true, At: now})
 		}
 		kind := "raid-" + ar.Sync
 		switch ar.Sync {
@@ -56,6 +64,9 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 		source, _ := m["source"].(string)
 		target, _ := m["target"].(string)
 		device, _ := m["maj:min"].(string)
+		if device == "" {
+			device = source
+		}
 		if !strings.HasPrefix(source, "/dev/") || seenMounts[device] {
 			continue
 		}

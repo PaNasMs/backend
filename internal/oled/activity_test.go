@@ -174,3 +174,22 @@ func TestRAIDCompletionOnlyWithConfirmedHealthyArray(t *testing.T) {
 		t.Fatal(text)
 	}
 }
+
+func TestProblemsDoNotStarveStorageRotation(t *testing.T) {
+	now := time.Now()
+	free := 1024.0
+	cfg := Defaults()
+	cfg.Layout = "pages"
+	cfg.ShowTasks = false
+	a := Activity{StorageOK: true, Arrays: []ArrayStatus{{"md0", "degraded"}}, Volumes: []Volume{{"sda", &free}}, Events: []Event{{ID: "problem", Revision: "1", Kind: "raid-problem", Severity: "warning", Active: true, At: now.Add(-time.Hour)}}}
+	d := &ActivityDisplay{}
+	text := ""
+	for i := 0; i < 12; i++ {
+		text += sceneText(d.Scene(cfg, Snapshot{IP: "192.168.1.100"}, a, true, now.Add(time.Duration(i*cfg.PageSeconds)*time.Second)))
+	}
+	for _, want := range []string{"DEGRADED", "FREE", "192.168.1.100", "ATTENTION"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %s: %s", want, text)
+		}
+	}
+}

@@ -25,7 +25,7 @@ func newHomeFixture(t *testing.T, phase string) *homeFixture {
 	t.Helper()
 	f := &homeFixture{root: t.TempDir()}
 	f.state = homeJournal{Source: filepath.Join(f.root, "source"), Target: filepath.Join(f.root, "target"), Backup: filepath.Join(f.root, ".panasms-home-test"), Phase: phase, Nologin: "owned home maintenance\n"}
-	for _, p := range []string{f.state.Source, f.state.Target, f.state.Backup} {
+	for _, p := range []string{f.state.Source, f.state.Target, f.state.Backup, f.state.Target + "/alice"} {
 		if err := os.Mkdir(p, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -376,5 +376,36 @@ func TestHomesMaintenancePublicationWaitsForDurableJournal(t *testing.T) {
 	}
 	if paths, _ := filepath.Glob(f.root + "/.panasms-home-nologin-*"); len(paths) != 0 {
 		t.Fatal("temporary maintenance marker leaked", paths)
+	}
+}
+
+func TestHomesRecoveryAcceptsExistingNSSNames(t *testing.T) {
+	for _, name := range []string{"Alice.Example", "DOMAIN\\alice", "machine$", strings.Repeat("u", 32)} {
+		t.Run(name, func(t *testing.T) {
+			f := newHomeFixture(t, "committed")
+			f.state.Users[0].Name, f.current.Name = name, name
+			f.save(t)
+			if _, err := f.s.recover(context.Background(), nil); err != nil {
+				t.Fatal(err)
+			}
+			assertHomeFile(t, f.state.Target+"/copied", "copied")
+			if _, err := os.Stat(f.s.journal); !os.IsNotExist(err) {
+				t.Fatal("valid NSS account stranded recovery", err)
+			}
+		})
+	}
+}
+
+func TestHomesCommittedRecoveryPreservesOriginalWhenUserCopyMissing(t *testing.T) {
+	f := newHomeFixture(t, "committed")
+	if err := os.Remove(f.state.Users[0].New); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.recover(context.Background(), nil); err == nil {
+		t.Fatal("missing destination home accepted for destructive cleanup")
+	}
+	assertHomeFile(t, f.state.Backup+"/previous/original", "original")
+	if _, err := os.Stat(f.s.journal); err != nil {
+		t.Fatal("recovery evidence removed", err)
 	}
 }

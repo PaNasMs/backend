@@ -184,6 +184,9 @@ func (s *homeService) inspect(ctx context.Context, destination string) (string, 
 	users := homeAffected(source, all)
 	for _, u := range all {
 		if strings.HasPrefix(u.Dir, source+"/") {
+			if !homeAccountName(u.Name) {
+				return "", "", nil, reject("Invalid home-move account state; data was preserved")
+			}
 			if u.UID == 0 {
 				return "", "", nil, reject("Root home cannot be moved")
 			}

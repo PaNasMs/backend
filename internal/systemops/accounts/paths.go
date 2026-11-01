@@ -182,7 +182,7 @@ func homeVolume(m mount) error {
 		}
 	}
 	if !local[m.Device] || unsafe[m.Device] {
-		return reject("Home folders require a permanent local disk; removable and USB devices are not supported")
+		return reject("Home folders cannot be stored on USB or removable devices")
 	}
 	if m.Target != "/" {
 		var configured struct {
@@ -198,7 +198,7 @@ func homeVolume(m mount) error {
 			}
 		}
 		if !found {
-			return reject("Configure this volume to mount automatically before moving home folders")
+			return reject("Configure automatic mounting for the destination volume first")
 		}
 	}
 	return nil

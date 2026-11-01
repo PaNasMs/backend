@@ -52,6 +52,10 @@ func homeCheckIdentity(path string, expected []uint64) error {
 	return nil
 }
 
+func homeAccountName(name string) bool {
+	return name != "" && !strings.HasPrefix(name, "-") && !strings.ContainsAny(name, ":\x00\r\n")
+}
+
 func (s *homeService) readJournal() (*homeJournal, error) {
 	raw, err := os.ReadFile(s.journal)
 	if os.IsNotExist(err) {
@@ -94,7 +98,7 @@ func (s *homeService) readJournal() (*homeJournal, error) {
 		if _, err := systemops.CleanPath(u.New); err != nil {
 			return nil, err
 		}
-		if _, err := systemops.Name(u.Name); err != nil || seen[u.Name] || !strings.HasPrefix(u.Old, state.Source+"/") || u.New != state.Target+strings.TrimPrefix(u.Old, state.Source) {
+		if !homeAccountName(u.Name) || seen[u.Name] || !strings.HasPrefix(u.Old, state.Source+"/") || u.New != state.Target+strings.TrimPrefix(u.Old, state.Source) {
 			return nil, reject("Invalid home-move account state; data was preserved")
 		}
 		seen[u.Name] = true
@@ -160,8 +164,9 @@ func (s *homeService) recover(ctx context.Context, r *systemops.Reporter) (json.
 		return nil, reject("Default home location changed; recovery stopped and data was preserved")
 	}
 	var targetIdentity []uint64
+	var target *os.File
 	if state.Phase == "committed" {
-		target, err := homePin(state.Target, state.TargetIdentity)
+		target, err = homePin(state.Target, state.TargetIdentity)
 		if err != nil {
 			return nil, err
 		}
@@ -251,6 +256,15 @@ func (s *homeService) recover(ctx context.Context, r *systemops.Reporter) (json.
 			}
 			if err := homeCheckIdentity(state.Target, targetIdentity); err != nil {
 				return nil, err
+			}
+			for _, u := range state.Users {
+				if err := noLinks(u.New); err != nil {
+					return nil, err
+				}
+				relative, _ := filepath.Rel(state.Target, u.New)
+				if _, err := homeIdentity(filepath.Join(homePinnedPath(target), relative)); err != nil {
+					return nil, reject("Home volume changed or is unavailable; data was preserved")
+				}
 			}
 			mounts, err := s.mounts(ctx)
 			if err != nil {

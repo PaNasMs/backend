@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,10 @@ func (e *homeBusy) Error() string {
 		labels = append(labels, b.User+": "+b.Title)
 	}
 	return "Home folders are in use. Close these sessions or applications: " + strings.Join(labels, "; ")
+}
+
+func homeProcessGone(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH)
 }
 
 func (s *homeService) processApp(ctx context.Context, process, label string, descriptions map[string]string) (string, string, string, error) {
@@ -109,7 +114,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 		}
 		process := filepath.Join(s.proc, entry.Name())
 		info, err := os.Stat(process)
-		if os.IsNotExist(err) {
+		if homeProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -117,7 +122,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 		}
 		owner := int(info.Sys().(*syscall.Stat_t).Uid)
 		status, err := os.ReadFile(filepath.Join(process, "status"))
-		if os.IsNotExist(err) {
+		if homeProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -129,7 +134,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 		_, used := ids[owner]
 		if !used {
 			fds, err := os.ReadDir(filepath.Join(process, "fd"))
-			if os.IsNotExist(err) {
+			if homeProcessGone(err) {
 				continue
 			}
 			if err != nil {
@@ -145,7 +150,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 					used = true
 					break
 				}
-				if err != nil && !os.IsNotExist(err) && !os.IsPermission(err) {
+				if err != nil && !homeProcessGone(err) && !os.IsPermission(err) {
 					return nil, err
 				}
 			}
@@ -154,7 +159,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(process, "comm"))
-		if os.IsNotExist(err) {
+		if homeProcessGone(err) {
 			continue
 		}
 		if err != nil {
@@ -162,7 +167,7 @@ func (s *homeService) blockers(ctx context.Context, source string, users []passw
 		}
 		label := strings.TrimSpace(string(raw))
 		title, kind, unit, err := s.processApp(ctx, process, label, descriptions)
-		if os.IsNotExist(err) {
+		if homeProcessGone(err) {
 			continue
 		}
 		if err != nil {

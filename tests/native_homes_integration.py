@@ -261,7 +261,7 @@ def recover():
     assert not JOURNAL.exists() and not Path('/run/nologin').exists()
 
 
-def interrupted(stage, expected, legacy=False):
+def interrupted(stage, expected, legacy=False, missing_home=False):
     request = plan()
     Path('/fixture/pause').write_text(stage)
     process = subprocess.Popen([HELPER, 'execute', 'admin'], stdin=subprocess.PIPE,
@@ -290,6 +290,14 @@ def interrupted(stage, expected, legacy=False):
             user.pop('uid', None)
             user.pop('gid', None)
         JOURNAL.write_text(json.dumps(state))
+    if missing_home:
+        shutil.rmtree(Path(TARGET) / 'alice')
+        failed = subprocess.run([HELPER, 'homes', 'recover'], capture_output=True, text=True)
+        assert failed.returncode != 0 and JOURNAL.exists(), failed.stdout
+        state = json.loads(JOURNAL.read_text())
+        original = str(Path(state['backup']) / 'previous') if (Path(state['backup']) / 'previous').exists() else '/home'
+        assert snapshot(original) == expected
+        command('/usr/bin/rsync', '-aHAXS', '--numeric-ids', original + '/alice', TARGET + '/')
     recover()
     committed = stage in ('journal-committed', 'old-tree-renamed')
     base = TARGET if committed else '/home'
@@ -300,7 +308,7 @@ def interrupted(stage, expected, legacy=False):
         assert command('/usr/bin/getent', 'passwd', name).split(':')[5] == base + '/' + name
     if committed:
         assert not Path('/home').exists()
-    print('PASS interrupted', stage, 'legacy' if legacy else 'native', flush=True)
+    print('PASS interrupted', stage, 'legacy' if legacy else 'native', 'missing-home protected' if missing_home else '', flush=True)
 
 
 def cancelled_copy(expected):
@@ -351,6 +359,18 @@ def scenarios():
     assert not moved.get('error') and snapshot(TARGET) == expected, moved
     assert not Path('/home').exists() and not JOURNAL.exists() and not Path('/run/nologin').exists()
     print('PASS real move, ownership, ACL, xattr, hardlink, sparse data and cleanup', flush=True)
+    reset()
+    expected_nss = snapshot('/home')
+    for path in ('/etc/passwd', '/etc/shadow'):
+        value = Path(path).read_text().replace('\nalice:', '\nAlice.Example:')
+        Path(path).write_text(value)
+    moved_nss = invoke('execute', plan())
+    assert not moved_nss.get('error') and not JOURNAL.exists() and not Path('/run/nologin').exists(), moved_nss
+    assert snapshot(TARGET) == expected_nss
+    assert command('/usr/bin/getent', 'passwd', 'Alice.Example').split(':')[5] == TARGET + '/alice'
+    print('PASS existing NSS account name moves and committed cleanup completes', flush=True)
+    reset()
+    interrupted('journal-committed', snapshot('/home'), missing_home=True)
     for stage in ('journal-copying', 'target-created', 'copy-verified', 'journal-switching',
                   'one-user-switched', 'defaults-switched', 'journal-committed', 'old-tree-renamed'):
         reset()

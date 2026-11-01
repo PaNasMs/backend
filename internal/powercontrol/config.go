@@ -25,10 +25,13 @@ type Settings struct {
 	GPIO    int  `json:"gpio"`
 }
 type State struct {
-	Config         Settings `json:"config"`
-	Supported      bool     `json:"supported"`
-	ActiveGPIO     *int     `json:"activeGPIO"`
-	RebootRequired bool     `json:"rebootRequired"`
+	Config         Settings       `json:"config"`
+	Supported      bool           `json:"supported"`
+	ActiveGPIO     *int           `json:"activeGPIO"`
+	RebootRequired bool           `json:"rebootRequired"`
+	Configured     bool           `json:"configured"`
+	Button         ButtonSettings `json:"button"`
+	ButtonState    string         `json:"buttonState"`
 }
 
 func Defaults() Settings { return Settings{GPIO: 25} }
@@ -154,7 +157,7 @@ func Read() (State, error) {
 	return readState("/", supported())
 }
 func readState(root string, supported bool) (State, error) {
-	state := State{Config: Defaults(), Supported: supported}
+	state := State{Config: Defaults(), Supported: supported, Button: ButtonSettings{GPIO: 22}, ButtonState: "disabled"}
 	raw, e := os.ReadFile(filepath.Join(root, bootPath))
 	if os.IsNotExist(e) && !state.Supported {
 		return state, nil
@@ -162,6 +165,12 @@ func readState(root string, supported bool) (State, error) {
 	if e != nil {
 		return state, e
 	}
+	state.Configured = strings.Contains(string(raw), begin)
+	state.Button, e = parseButton(raw)
+	if e != nil {
+		return state, e
+	}
+	state.ButtonState = buttonStatus()
 	state.Config, _, e = parse(raw)
 	if e != nil {
 		return state, e
@@ -182,6 +191,9 @@ func CheckPins(pins ...int) error {
 }
 func (state State) checkPins(pins ...int) error {
 	for _, pin := range pins {
+		if state.Button.Enabled && pin == state.Button.GPIO {
+			return fmt.Errorf("GPIO%d is reserved for the shutdown button", pin)
+		}
 		if state.Config.Enabled && pin == state.Config.GPIO || state.ActiveGPIO != nil && pin == *state.ActiveGPIO {
 			return fmt.Errorf("GPIO%d is reserved for power control", pin)
 		}
@@ -283,16 +295,20 @@ func checkIncludes(path, firmware string, seen map[string]bool, main bool) error
 
 type Update struct {
 	Settings
-	Expected Settings `json:"expected"`
+	Expected       Settings        `json:"expected"`
+	Button         *ButtonSettings `json:"button,omitempty"`
+	ExpectedButton *ButtonSettings `json:"expectedButton,omitempty"`
 }
 
 var ErrConflict = errors.New("Power control settings changed; reload before saving")
 
 func Decode(in io.Reader) (Update, error) {
 	var body struct {
-		Enabled  *bool     `json:"enabled"`
-		GPIO     *int      `json:"gpio"`
-		Expected *Settings `json:"expected"`
+		Enabled        *bool           `json:"enabled"`
+		GPIO           *int            `json:"gpio"`
+		Expected       *Settings       `json:"expected"`
+		Button         *ButtonSettings `json:"button"`
+		ExpectedButton *ButtonSettings `json:"expectedButton"`
 	}
 	d := json.NewDecoder(io.LimitReader(in, 4097))
 	d.DisallowUnknownFields()
@@ -303,7 +319,18 @@ func Decode(in io.Reader) (Update, error) {
 	if e := body.Expected.Validate(); e != nil {
 		return Update{}, e
 	}
-	return Update{Settings: s, Expected: *body.Expected}, s.Validate()
+	if (body.Button == nil) != (body.ExpectedButton == nil) {
+		return Update{}, errors.New("Button settings and expected settings are required together")
+	}
+	if body.Button != nil {
+		if e := body.Button.Validate(); e != nil {
+			return Update{}, e
+		}
+		if e := body.ExpectedButton.Validate(); e != nil {
+			return Update{}, e
+		}
+	}
+	return Update{Settings: s, Expected: *body.Expected, Button: body.Button, ExpectedButton: body.ExpectedButton}, s.Validate()
 }
 func Configure(in io.Reader) error {
 	update, e := Decode(in)
@@ -331,7 +358,28 @@ func Configure(in io.Reader) error {
 	if e != nil {
 		return e
 	}
+	button := state.Button
+	if update.Button != nil {
+		button = *update.Button
+	}
+	if button.Enabled {
+		if !s.Enabled {
+			return errors.New("Enable final power cut-off before enabling the shutdown button")
+		}
+		if button.GPIO == s.GPIO || state.ActiveGPIO != nil && button.GPIO == *state.ActiveGPIO {
+			return errors.New("Shutdown button and power cut-off require different GPIO pins")
+		}
+		if e = checkConfigured("/", button.GPIO); e != nil {
+			return e
+		}
+		if e = checkButtonAvailable(button.GPIO); e != nil {
+			return e
+		}
+	}
 	if s.Enabled {
+		if state.Button.Enabled && s.GPIO == state.Button.GPIO {
+			return errors.New("Disable the shutdown button before reusing its GPIO")
+		}
 		if e = checkConfigured("/", s.GPIO); e != nil {
 			return e
 		}
@@ -389,5 +437,19 @@ func renderUpdate(raw []byte, update Update) ([]byte, error) {
 	if current != update.Expected {
 		return nil, ErrConflict
 	}
-	return render(raw, update.Settings)
+	button, e := parseButton(raw)
+	if e != nil {
+		return nil, e
+	}
+	if update.Button != nil {
+		if update.ExpectedButton == nil || button != *update.ExpectedButton {
+			return nil, ErrConflict
+		}
+		button = *update.Button
+	}
+	next, e := render(raw, update.Settings)
+	if e != nil {
+		return nil, e
+	}
+	return renderButton(next, button)
 }

@@ -15,6 +15,7 @@ import (
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/cooling"
 	"panasms.local/backend/internal/management"
+	"panasms.local/backend/internal/powercontrol"
 	"panasms.local/backend/internal/profile"
 	"strconv"
 	"strings"
@@ -178,6 +179,7 @@ func main() {
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 0, WriteTimeout: 0, IdleTimeout: 15 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	go powercontrol.RunButton(ctx)
 	go func() {
 		<-ctx.Done()
 		closeCtx, c := context.WithTimeout(context.Background(), 5*time.Second)

@@ -1889,6 +1889,9 @@ components:
     PowerControlUpdate:
       type: object
       additionalProperties: false
+      dependentRequired:
+        button: [expectedButton]
+        expectedButton: [button]
       required: [enabled, gpio, expected]
       properties:
         enabled: {type: boolean}

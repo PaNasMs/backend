@@ -541,9 +541,9 @@ hardware before relying on unattended shutdown.
 
 ### OLED storage and activity
 
-The optional 128×64 display supports a **RAID and free space** layout. Rotating
-pages also include local filesystem availability and array health. The OLED
-language is independent of the browser language (English, Russian or Ukrainian).
+The optional 128×64 display uses one large IP/CPU/disk-temperature layout.
+Older layout settings migrate to this layout while retaining hardware settings.
+The OLED language is independent of the browser language (English, Russian or Ukrainian).
 
 Automatic task pages show system-managed RAID recovery/check/reshape, core jobs
 lasting at least ten seconds, system update phases, and file transfers streamed
@@ -554,7 +554,10 @@ outside PaNasMs (for example SMB) are not tracked by this feed.
 Events interrupt the current page for **20 seconds** by default, configurable
 from 15 to 60 seconds. Critical events preempt ordinary messages; repeated events
 are coalesced. Active problems remain in the page rotation until resolved. Task
-and event auto-display can be disabled separately. No private filenames, full
+and event auto-display can be disabled separately. CRC-only warnings acknowledged
+by a current administrator are suppressed only while the disk identity and counter
+match exactly; new CRC errors, other SMART faults and temperature warnings remain
+visible. Event frames do not include a web-interface footer. No private filenames, full
 paths, usernames or raw error messages are exported to the physical display.
 
 The core publishes a bounded snapshot to `/run/panasms-core/oled.json`, reusing

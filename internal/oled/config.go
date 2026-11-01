@@ -52,10 +52,10 @@ type State struct {
 }
 
 func Defaults() Settings {
-	return Settings{Language: "en", ShowTasks: true, ShowEvents: true, EventSeconds: 20, Layout: "compact", PageSeconds: 6, Brightness: 25, Bus: 1, SDA: 2, SCL: 3, Address: 0x3c, Controller: "ssd1306", ShowIP: true, ShowCPU: true, ShowDisks: true}
+	return Settings{Language: "en", ShowTasks: true, ShowEvents: true, EventSeconds: 20, Layout: "large", PageSeconds: 6, Brightness: 25, Bus: 1, SDA: 2, SCL: 3, Address: 0x3c, Controller: "ssd1306", ShowIP: true, ShowCPU: true, ShowDisks: true}
 }
 func (s Settings) Validate() error {
-	if s.Layout != "compact" && s.Layout != "large" && s.Layout != "disks" && s.Layout != "pages" && s.Layout != "storage" {
+	if s.Layout != "large" {
 		return errors.New("Invalid OLED layout")
 	}
 	if s.PageSeconds < 4 || s.PageSeconds > 60 {
@@ -71,7 +71,7 @@ func (s Settings) Validate() error {
 	if s.Brightness < 1 || s.Brightness > 100 || (s.Rotation != 0 && s.Rotation != 180) || !validPins || s.SCL != s.SDA+1 || s.Bus != bus || (s.Address != 0x3c && s.Address != 0x3d) || (s.Controller != "ssd1306" && s.Controller != "sh1106") {
 		return errors.New("Invalid OLED settings")
 	}
-	if s.Enabled && s.Layout != "storage" && !s.ShowIP && !s.ShowCPU && !s.ShowDisks {
+	if s.Enabled && !s.ShowIP && !s.ShowCPU && !s.ShowDisks {
 		return errors.New("Select at least one OLED reading")
 	}
 	return nil
@@ -88,6 +88,7 @@ func readConfig(path string) (Settings, error) {
 	if e = json.Unmarshal(raw, &s); e != nil {
 		return s, e
 	}
+	s.normalizeLayout()
 	return s, s.Validate()
 }
 func Supported() bool {
@@ -173,6 +174,7 @@ func Configure(ctx context.Context, in io.Reader) error {
 	if d.Decode(&s) != nil || d.Decode(new(any)) != io.EOF {
 		return errors.New("Invalid OLED settings")
 	}
+	s.normalizeLayout()
 	if e := s.Validate(); e != nil {
 		return e
 	}
@@ -231,4 +233,14 @@ func Restore(ctx context.Context) error {
 		return run(ctx, "systemctl", "disable", "--now", "panasms-oled.service")
 	}
 	return applyService(ctx, s)
+}
+
+func (s *Settings) normalizeLayout() {
+	switch s.Layout {
+	case "compact", "disks", "pages", "storage":
+		s.Layout = "large"
+		if !s.ShowIP && !s.ShowCPU && !s.ShowDisks {
+			s.ShowIP = true
+		}
+	}
 }

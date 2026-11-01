@@ -17,6 +17,7 @@ import (
 func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	s.Store.Alert("cpu-hot", "CPU temperature ≥ 80 °C", m.CPUTemperature != nil && *m.CPUTemperature >= 80)
 	s.Store.Alert("system-full", "Less than 5% free space on the system drive", m.SystemTotal > 0 && float64(m.SystemAvailable)/float64(m.SystemTotal) < 0.05)
+	var oledDisks []smartAlertDisk
 	state, e := s.readCooling()
 	if e == nil {
 		raw, _ := json.Marshal(state)
@@ -33,6 +34,9 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 		json.Unmarshal(raw, &v)
 		s.Store.Alert("cooling-stale", "Cooling telemetry is out of date", !v.Available)
 		for _, d := range v.Status.Disks {
+			if v.Available {
+				oledDisks = append(oledDisks, d.smartAlertDisk)
+			}
 			message := "SMART warning: " + d.Path
 			if d.Health == "failed" {
 				message = "SMART: disk failure: " + d.Path
@@ -95,7 +99,7 @@ func (s *Server) monitor(ctx context.Context, m system.Metrics) {
 	}
 	storage, storageErr := s.monitorDevices(ctx, jobs)
 	update := s.monitorUpdates(ctx)
-	s.publishOLED(storage, storageErr == nil, jobs, update)
+	s.publishOLED(storage, storageErr == nil, jobs, oledDisks, update)
 	if alerts, err := s.Store.Alerts(); err == nil {
 		data, _ := json.Marshal(alerts)
 		sum := sha256.Sum256(data)

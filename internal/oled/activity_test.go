@@ -122,6 +122,7 @@ func TestActivityFreshnessAndSettingsMigration(t *testing.T) {
 	cfg.ShowIP = false
 	cfg.ShowCPU = false
 	cfg.ShowDisks = false
+	cfg.normalizeLayout()
 	if err = cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +191,19 @@ func TestProblemsDoNotStarveStorageRotation(t *testing.T) {
 	for _, want := range []string{"DEGRADED", "FREE", "192.168.1.100", "ATTENTION"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %s: %s", want, text)
+		}
+	}
+}
+
+func TestEventFramesOmitWebUIFooter(t *testing.T) {
+	for _, language := range []string{"en", "ru", "uk"} {
+		cfg := Defaults()
+		cfg.Language = language
+		event := Event{ID: "test", Kind: "smart", Severity: "warning", Active: true, At: time.Now()}
+		d := &ActivityDisplay{}
+		scene := d.Scene(cfg, Snapshot{}, Activity{Events: []Event{event}}, true, event.At)
+		if len(scene) != 3 || len(eventPage(cfg, event)) != 3 {
+			t.Fatalf("unexpected footer: %+v", scene)
 		}
 	}
 }

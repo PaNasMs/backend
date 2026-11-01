@@ -292,3 +292,26 @@ func (s *Store) logWrite(operation, query string, args ...any) {
 		log.Printf("Store write failed (%s): %v", operation, err)
 	}
 }
+
+func (s *Store) SmartCRCBaselines() (map[string]map[string]uint64, error) {
+	rows, err := s.db.Query("SELECT username,value FROM preferences")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]map[string]uint64{}
+	for rows.Next() {
+		var user, raw string
+		if err := rows.Scan(&user, &raw); err != nil {
+			return nil, err
+		}
+		var prefs Preferences
+		if err := json.Unmarshal([]byte(raw), &prefs); err != nil {
+			return nil, err
+		}
+		if len(prefs.SmartCrcBaselines) > 0 {
+			result[user] = prefs.SmartCrcBaselines
+		}
+	}
+	return result, rows.Err()
+}

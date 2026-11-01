@@ -41,6 +41,9 @@ func (s Settings) Validate() error {
 	}
 	return nil
 }
+
+var ErrGPIOBusy = errors.New("GPIO settings are already being applied")
+
 func Lock() (func(), error) {
 	f, e := os.OpenFile("/run/panasms-hardware/gpio-settings.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
@@ -48,7 +51,10 @@ func Lock() (func(), error) {
 	}
 	if e = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); e != nil {
 		f.Close()
-		return nil, errors.New("GPIO settings are already being applied")
+		if errors.Is(e, unix.EWOULDBLOCK) {
+			return nil, ErrGPIOBusy
+		}
+		return nil, e
 	}
 	return func() { unix.Flock(int(f.Fd()), unix.LOCK_UN); f.Close() }, nil
 }

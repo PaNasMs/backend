@@ -177,6 +177,14 @@ func RunButton(ctx context.Context) {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	var nextCheck time.Time
+	var lastError string
+	reportError := func(e error) {
+		setButtonStatus("error")
+		if text := e.Error(); text != lastError {
+			log.Printf("shutdown button: %s", text)
+			lastError = text
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -186,6 +194,10 @@ func RunButton(ctx context.Context) {
 				nextCheck = now.Add(time.Second)
 				unlock, e := Lock()
 				if e != nil {
+					if !errors.Is(e, ErrGPIOBusy) {
+						closeLine()
+						reportError(e)
+					}
 					continue
 				}
 				state, e := Read()
@@ -193,12 +205,14 @@ func RunButton(ctx context.Context) {
 					closeLine()
 					setButtonStatus("disabled")
 					if e != nil {
-						setButtonStatus("error")
-						log.Printf("shutdown button: %v", e)
+						reportError(e)
+					} else {
+						lastError = ""
 					}
 				} else if !state.Config.Enabled || state.RebootRequired || state.Button.GPIO == state.Config.GPIO {
 					closeLine()
 					setButtonStatus("waitingForPowerControl")
+					lastError = ""
 				} else {
 					if settings != state.Button {
 						closeLine()
@@ -210,8 +224,7 @@ func RunButton(ctx context.Context) {
 							line, e = openButton(settings.GPIO)
 						}
 						if e != nil {
-							setButtonStatus("error")
-							log.Printf("shutdown button: %v", e)
+							reportError(e)
 						} else {
 							setButtonStatus("waitingForRelease")
 						}
@@ -225,14 +238,20 @@ func RunButton(ctx context.Context) {
 			value, e := line.Value()
 			if e != nil {
 				closeLine()
-				setButtonStatus("error")
-				log.Printf("shutdown button read: %v", e)
+				reportError(fmt.Errorf("read input: %w", e))
 				continue
+			}
+			if !gesture.fired {
+				lastError = ""
 			}
 			if gesture.sample(value, now) {
 				unlock, err := Lock()
 				if err != nil {
 					gesture = buttonGesture{}
+					if !errors.Is(err, ErrGPIOBusy) {
+						closeLine()
+						reportError(err)
+					}
 					continue
 				}
 				latest, err := Read()
@@ -247,8 +266,7 @@ func RunButton(ctx context.Context) {
 				cancel()
 				unlock()
 				if e != nil {
-					setButtonStatus("error")
-					log.Print(fmt.Errorf("shutdown button request: %w: %s", e, strings.TrimSpace(string(out))))
+					reportError(fmt.Errorf("request shutdown: %w: %s", e, strings.TrimSpace(string(out))))
 				}
 			} else if gesture.armed && !gesture.fired {
 				setButtonStatus("armed")

@@ -60,3 +60,19 @@ func TestTransferProgressUnknownSizeAndCleanup(t *testing.T) {
 		t.Fatal(alerts, err)
 	}
 }
+
+func TestOLEDExcludesOldInactiveAlertsAndAcknowledgedJobFailures(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-3 * time.Minute).Format(time.RFC3339)
+	recent := now.Add(-time.Second).Format(time.RFC3339)
+	alerts := []store.Alert{{ID: "device:old", Updated: old, Message: "Drive connected: old"}, {ID: "device:new", Updated: recent, Message: "Drive connected: new"}, {ID: "heat:/dev/sda", Updated: old, Active: true, Severity: "warning"}, {ID: "job:acknowledged", Updated: recent}}
+	a := oledActivity(system.Storage{}, true, nil, alerts, now)
+	if len(a.Events) != 2 {
+		t.Fatalf("old or acknowledged event retained: %+v", a.Events)
+	}
+	for _, e := range a.Events {
+		if e.ID != "device:new" && e.ID != "heat:/dev/sda" {
+			t.Fatal(e)
+		}
+	}
+}

@@ -115,6 +115,9 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 			continue
 		}
 		at, _ := time.Parse(time.RFC3339Nano, alert.Updated)
+		if !alert.Active && (now.Sub(at) >= 2*time.Minute || now.Before(at) || strings.HasPrefix(alert.ID, "job:")) {
+			continue
+		}
 		target := ""
 		if strings.HasPrefix(alert.ID, "smart:/dev/") || strings.HasPrefix(alert.ID, "heat:/dev/") {
 			target = filepath.Base(alert.ID)

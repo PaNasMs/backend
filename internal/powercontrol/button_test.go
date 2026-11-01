@@ -99,3 +99,15 @@ func TestInvalidButtonConfigAndInput(t *testing.T) {
 		t.Fatal("button not reserved for OLED/cooling")
 	}
 }
+
+func TestButtonDecodeRequiresExplicitEnabledAndGPIO(t *testing.T) {
+	for _, field := range []string{"button", "expectedButton"} {
+		for _, invalid := range []string{`{"gpio":22}`, `{"enabled":null,"gpio":22}`, `{"enabled":true}`, `{}`, `null`} {
+			body := `{"enabled":true,"gpio":25,"expected":{"enabled":true,"gpio":25},"button":{"enabled":false,"gpio":22},"expectedButton":{"enabled":false,"gpio":22}}`
+			body = strings.Replace(body, `"`+field+`":{"enabled":false,"gpio":22}`, `"`+field+`":`+invalid, 1)
+			if _, e := Decode(strings.NewReader(body)); e == nil {
+				t.Fatalf("accepted %s", body)
+			}
+		}
+	}
+}

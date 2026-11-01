@@ -313,8 +313,8 @@ func Decode(in io.Reader) (Update, error) {
 		Enabled        *bool           `json:"enabled"`
 		GPIO           *int            `json:"gpio"`
 		Expected       *Settings       `json:"expected"`
-		Button         *ButtonSettings `json:"button"`
-		ExpectedButton *ButtonSettings `json:"expectedButton"`
+		Button         json.RawMessage `json:"button"`
+		ExpectedButton json.RawMessage `json:"expectedButton"`
 	}
 	d := json.NewDecoder(io.LimitReader(in, 4097))
 	d.DisallowUnknownFields()
@@ -328,15 +328,18 @@ func Decode(in io.Reader) (Update, error) {
 	if (body.Button == nil) != (body.ExpectedButton == nil) {
 		return Update{}, errors.New("Button settings and expected settings are required together")
 	}
+	update := Update{Settings: s, Expected: *body.Expected}
 	if body.Button != nil {
-		if e := body.Button.Validate(); e != nil {
+		var button, expectedButton ButtonSettings
+		if e := json.Unmarshal(body.Button, &button); e != nil {
 			return Update{}, e
 		}
-		if e := body.ExpectedButton.Validate(); e != nil {
+		if e := json.Unmarshal(body.ExpectedButton, &expectedButton); e != nil {
 			return Update{}, e
 		}
+		update.Button, update.ExpectedButton = &button, &expectedButton
 	}
-	return Update{Settings: s, Expected: *body.Expected, Button: body.Button, ExpectedButton: body.ExpectedButton}, s.Validate()
+	return update, s.Validate()
 }
 func Configure(in io.Reader) error {
 	update, e := Decode(in)

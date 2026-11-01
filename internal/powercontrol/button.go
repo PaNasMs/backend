@@ -1,6 +1,7 @@
 package powercontrol
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,20 @@ import (
 type ButtonSettings struct {
 	Enabled bool `json:"enabled"`
 	GPIO    int  `json:"gpio"`
+}
+
+func (b *ButtonSettings) UnmarshalJSON(raw []byte) error {
+	var value struct {
+		Enabled *bool `json:"enabled"`
+		GPIO    *int  `json:"gpio"`
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&value) != nil || d.Decode(new(any)) != io.EOF || value.Enabled == nil || value.GPIO == nil {
+		return errors.New("Shutdown button settings require explicit enabled and gpio fields")
+	}
+	*b = ButtonSettings{Enabled: *value.Enabled, GPIO: *value.GPIO}
+	return b.Validate()
 }
 
 func (b ButtonSettings) Validate() error {

@@ -88,6 +88,12 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 		}
 		a.Volumes = append(a.Volumes, oled.Volume{Name: name, Available: available})
 	}
+	acknowledgedJobs := map[string]bool{}
+	for _, alert := range alerts {
+		if !alert.Active && strings.HasPrefix(alert.ID, "job:") {
+			acknowledgedJobs[strings.TrimPrefix(alert.ID, "job:")] = true
+		}
+	}
 	for _, j := range jobs {
 		started, _ := time.Parse(time.RFC3339Nano, j.Created)
 		updated, _ := time.Parse(time.RFC3339Nano, j.Updated)
@@ -101,7 +107,7 @@ func oledActivity(storage system.Storage, storageOK bool, jobs []management.Job,
 				state = "cancelling"
 			}
 			a.Tasks = append(a.Tasks, oled.Task{ID: "job:" + j.ID, Kind: kind, State: state, Percent: j.Percent, Started: started})
-		} else if now.Sub(updated) >= 0 && now.Sub(updated) < 2*time.Minute && updated.Sub(started) >= 10*time.Second {
+		} else if !acknowledgedJobs[j.ID] && now.Sub(updated) >= 0 && now.Sub(updated) < 2*time.Minute && updated.Sub(started) >= 10*time.Second {
 			severity := "success"
 			if j.Status != "succeeded" {
 				severity = "warning"

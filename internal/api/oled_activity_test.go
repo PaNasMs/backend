@@ -66,12 +66,13 @@ func TestOLEDExcludesOldInactiveAlertsAndAcknowledgedJobFailures(t *testing.T) {
 	old := now.Add(-3 * time.Minute).Format(time.RFC3339)
 	recent := now.Add(-time.Second).Format(time.RFC3339)
 	alerts := []store.Alert{{ID: "device:old", Updated: old, Message: "Drive connected: old"}, {ID: "device:new", Updated: recent, Message: "Drive connected: new"}, {ID: "heat:/dev/sda", Updated: old, Active: true, Severity: "warning"}, {ID: "job:acknowledged", Updated: recent}}
-	a := oledActivity(system.Storage{}, true, nil, alerts, now)
-	if len(a.Events) != 2 {
+	jobs := []management.Job{{ID: "acknowledged", Action: "files.copy", Status: "failed", Created: old, Updated: recent}, {ID: "other", Action: "files.copy", Status: "succeeded", Created: old, Updated: recent}}
+	a := oledActivity(system.Storage{}, true, jobs, alerts, now)
+	if len(a.Events) != 3 {
 		t.Fatalf("old or acknowledged event retained: %+v", a.Events)
 	}
 	for _, e := range a.Events {
-		if e.ID != "device:new" && e.ID != "heat:/dev/sda" {
+		if e.ID != "device:new" && e.ID != "heat:/dev/sda" && e.ID != "job:other" {
 			t.Fatal(e)
 		}
 	}

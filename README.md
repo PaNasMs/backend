@@ -537,3 +537,29 @@ silently replaced. Move wiring only with the power supply disconnected.
 To disable, save `enabled:false` and restart; the active driver remains installed
 until that restart. Verify both orderly power-off and restart on the assembled
 hardware before relying on unattended shutdown.
+
+
+### OLED storage and activity
+
+The optional 128×64 display supports a **RAID and free space** layout. Rotating
+pages also include local filesystem availability and array health. The OLED
+language is independent of the browser language (English, Russian or Ukrainian).
+
+Automatic task pages show system-managed RAID recovery/check/reshape, core jobs
+lasting at least ten seconds, system update phases, and file transfers streamed
+through the core Files API. Percentages are measured; unknown progress shows the
+operation state and elapsed time. Direct cloud-provider downloads and transfers
+outside PaNasMs (for example SMB) are not tracked by this feed.
+
+Events interrupt the current page for **20 seconds** by default, configurable
+from 15 to 60 seconds. Critical events preempt ordinary messages; repeated events
+are coalesced. Active problems remain in the page rotation until resolved. Task
+and event auto-display can be disabled separately. No private filenames, full
+paths, usernames or raw error messages are exported to the physical display.
+
+The core publishes a bounded snapshot to `/run/panasms-core/oled.json`, reusing
+its existing storage, job and notification monitoring. The OLED daemon does not
+poll SMART or wake disks for additional health reads. A snapshot older than 30
+seconds is unavailable, never presented as current. Before the core is ready,
+the display can show service startup (after the OLED daemon itself has started).
+Early firmware/bootloader output is not covered.

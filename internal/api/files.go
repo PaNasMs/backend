@@ -48,7 +48,19 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	req, e := http.NewRequestWithContext(r.Context(), r.Method, "http://agent/files?"+v.Encode(), r.Body)
+	body := r.Body
+	var transfer *transferActivity
+	success := false
+	if r.Method == "PUT" {
+		transfer = s.startTransfer("upload", r.ContentLength)
+		body = &transferReader{ReadCloser: r.Body, activity: transfer}
+	}
+	defer func() {
+		if transfer != nil {
+			s.finishTransfer(transfer, success)
+		}
+	}()
+	req, e := http.NewRequestWithContext(r.Context(), r.Method, "http://agent/files?"+v.Encode(), body)
 	if e != nil {
 		fail(w, 400, "Invalid request")
 		return
@@ -80,11 +92,16 @@ func (s *Server) files(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
+	if r.Method == "GET" && !thumbnail {
+		transfer = s.startTransfer("download", resp.ContentLength)
+		resp.Body = &transferReader{ReadCloser: resp.Body, activity: transfer}
+	}
 	w.WriteHeader(resp.StatusCode)
 	n, err := io.Copy(w, resp.Body)
 	if err != nil || (r.Method == "GET" && n != resp.ContentLength) {
 		panic(http.ErrAbortHandler)
 	}
+	success = true
 }
 
 // directLink asks the Files module for a short-lived provider link to a cloud file. It returns ""

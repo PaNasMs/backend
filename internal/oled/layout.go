@@ -35,17 +35,17 @@ func Compose(s Settings, data Snapshot, page int) []Text {
 	case "pages":
 		var pages [][]Text
 		if s.ShowIP {
-			pages = append(pages, append([]Text{{"NETWORK", 2, 2, 1}}, rows(ipRows(s, data.IP), 25, 10)...))
+			pages = append(pages, append([]Text{{label(s.Language, "network"), 2, 2, 1}}, rows(ipRows(s, data.IP), 25, 10)...))
 		}
 		if s.ShowCPU {
-			pages = append(pages, []Text{{"CPU TEMPERATURE", 2, 2, 1}, fitted(temperature(data.CPU), 24, 3)})
+			pages = append(pages, []Text{{label(s.Language, "cpu-temperature"), 2, 2, 1}, fitted(temperature(data.CPU), 24, 3)})
 		}
 		if s.ShowDisks {
 			if len(data.Disks) == 0 {
-				pages = append(pages, []Text{{"DISK TEMPERATURE", 2, 2, 1}, fitted("--", 24, 3)})
+				pages = append(pages, []Text{{label(s.Language, "disk-temperature"), 2, 2, 1}, fitted("--", 24, 3)})
 			}
 			for _, disk := range data.Disks {
-				pages = append(pages, []Text{{short("DISK "+disk.Label, 20), 2, 2, 1}, fitted(temperature(disk.Temperature), 24, 3)})
+				pages = append(pages, []Text{{short(label(s.Language, "disk")+" "+disk.Label, 20), 2, 2, 1}, fitted(temperature(disk.Temperature), 24, 3)})
 			}
 		}
 		if len(pages) == 0 {

@@ -19,16 +19,17 @@ type Disk struct {
 	Temperature *float64
 }
 type Snapshot struct {
-	Host, IP string
-	CPU      *float64
-	Disks    []Disk
-	Uptime   string
+	BootSeconds float64
+	Host, IP    string
+	CPU         *float64
+	Disks       []Disk
+	Uptime      string
 }
 
 func ReadSnapshot(s Settings) Snapshot {
 	var data Snapshot
 	data.Host, _ = os.Hostname()
-	if s.ShowIP {
+	if s.ShowIP || s.ShowEvents {
 		data.IP = primaryIP()
 	}
 	if s.ShowCPU {
@@ -57,12 +58,13 @@ func ReadSnapshot(s Settings) Snapshot {
 		}
 		sort.Slice(data.Disks, func(i, j int) bool { return data.Disks[i].Label < data.Disks[j].Label })
 	}
-	if s.Layout == "compact" {
+	{
 		raw, _ := os.ReadFile("/proc/uptime")
 		fields := strings.Fields(string(raw))
 		if len(fields) > 0 {
 			seconds, e := strconv.ParseFloat(fields[0], 64)
 			if e == nil {
+				data.BootSeconds = seconds
 				minutes := int64(seconds) / 60
 				data.Uptime = fmt.Sprintf("%dD %02d:%02d", minutes/1440, minutes/60%24, minutes%60)
 			}

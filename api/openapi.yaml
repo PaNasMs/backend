@@ -1879,22 +1879,37 @@ components:
       properties:
         enabled: {type: boolean, default: false}
         gpio: {type: integer, minimum: 2, maximum: 27, default: 25}
+    PowerButtonSettings:
+      type: object
+      additionalProperties: false
+      required: [enabled, gpio]
+      properties:
+        enabled: {type: boolean, default: false}
+        gpio: {type: integer, minimum: 2, maximum: 27, default: 22}
     PowerControlUpdate:
       type: object
       additionalProperties: false
+      dependentRequired:
+        button: [expectedButton]
+        expectedButton: [button]
       required: [enabled, gpio, expected]
       properties:
         enabled: {type: boolean}
         gpio: {type: integer, minimum: 2, maximum: 27}
         expected: {$ref: '#/components/schemas/PowerControlSettings'}
+        button: {$ref: '#/components/schemas/PowerButtonSettings'}
+        expectedButton: {$ref: '#/components/schemas/PowerButtonSettings'}
     PowerControlState:
       type: object
-      required: [config, supported, activeGPIO, rebootRequired]
+      required: [config, supported, activeGPIO, rebootRequired, configured, button, buttonState]
       properties:
         config: {$ref: '#/components/schemas/PowerControlSettings'}
         supported: {type: boolean}
         activeGPIO: {type: [integer, 'null']}
         rebootRequired: {type: boolean}
+        configured: {type: boolean}
+        button: {$ref: '#/components/schemas/PowerButtonSettings'}
+        buttonState: {type: string, enum: [disabled, waitingForPowerControl, waitingForRelease, armed, shutdownRequested, error]}
     OLEDState:
       type: object
       required: [config, supported, state, status]

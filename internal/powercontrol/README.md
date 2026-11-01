@@ -19,7 +19,8 @@ release. Only a later complete press/release (100ms debounce per transition)
 requests normal systemd poweroff. Shutdown may interrupt NAS tasks. The input
 never drives the OFF output itself. Agent restart resets arming; a held button
 is ignored. Failed GPIO reads disarm the detector. Request failure is reported
-in the agent journal; disable/re-enable the input after correcting the fault.
+in the agent journal. After a stable release, a new deliberate press/release can
+retry; no automatic shutdown retry occurs.
 
 The Pololu ON signal can override OFF while physically asserted. Release the
 button and do not hold it during final shutdown; software cannot guarantee power

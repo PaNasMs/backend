@@ -266,6 +266,7 @@ func RunButton(ctx context.Context) {
 				cancel()
 				unlock()
 				if e != nil {
+					gesture = buttonGesture{}
 					reportError(fmt.Errorf("request shutdown: %w: %s", e, strings.TrimSpace(string(out))))
 				}
 			} else if gesture.armed && !gesture.fired {

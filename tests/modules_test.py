@@ -15,9 +15,18 @@ from common import Rejected
 
 class Modules(unittest.TestCase):
     def test_core_handler_identifiers_are_rejected_before_install(self):
-        for identifier in ('user', 'service', 'disk', 'updates', 'hostname', 'account-details', 'personal-folders', 'job'):
+        for identifier in ('user', 'service', 'disk', 'updates', 'hostname', 'account-details', 'personal-folders', 'job', 'file'):
             with self.subTest(identifier=identifier), self.assertRaisesRegex(Rejected, 'belongs to the core'):
-                m.identifier(identifier)
+                m.manifest({'id': identifier, 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}})
+
+    def test_reserved_module_names_remain_valid_catalog_and_source_ids(self):
+        for value in ('power', 'journal', 'services', 'updates', 'homes', 'share', 'mount', 'disk'):
+            self.assertEqual(m.identifier(value), value)
+
+    def test_duplicate_handlers_rejected_before_install(self):
+        item = {'id': 'example', 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}, 'actions': ['example.run', 'example.run']}
+        with self.assertRaisesRegex(Rejected, 'Duplicate module handler'):
+            m.manifest(item)
 
     def test_optional_detailed_descriptions(self):
         item={'id':'example','version':'1.0.0','api':1,'core':'>=0.2.0','architecture':'all','title':'Example','files':{'ui/index.js':'0'*64}}

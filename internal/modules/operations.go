@@ -52,7 +52,21 @@ func Operation(kind, name string, reserved func(string, string) bool) (*Manifest
 			}
 			continue
 		}
-		if !ID.MatchString(key) || m.ID != key {
+		names := m.Actions
+		if kind == "queries" {
+			names = m.Queries
+		}
+		matches := false
+		for _, n := range names {
+			matches = matches || n == name
+		}
+		if !matches {
+			continue
+		}
+		if selected != nil {
+			return nil, errors.New("conflicting module registration")
+		}
+		if !ID.MatchString(key) || m.ID != key || key == "file" {
 			return nil, errors.New("invalid module registration")
 		}
 		for k, names := range map[string][]string{"actions": m.Actions, "queries": m.Queries} {

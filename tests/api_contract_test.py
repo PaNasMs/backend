@@ -67,8 +67,8 @@ class ManagementContractTest(unittest.TestCase):
         inventory = go_route_inventory()
         names = set(inventory['views']) | {action.split('.')[0] for action in inventory['actions']}
         for name in names:
-            with self.subTest(name=name), self.assertRaises(module_manager.Rejected):
-                module_manager.identifier(name)
+            with self.subTest(name=name), self.assertRaisesRegex(module_manager.Rejected, "belongs to the core"):
+                module_manager.manifest({"id": name, "version": "0.1.0", "api": 1, "core": ">=0.2.0", "architecture": "all", "title": "Fixture", "files": {"ui/index.js": "0"*64}})
 
     def test_core_query_dispatch_has_contracts(self):
         inventory = go_route_inventory()

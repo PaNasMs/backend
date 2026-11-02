@@ -555,3 +555,26 @@ func moduleTestReporter(t *testing.T, read *os.File) *systemops.Reporter {
 	t.Cleanup(func() { r.Close() })
 	return r
 }
+
+func TestInvalidUnrelatedInstalledModuleDoesNotBlockFiles(t *testing.T) {
+	m, _, _ := moduleFixture(t, moduleScript)
+	old := modules.Manifest{ID: "user", Enabled: true, Actions: []string{"user.create"}, Operations: "bin/server", API: 1}
+	raw, _ := json.Marshal(map[string]modules.Manifest{"files": m, "user": old})
+	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	if dst, e := destination("plan", Request{Action: "file.copy"}); e != nil || dst != goNative {
+		t.Fatalf("unrelated invalid old registration blocked Files: %v", e)
+	}
+	if _, e := modules.Operation("actions", "user.create", reservedModuleRoute); e == nil {
+		t.Fatal("invalid old core override accepted")
+	}
+}
+
+func TestFilesMemberActionAliasCannotSelectAnotherModule(t *testing.T) {
+	moduleFixture(t, moduleScript)
+	alias := modules.Manifest{ID: "file", API: 1, Enabled: true, Operations: "bin/server", Actions: []string{"file.copy"}}
+	raw, _ := json.Marshal(map[string]modules.Manifest{"file": alias})
+	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	if _, e := modules.Operation("actions", "file.copy", reservedModuleRoute); e == nil {
+		t.Fatal("file alias can claim Files member actions")
+	}
+}

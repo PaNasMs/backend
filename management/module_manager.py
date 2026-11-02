@@ -21,8 +21,7 @@ def identifier(value):
     )
     require(
         value
-        not in ("core", "users", "storage", "settings", "system", "history", "sharing", "modules", "network",
-            'disk', 'filesystem', 'folder', 'group', 'homes', 'luks', 'module', 'mount', 'nfs', 'partition', 'raid', 'service', 'share', 'smart', 'smb', 'updates', 'user', 'accounts', 'account-details', 'account-sessions', 'sharing', 'share-folders', 'home-folders', 'data-folders', 'mount-folders', 'personal-folders', 'network-access', 'homes-check', 'module-sources', 'module-catalog', 'storage-options', 'storage-snapshots', 'storage-luks', 'raid-candidates', 'services', 'journal', 'power', 'hostname', 'web-access', 'system-updates', 'job', 'jobs'),
+        not in ("core", "users", "storage", "settings", "system", "history", "sharing", "modules", "network"),
         'The identifier belongs to the core',
     )
     return value
@@ -62,8 +61,12 @@ def save_registry(data):
     atomic(REGISTRY, json.dumps(data, ensure_ascii=False), 0o644)
 
 
+CORE_MODULE_IDS = frozenset(['account-details', 'account-sessions', 'accounts', 'core', 'data-folders', 'disk', 'file', 'filesystem', 'folder', 'group', 'history', 'home-folders', 'homes', 'homes-check', 'hostname', 'job', 'jobs', 'journal', 'luks', 'module', 'module-catalog', 'module-sources', 'modules', 'mount', 'mount-folders', 'network', 'network-access', 'nfs', 'partition', 'personal-folders', 'power', 'raid', 'raid-candidates', 'service', 'services', 'settings', 'share', 'share-folders', 'sharing', 'smart', 'smb', 'storage', 'storage-luks', 'storage-options', 'storage-snapshots', 'system', 'system-updates', 'updates', 'user', 'users', 'web-access'])
+
+
 def manifest(m):
     identifier(m.get("id"))
+    require(m["id"] not in CORE_MODULE_IDS, "The identifier belongs to the core")
     version(m.get("version"))
     require(
         m.get("api") == 1 and satisfies(CORE, m.get("core")),
@@ -137,6 +140,7 @@ def manifest(m):
                 isinstance(value, str) and (value == prefix or value.startswith(prefix + ".")),
                 'Handlers must use the module prefix',
             )
+        require(len(m.get(kind, [])) == len(set(m.get(kind, []))), "Duplicate module handler")
     require("ui/index.js" in m["files"], 'Module UI is missing')
     require(
         not m.get("service") or m["service"] in m["files"], 'Service executable is missing'

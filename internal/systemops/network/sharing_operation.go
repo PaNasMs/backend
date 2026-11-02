@@ -213,7 +213,7 @@ func (a *adapter) sharingExecute(action, user string, p map[string]any) (any, er
 		if rollback := a.rollbackNMSharing(s); rollback != nil {
 			return nil, fmt.Errorf("Sharing operation interrupted; recovery is required")
 		}
-		return nil, fmt.Errorf("Sharing could not start; previous settings were restored")
+		return nil, fmt.Errorf("%s", publicNMError(e))
 	}
 	if immediate {
 		return map[string]any{"message": "Sharing recipient removed"}, nil
@@ -235,6 +235,9 @@ func (a *adapter) rollbackNMSharing(s *nmChange) error {
 			return e
 		}
 	}
+	if e = a.restoreNM(s.Previous); e != nil {
+		return e
+	}
 	if e = a.deleteProfiles(s.NewUUIDs); e != nil {
 		return e
 	}
@@ -242,9 +245,6 @@ func (a *adapter) rollbackNMSharing(s *nmChange) error {
 		if e = cleanupNMRouting(*s.Working); e != nil {
 			return e
 		}
-	}
-	if e = a.restoreNM(s.Previous); e != nil {
-		return e
 	}
 	if e = storeNMGroups(s.Before); e != nil {
 		return e

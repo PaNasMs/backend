@@ -880,3 +880,48 @@ func TestNMSharingRefreshContinuesAfterPortFailure(t *testing.T) {
 		t.Fatal("remaining port was skipped", e)
 	}
 }
+
+func TestNMSharingFailedRestoreRetainsStagedProfiles(t *testing.T) {
+	a, f := newNMSharingFixture(t)
+	p := map[string]any{"name": "Fixture", "source": "pneth0", "outputs": []any{"pneth1"}, "mode": "bridge", "wifi": map[string]any{}, "autostart": true}
+	if _, e := a.sharingExecute("network.share.save", "admin", p); e != nil {
+		t.Fatal(e)
+	}
+	s, e := readNMChange(filepath.Join(sharingRoot, "pending.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = a.call(nmPath, nm+".CheckpointDestroy", s.Checkpoint).Err; e != nil {
+		t.Fatal(e)
+	}
+	f.mu.Lock()
+	f.failDevice = "/device/1"
+	f.mu.Unlock()
+	if e = a.rollbackNMSharing(s); e == nil {
+		t.Fatal("failed original connection activation not reported")
+	}
+	profiles, e := a.profiles()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range s.NewUUIDs {
+		if profiles[id].Path == "" {
+			t.Fatal("staged profile deleted before restore", id)
+		}
+	}
+	f.mu.Lock()
+	f.failDevice = ""
+	f.mu.Unlock()
+	if e = a.rollbackNMSharing(s); e != nil {
+		t.Fatal("retry failed", e)
+	}
+	profiles, e = a.profiles()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range s.NewUUIDs {
+		if profiles[id].Path != "" {
+			t.Fatal("staged profile retained after successful restore", id)
+		}
+	}
+}

@@ -142,13 +142,32 @@ func (s *nmChange) disarm() error {
 	_, e := nmSystemCommand(context.Background(), []string{"systemctl", "stop", s.timerUnit() + ".timer"}, systemops.CommandOptions{Accepted: []int{0, 5}})
 	return e
 }
+func legacyPlain(value any) any {
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return 1
+		}
+		return 0
+	case map[string]any:
+		for k, x := range v {
+			v[k] = legacyPlain(x)
+		}
+	case []any:
+		for i, x := range v {
+			v[i] = legacyPlain(x)
+		}
+	}
+	return value
+}
+
 func legacyProfileSignature(s settings) (string, error) {
 	clean := map[string]map[string]any{}
 	for section, fields := range s {
 		clean[section] = map[string]any{}
 		for key, value := range fields {
 			if section != "connection" || key != "timestamp" {
-				clean[section][key] = plain(value.Value())
+				clean[section][key] = legacyPlain(plain(value.Value()))
 			}
 		}
 	}
@@ -231,7 +250,7 @@ func currentNMChange(publish bool) (*nmChange, error) {
 			continue
 		}
 		if !supplementalKind(saved.Kind) {
-			return nil, fmt.Errorf("Invalid network recovery state")
+			return nil, fmt.Errorf("NetworkManager operation failed; check the connection state")
 		}
 		records = append(records, saved)
 		if runtime != nil && runtime.ID == saved.ID {

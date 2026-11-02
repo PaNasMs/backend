@@ -138,40 +138,43 @@ func (a *adapter) activateNMGroup(g nmGroup, allowMissing bool) error {
 		}
 	}
 	for _, name := range nmPortNames(g) {
-		path, p, e := a.device(name)
-		if e != nil {
-			if allowMissing && missingDevice(e) {
-				continue
-			}
-			return e
-		}
-		matches, e := a.matchesNMAdapter(g, name, saved)
-		if e != nil {
-			return e
-		}
-		if !matches {
-			return fmt.Errorf("A network adapter was replaced; recreate the sharing group")
-		}
-		if num(p["DeviceType"]) == 2 {
-			r, e := a.adapterRadio(name)
+		e := func() error {
+			path, p, e := a.device(name)
 			if e != nil {
 				return e
 			}
-			if !r.Enabled || !r.HardwareEnabled {
-				continue
-			}
-		}
-		if !boolean(p["Managed"]) {
-			continue
-		}
-		profile, ok := saved[g.Profiles[name]]
-		if !ok {
-			return fmt.Errorf("Sharing configuration changed externally; review it again")
-		}
-		if !activeIDs[g.Profiles[name]] {
-			if e = a.call(nmPath, nm+".ActivateConnection", profile.Path, path, dbus.ObjectPath("/")).Err; e != nil {
+			matches, e := a.matchesNMAdapter(g, name, saved)
+			if e != nil {
 				return e
 			}
+			if !matches {
+				return fmt.Errorf("A network adapter was replaced; recreate the sharing group")
+			}
+			if num(p["DeviceType"]) == 2 {
+				r, e := a.adapterRadio(name)
+				if e != nil {
+					return e
+				}
+				if !r.Enabled || !r.HardwareEnabled {
+					return nil
+				}
+			}
+			if !boolean(p["Managed"]) {
+				return nil
+			}
+			profile, ok := saved[g.Profiles[name]]
+			if !ok {
+				return fmt.Errorf("Sharing configuration changed externally; review it again")
+			}
+			if !activeIDs[g.Profiles[name]] {
+				if e = a.call(nmPath, nm+".ActivateConnection", profile.Path, path, dbus.ObjectPath("/")).Err; e != nil {
+					return e
+				}
+			}
+			return nil
+		}()
+		if e != nil && !allowMissing {
+			return e
 		}
 	}
 	return nil

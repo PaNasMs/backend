@@ -100,7 +100,7 @@ func TestLegacyPythonProfileHash(t *testing.T) {
 		"ipv4":            {"route-metric": dbus.MakeVariant(int64(600)), "address-data": dbus.MakeVariant([]map[string]dbus.Variant{{"address": dbus.MakeVariant("192.0.2.1"), "prefix": dbus.MakeVariant(uint32(24))}})},
 	}
 	got, e := legacyProfileSignature(s)
-	if e != nil || got != "312a036c313cadcd2665429d7a9c6a44db8fdf101486225baa523d156de420aa" {
+	if e != nil || got != "663126ace335974beb315583a928b002867969cb445f1179ccb4e05db37aae9c" {
 		t.Fatalf("legacy Python hash: %s %v", got, e)
 	}
 	old := nmChange{}

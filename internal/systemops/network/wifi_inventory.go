@@ -137,16 +137,15 @@ func (a *adapter) wifiInventory(rows []map[string]any) (map[string]any, error) {
 					data = map[string]any{"networks": points, "saved": saved, "activeAP": obj(w["ActiveAccessPoint"]), "lastScan": num(w["LastScan"]), "mode": num(w["Mode"])}
 					if num(w["Mode"]) == 3 {
 						raw, e := nmCommand("iw", "dev", name, "station", "dump")
-						if e != nil {
-							return nil, e
-						}
 						count := 0
 						for _, line := range strings.Split(string(raw), "\n") {
 							if strings.HasPrefix(line, "Station ") {
 								count++
 							}
 						}
-						data["clients"] = count
+						if e == nil {
+							data["clients"] = count
+						}
 					}
 				}
 			}

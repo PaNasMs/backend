@@ -227,11 +227,21 @@ func (a *adapter) reviewNMSharing(p map[string]any, old *nmGroup) (nmGroup, []an
 		}
 		channel := 0
 		if v, exists := ap["channel"]; exists {
-			n, ok := v.(float64)
-			if !ok || n != float64(int(n)) {
+			switch n := v.(type) {
+			case json.Number:
+				i, err := n.Int64()
+				if err != nil || int64(int(i)) != i {
+					return fail("This Wi-Fi channel is not available for an access point")
+				}
+				channel = int(i)
+			case float64:
+				if n != float64(int(n)) {
+					return fail("This Wi-Fi channel is not available for an access point")
+				}
+				channel = int(n)
+			default:
 				return fail("This Wi-Fi channel is not available for an access point")
 			}
-			channel = int(n)
 		}
 		channels := cap.Channels[band]
 		if len(channels) == 0 || (channel != 0 && !slices.Contains(channels, channel)) {

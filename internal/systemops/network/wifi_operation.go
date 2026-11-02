@@ -298,13 +298,14 @@ func (a *adapter) wifiExecute(action, user string, p map[string]any) (any, error
 		return s.remember()
 	}
 	if e = apply(); e != nil {
+		failure := e
 		if recovery := a.rollbackWifi(s); recovery != nil {
 			return nil, fmt.Errorf("Wi-Fi operation interrupted; recovery is required")
 		}
 		if e = s.disarm(); e != nil {
 			return nil, e
 		}
-		return nil, fmt.Errorf("Wi-Fi operation failed; previous settings were restored")
+		return nil, fmt.Errorf("%s", publicNMError(failure))
 	}
 	return map[string]any{"message": "Network changes await confirmation", "change": public(&s.state)}, nil
 }

@@ -175,7 +175,7 @@ func recoverNMServicesLocked(expected string, force bool) error {
 	}
 	for _, s := range records {
 		if !supplementalKind(s.Kind) {
-			return fmt.Errorf("Invalid network recovery state")
+			return fmt.Errorf("NetworkManager operation failed; check the connection state")
 		}
 		if s.Status == "confirmed" && strings.HasPrefix(s.Kind, "network.share.") {
 			if e = a.cleanupNMConfirmed(s); e != nil {

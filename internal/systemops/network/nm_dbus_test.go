@@ -23,6 +23,7 @@ type nmFixture struct {
 	checkpoints    []dbus.ObjectPath
 	saved          int
 	failActivation bool
+	failDevice     dbus.ObjectPath
 	missing        bool
 	nextProfile    int
 	calls          [][]string
@@ -124,6 +125,12 @@ func newNMFixture(t *testing.T) (*adapter, *nmFixture) {
 			return nil
 		},
 		"ActivateConnection": func(profile, device, specific dbus.ObjectPath) (dbus.ObjectPath, *dbus.Error) {
+			f.mu.Lock()
+			failed := f.failDevice == device
+			f.mu.Unlock()
+			if failed {
+				return "/", dbus.NewError(nm+".Failure", nil)
+			}
 			return f.activateProfile(t, profile, device)
 		},
 		"DeactivateConnection": func(active dbus.ObjectPath) *dbus.Error {
@@ -799,5 +806,77 @@ func TestNMWifiConfirmationFailureRestoresPreviousConnection(t *testing.T) {
 				t.Fatal("staged profile not removed", e)
 			}
 		})
+	}
+}
+
+func TestNMSharingAPChannelUsesHelperJSONDecoder(t *testing.T) {
+	a, f := newNMSharingFixture(t)
+	bin := t.TempDir()
+	if e := os.WriteFile(filepath.Join(bin, "iw"), []byte("#!/bin/sh\nexit 1\n"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	if e := os.MkdirAll(filepath.Join(netClassRoot, "pneth1", "phy80211"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	f.mu.Lock()
+	f.props["/device/2"][nm+".Device"]["DeviceType"] = dbus.MakeVariant(uint32(2))
+	f.props["/device/2"][nm+".Device.Wireless"] = map[string]dbus.Variant{"PermHwAddress": dbus.MakeVariant("00:11:22:33:44:66"), "WirelessCapabilities": dbus.MakeVariant(uint32(0x40))}
+	f.mu.Unlock()
+	command := nmCommand
+	nmCommand = func(args ...string) ([]byte, error) {
+		if len(args) > 1 && args[0] == "iw" && args[1] == "phy" {
+			return []byte("* 2412 MHz [1] (20.0 dBm)\n* 2437 MHz [6] (20.0 dBm)"), nil
+		}
+		return command(args...)
+	}
+	for _, value := range []string{"0", "6", "1.5", `"6"`, "9999999999999999999999999"} {
+		var p map[string]any
+		raw := `{"name":"AP fixture","source":"pneth0","outputs":["pneth1"],"mode":"nat","wifi":{"pneth1":{"ssid":"fixture","password":"fixture-password","band":"bg","channel":` + value + `}},"autostart":false}`
+		if e := systemops.Decode([]byte(raw), &p); e != nil {
+			t.Fatal(e)
+		}
+		g, _, e := a.reviewNMSharing(p, nil)
+		if value == "0" || value == "6" {
+			want := 1
+			if value == "6" {
+				want = 6
+			}
+			if e != nil || g.Wifi["pneth1"].Channel != want {
+				t.Fatalf("channel %s rejected: %+v %v", value, g, e)
+			}
+		} else if e == nil {
+			t.Fatal("invalid channel accepted", value)
+		}
+	}
+}
+
+func TestNMSharingRefreshContinuesAfterPortFailure(t *testing.T) {
+	a, f := newNMSharingFixture(t)
+	p := map[string]any{"name": "Fixture", "source": "pneth0", "outputs": []any{"pneth1"}, "mode": "bridge", "wifi": map[string]any{}, "autostart": true}
+	if _, e := a.sharingExecute("network.share.save", "admin", p); e != nil {
+		t.Fatal(e)
+	}
+	groups, e := loadNMGroups()
+	if e != nil {
+		t.Fatal(e)
+	}
+	g := groups[0]
+	f.mu.Lock()
+	f.props[nmPath][nm]["ActiveConnections"] = dbus.MakeVariant([]dbus.ObjectPath{})
+	f.props["/device/2"][nm+".Device"]["ActiveConnection"] = dbus.MakeVariant(dbus.ObjectPath("/"))
+	f.mu.Unlock()
+	f.mu.Lock()
+	f.failDevice = "/device/1"
+	f.mu.Unlock()
+	if e = a.activateNMGroup(g, false); e == nil {
+		t.Fatal("strict activation ignored failed port")
+	}
+	if e = a.activateNMGroup(g, true); e != nil {
+		t.Fatal("recovery did not tolerate failed port", e)
+	}
+	_, props, e := a.device("pneth1")
+	if e != nil || obj(props["ActiveConnection"]) == "/" {
+		t.Fatal("remaining port was skipped", e)
 	}
 }

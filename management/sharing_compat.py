@@ -252,7 +252,9 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
     with locked():
         current = capture()
     if current != source:
-        result = subprocess.run([HELPER, 'sharing', 'rollback-check'], capture_output=True, text=True, timeout=60)
+        result = subprocess.run([HELPER, 'sharing', 'rollback-check', '--source'],
+                                input=json.dumps({'schema': SCHEMA, 'source': source}),
+                                capture_output=True, text=True, timeout=60)
         require(result.returncode == 0, 'Sharing changed after the backup; verified native rollback is required')
         witness = json.loads(result.stdout)
         require(witness.get('schema') == SCHEMA and witness.get('journalsAbsent') is True, 'Unsupported sharing rollback witness')

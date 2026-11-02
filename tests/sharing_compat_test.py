@@ -268,6 +268,14 @@ class PairedRollback(unittest.TestCase):
         with patch.object(compat.subprocess, 'run', return_value=reply):
             return compat.prepare_restore(self.source, self.source_hash, 'transaction')
 
+    def test_native_rollback_witness_receives_verified_source_only_on_stdin(self):
+        current = self.candidate()
+        reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
+        with patch.object(compat.subprocess, 'run', return_value=reply) as run:
+            compat.prepare_restore(self.source, self.source_hash, 'transaction')
+        self.assertEqual(run.call_args.args[0], [compat.HELPER, 'sharing', 'rollback-check', '--source'])
+        self.assertEqual(json.loads(run.call_args.kwargs['input']), {'schema': 1, 'source': self.source})
+
     def test_failed_target_configuration_allows_only_proven_reverse_transition(self):
         self.candidate()
         guard = self.prepare()

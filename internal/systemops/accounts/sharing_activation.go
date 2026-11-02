@@ -172,9 +172,6 @@ func (s *sharingService) requireNativeSharing(ctx context.Context, mode string) 
 		if mode == "rollback-check" && !sharingFileMapsEqual(s.rollbackSource, ticket.Files) {
 			return reject(sharingActivationPending)
 		}
-		if _, err = s.pendingActivationFiles(ticket); err != nil {
-			return err
-		}
 		s.pendingRollback = true
 	}
 	guard, err := s.fileSnapshot(s.restoreGuard)
@@ -236,8 +233,16 @@ func (s *sharingService) requireNativeSharing(ctx context.Context, mode string) 
 			}
 			return reject(sharingRestorePending)
 		}
+		if s.pendingRollback && ticket.Source.Native {
+			// The guard retains its original witness across an interrupted hook conversion.
+			return s.pendingGuardWitness(ticket, value.Witness)
+		}
 	} else if s.pendingRollback && mode == "prepare-downgrade" {
 		return reject(sharingRestorePending)
+	}
+	if s.pendingRollback {
+		_, err = s.pendingActivationFiles(ticket)
+		return err
 	}
 	return nil
 }
@@ -559,22 +564,59 @@ func (s *sharingService) pendingFiles(ticket sharingActivationTicket, cleanup bo
 				files[path] = current
 				continue
 			}
-			if path != s.state || !current.Exists || current.Mode != 0600 || !bytes.Equal(current.Data, seeded) {
+			if path != s.state {
 				return nil, reject(sharingActivationChanged)
 			}
-			var parent unix.Stat_t
-			if err := unix.Lstat(filepath.Dir(s.state), &parent); err != nil {
+			if err := s.pendingSeedSnapshot(current, seeded); err != nil {
 				return nil, err
-			}
-			gid := uint32(os.Getegid())
-			if parent.Mode&unix.S_ISGID != 0 {
-				gid = parent.Gid
-			}
-			if current.GID != gid {
-				return nil, reject(sharingActivationChanged)
 			}
 		}
 		files[path] = current
 	}
 	return files, nil
+}
+
+func (s *sharingService) pendingGuardWitness(ticket sharingActivationTicket, witness map[string]sharingFileSnapshot) error {
+	for _, path := range []string{s.journal, filepath.Join(filepath.Dir(s.journal), "sharing-legacy-nfs-transaction.json")} {
+		if exists, err := sharingExists(path); err != nil || exists {
+			return reject(sharingPending)
+		}
+	}
+	seeded, err := s.activationSeed(ticket)
+	if err != nil {
+		return err
+	}
+	for path, before := range ticket.Files {
+		entry, ok := witness[path]
+		if !ok {
+			return reject(sharingRestorePending)
+		}
+		if !sharingSnapshotsEqual(entry, before) {
+			if path != s.state {
+				return reject(sharingRestorePending)
+			}
+			if err := s.pendingSeedSnapshot(entry, seeded); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *sharingService) pendingSeedSnapshot(entry sharingFileSnapshot, seeded []byte) error {
+	if !entry.Exists || int(entry.UID) != s.ownerUID || entry.Mode != 0600 || !bytes.Equal(entry.Data, seeded) {
+		return reject(sharingActivationChanged)
+	}
+	var parent unix.Stat_t
+	if err := unix.Lstat(filepath.Dir(s.state), &parent); err != nil {
+		return err
+	}
+	gid := uint32(os.Getegid())
+	if parent.Mode&unix.S_ISGID != 0 {
+		gid = parent.Gid
+	}
+	if entry.GID != gid {
+		return reject(sharingActivationChanged)
+	}
+	return nil
 }

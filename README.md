@@ -502,6 +502,9 @@ credentials. After recovery, retry the retained updater with
 Package conversion changes only recognized native preexec hooks and never starts an inactive SMB/NFS
 server. Arbitrary manual downgrades to older packages without the preparation contract are not a
 verified rollback path.
+An interrupted activation from a native source can convert only its verified SMB hooks under the
+paired rollback guard. Retrying that conversion preserves state, NFS files and activation metadata;
+an interrupted activation from the Python preparation source needs no hook conversion.
 For an interrupted sharing publication journal, use Shared folders → Restore, or run
 `panasms-system-helper sharing recover` as root. Keep an invalid journal and the root-only
 configuration backups for diagnosis instead of deleting them to bypass recovery.

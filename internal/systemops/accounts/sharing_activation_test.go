@@ -529,6 +529,203 @@ func sharingGuardMetadata(t *testing.T, s *sharingService, guard map[string]any)
 	return guard
 }
 
+func pendingSharingHooksFixture(t *testing.T, native bool) (*sharingService, map[string]sharingFileSnapshot) {
+	t.Helper()
+	s, ticket := sharingActivationFixture(t, false)
+	ticket.Source.Native = native
+	state := sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}}
+	if native {
+		state.LegacyExportRevision = sharingSnapshotRevision(ticket.Files[s.legacy])
+	}
+	saveSharingFixture(t, s, state)
+	smb, nfs := sharingConfig(state.Shares, !native, false)
+	s.write(s.smb, smb, 0644)
+	s.write(s.exports, nfs, 0644)
+	if native {
+		raw, _ := json.Marshal(sharingActivationReceipt{1, "fixture-prep", nextFixtureNonce, sharingActivationSource{Fresh: true}})
+		s.write(s.activationReceipt, string(raw), 0600)
+	}
+	for path := range ticket.Files {
+		ticket.Files[path], _ = s.fileSnapshot(path)
+	}
+	sourceMetadata := map[string]sharingFileSnapshot{s.activationReceipt: {}, s.activationTicket: {}}
+	sourceMetadata[s.activationReceipt], _ = s.fileSnapshot(s.activationReceipt)
+	writeActivationTicket(t, s, ticket)
+	witnessMetadata := map[string]sharingFileSnapshot{}
+	for path := range sourceMetadata {
+		witnessMetadata[path], _ = s.fileSnapshot(path)
+	}
+	guard, _ := json.Marshal(map[string]any{"schema": 1, "transaction": "pending-hooks", "phase": "prepared", "sourceHash": strings.Repeat("a", 64), "source": ticket.Files, "witness": ticket.Files, "sourceActivation": sourceMetadata, "witnessActivation": witnessMetadata})
+	s.write(s.restoreGuard, string(guard), 0600)
+	t.Setenv("PANASMS_UPDATE_TRANSACTION", "pending-hooks")
+	before := map[string]sharingFileSnapshot{}
+	for _, path := range []string{s.state, s.smb, s.exports, s.legacy, s.activationReceipt, s.activationTicket, s.restoreGuard} {
+		before[path], _ = s.fileSnapshot(path)
+	}
+	return s, before
+}
+
+func TestSharingPendingNativeHooksConvertAndRetryWithoutMetadataChanges(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(map[bool]string{false: "prepared-python", true: "native"}[native], func(t *testing.T) {
+			s, before := pendingSharingHooksFixture(t, native)
+			run := s.run
+			commands := 0
+			s.run = func(ctx context.Context, args []string, options systemops.CommandOptions) ([]byte, error) {
+				commands++
+				return run(ctx, args, options)
+			}
+			for attempt := range 2 {
+				if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err != nil {
+					t.Fatal(attempt, err)
+				}
+			}
+			for path, original := range before {
+				current, _ := s.fileSnapshot(path)
+				if path == s.smb && native {
+					original.Data = []byte(strings.ReplaceAll(string(original.Data), "root preexec = /usr/lib/panasms/panasms-system-helper sharing check ", "root preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check "))
+				}
+				if !sharingSnapshotsEqual(current, original) {
+					t.Fatal("unexpected file change or missing conversion", path)
+				}
+			}
+			if !native && commands != 0 {
+				t.Fatal("prepared Python source ran a conversion command")
+			}
+		})
+	}
+}
+
+func TestSharingPendingNativeHookReloadFailureCanRetry(t *testing.T) {
+	s, _ := pendingSharingHooksFixture(t, true)
+	run := s.run
+	reloads := 0
+	s.run = func(ctx context.Context, args []string, options systemops.CommandOptions) ([]byte, error) {
+		if slices.Equal(args, []string{"smbcontrol", "all", "reload-config"}) {
+			reloads++
+			if reloads == 1 {
+				return nil, errors.New("injected reload failure after hook conversion")
+			}
+		}
+		return run(ctx, args, options)
+	}
+	if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err == nil {
+		t.Fatal("reload interruption was not observed")
+	}
+	if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if reloads != 2 {
+		t.Fatal("converted hook reload was not retried", reloads)
+	}
+}
+
+func TestSharingPendingHookRetryRejectsForeignEvidenceBeforeCommands(t *testing.T) {
+	for _, changed := range []string{"smb-bytes", "smb-mode", "state", "nfs", "legacy", "witness-gid", "guard-source", "guard-phase", "ticket", "receipt", "journal", "legacy-journal", "transaction"} {
+		t.Run(changed, func(t *testing.T) {
+			s, _ := pendingSharingHooksFixture(t, true)
+			if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			var guard map[string]json.RawMessage
+			raw, _ := os.ReadFile(s.restoreGuard)
+			json.Unmarshal(raw, &guard)
+			switch changed {
+			case "smb-bytes":
+				raw, _ := os.ReadFile(s.smb)
+				s.write(s.smb, string(raw)+"\n# foreign", 0644)
+			case "smb-mode":
+				os.Chmod(s.smb, 0600)
+			case "state", "nfs", "legacy":
+				path := map[string]string{"state": s.state, "nfs": s.exports, "legacy": s.legacy}[changed]
+				s.write(path, "foreign policy", 0600)
+			case "witness-gid", "guard-source":
+				field := "witness"
+				if changed == "guard-source" {
+					field = "source"
+				}
+				var files map[string]sharingFileSnapshot
+				json.Unmarshal(guard[field], &files)
+				entry := files[s.smb]
+				if changed == "witness-gid" {
+					entry.GID++
+				} else {
+					entry.Data = append(entry.Data, '\n')
+				}
+				files[s.smb] = entry
+				guard[field], _ = json.Marshal(files)
+				raw, _ = json.Marshal(guard)
+				s.write(s.restoreGuard, string(raw), 0600)
+			case "guard-phase":
+				guard["phase"] = json.RawMessage(`"restoring"`)
+				raw, _ = json.Marshal(guard)
+				s.write(s.restoreGuard, string(raw), 0600)
+			case "ticket":
+				var ticket sharingActivationTicket
+				s.metadata(s.activationTicket, &ticket)
+				ticket.Nonce = nextFixtureNonce
+				writeActivationTicket(t, s, ticket)
+			case "receipt":
+				var receipt sharingActivationReceipt
+				s.metadata(s.activationReceipt, &receipt)
+				receipt.Nonce = fixtureNonce
+				raw, _ = json.Marshal(receipt)
+				s.write(s.activationReceipt, string(raw), 0600)
+			case "journal":
+				s.write(s.journal, `{}`, 0600)
+			case "legacy-journal":
+				s.write(filepath.Join(filepath.Dir(s.journal), "sharing-legacy-nfs-transaction.json"), `{}`, 0600)
+			case "transaction":
+				t.Setenv("PANASMS_UPDATE_TRANSACTION", "other-transaction")
+			}
+			commands := 0
+			s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+				commands++
+				return nil, nil
+			}
+			currentSMB, _ := s.fileSnapshot(s.smb)
+			policy := map[string]sharingFileSnapshot{}
+			for _, path := range []string{s.state, s.exports, s.legacy} {
+				policy[path], _ = s.fileSnapshot(path)
+			}
+			if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err == nil {
+				t.Fatal("foreign rollback evidence authorized conversion")
+			}
+			afterSMB, _ := s.fileSnapshot(s.smb)
+			if commands != 0 || !sharingSnapshotsEqual(currentSMB, afterSMB) {
+				t.Fatal("denied retry ran a command or rewrote SMB")
+			}
+			for _, path := range []string{s.state, s.exports, s.legacy} {
+				after, _ := s.fileSnapshot(path)
+				if !sharingSnapshotsEqual(after, policy[path]) {
+					t.Fatal("denied retry changed policy", path)
+				}
+			}
+		})
+	}
+}
+
+func TestSharingConvertedPendingHooksDoNotAuthorizeActivationOrUnboundRollback(t *testing.T) {
+	s, _ := pendingSharingHooksFixture(t, true)
+	if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.restoreGuard); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"activate", "rollback-check", "republish", "prepare-downgrade", "remove", "uninstall"} {
+		if err := s.cli(context.Background(), []string{action}, nil, io.Discard); err == nil {
+			t.Fatal("guarded conversion leaked authorization", action)
+		}
+	}
+	var ticket sharingActivationTicket
+	s.metadata(s.activationTicket, &ticket)
+	request, _ := json.Marshal(map[string]any{"schema": 1, "source": ticket.Files})
+	if err := s.cli(context.Background(), []string{"rollback-check", "--source"}, strings.NewReader(string(request)), io.Discard); err == nil {
+		t.Fatal("converted files authorized an unguarded source witness")
+	}
+}
+
 func TestSharingActivationRejectsForeignBaselineBeforeSeeding(t *testing.T) {
 	s, ticket := sharingActivationFixture(t, false)
 	if err := s.write(s.smb, "foreign source policy", 0644); err != nil {

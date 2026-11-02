@@ -498,7 +498,15 @@ func (s *sharingService) removeInstallation() error {
 
 func (s *sharingService) prepareDowngrade(ctx context.Context) error {
 	if s.pendingRollback {
-		return nil
+		var ticket sharingActivationTicket
+		present, err := s.metadata(s.activationTicket, &ticket)
+		if err != nil || !present || s.validTicket(&ticket) != nil {
+			return reject(sharingActivationPending)
+		}
+		if !ticket.Source.Native {
+			return nil
+		}
+		return s.preparePendingNativeHooks(ctx, ticket)
 	}
 	if _, err := s.rollbackWitnessLocked(); err != nil {
 		return err
@@ -529,6 +537,38 @@ func (s *sharingService) prepareDowngrade(ctx context.Context) error {
 	if err = s.writeHookConversion(entry, smb); err != nil {
 		return err
 	}
+	return s.reloadActiveSMB(ctx)
+}
+
+func (s *sharingService) preparePendingNativeHooks(ctx context.Context, ticket sharingActivationTicket) error {
+	var baseline sharingState
+	if err := systemops.Decode(ticket.Files[s.state].Data, &baseline); err != nil {
+		return err
+	}
+	if !s.knownSharingConfig(ticket.Files, baseline) {
+		return reject(sharingDrift)
+	}
+	before := ticket.Files[s.smb]
+	converted := before
+	converted.Data = bytes.ReplaceAll(before.Data, []byte("root preexec = /usr/lib/panasms/panasms-system-helper sharing check "), []byte("root preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check "))
+	if sharingSnapshotsEqual(before, converted) {
+		return nil
+	}
+	current, err := s.fileSnapshot(s.smb)
+	if err != nil {
+		return err
+	}
+	if sharingSnapshotsEqual(current, before) {
+		if err = s.writeHookConversion(current, string(converted.Data)); err != nil {
+			return err
+		}
+	} else if !sharingSnapshotsEqual(current, converted) {
+		return reject(sharingDrift)
+	}
+	return s.reloadActiveSMB(ctx)
+}
+
+func (s *sharingService) reloadActiveSMB(ctx context.Context) error {
 	if s.tool("smbcontrol") {
 		raw, err := s.run(ctx, []string{"systemctl", "is-active", "smbd"}, systemops.CommandOptions{Accepted: []int{0, 3, 4}})
 		if err != nil {

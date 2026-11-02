@@ -36,3 +36,36 @@ func TestIdentityRejectsReusedNameAndMissingDependencies(t *testing.T) {
 		t.Fatal("disappeared backing device accepted")
 	}
 }
+
+func TestPartitionIdentityUsesParentIncarnationWithoutSlavesDirectory(t *testing.T) {
+	root := t.TempDir()
+	sys := filepath.Join(root, "class/block")
+	disk := filepath.Join(root, "devices/sda")
+	partition := filepath.Join(disk, "sda1")
+	for _, dir := range []string{sys, filepath.Join(disk, "slaves"), filepath.Join(partition, "holders")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, data := range map[string]string{filepath.Join(disk, "diskseq"): "20", filepath.Join(disk, "dev"): "8:0", filepath.Join(partition, "partition"): "1", filepath.Join(partition, "dev"): "8:1"} {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{"sda": disk, "sda1": partition} {
+		if err := os.Symlink(target, filepath.Join(sys, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv := fixtureInventory(t, `[{"path":"/dev/sda","kname":"sda","type":"disk","children":[{"path":"/dev/sda1","kname":"sda1","type":"part"}]}]`)
+	identity, err := inv.Identity("/dev/sda1", sys)
+	if err != nil || len(identity) != 2 || identity[1].DeviceNumber != "8:1" || identity[1].DiskSequence != "20" {
+		t.Fatalf("%v %v", identity, err)
+	}
+	if err := os.Remove(filepath.Join(partition, "partition")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inv.Identity("/dev/sda1", sys); err == nil {
+		t.Fatal("missing whole-device dependencies accepted")
+	}
+}

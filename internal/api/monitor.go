@@ -148,6 +148,9 @@ func diskSnapshots(storage system.Storage) map[string]deviceSnapshot {
 			name, _ = d["name"].(string)
 		}
 		size, _ := d["size"].(float64)
+		if number, ok := d["size"].(json.Number); ok {
+			size, _ = number.Float64()
+		}
 		result[path+":"+serial] = deviceSnapshot{path, name, size, busy(d)}
 	}
 	return result

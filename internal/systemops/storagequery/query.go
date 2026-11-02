@@ -35,8 +35,17 @@ func defaultService() *service {
 }
 
 func (s *service) dependencies(name, kind string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(s.sys, name, kind))
+	return readDependencies(s.sys, name, kind)
+}
+
+func readDependencies(sysRoot, name, kind string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(sysRoot, name, kind))
 	if err != nil {
+		if kind == "slaves" && os.IsNotExist(err) {
+			if marker, perr := os.Stat(filepath.Join(sysRoot, name, "partition")); perr == nil && marker.Mode().IsRegular() {
+				return []string{}, nil
+			}
+		}
 		return nil, err
 	}
 	names := make([]string, 0, len(entries))

@@ -50,12 +50,12 @@ func (inv *Inventory) Identity(path, sysRoot string) ([]DeviceIdentity, error) {
 				return err
 			}
 		}
-		slaves, err := os.ReadDir(filepath.Join(node, "slaves"))
+		slaves, err := readDependencies(sysRoot, name, "slaves")
 		if err != nil {
 			return err
 		}
 		for _, slave := range slaves {
-			if err := visit("/dev/" + slave.Name()); err != nil {
+			if err := visit("/dev/" + slave); err != nil {
 				return err
 			}
 		}

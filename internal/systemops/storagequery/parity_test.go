@@ -24,6 +24,9 @@ func TestStorageOptionsLegacyParityWithoutDeviceProbes(t *testing.T) {
 	}
 	for _, name := range []string{"sda", "sda1", "sdb", "mmcblk1"} {
 		for _, dir := range []string{"slaves", "holders", "device"} {
+			if name == "sda1" && dir == "slaves" {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Join(root, "sys", name, dir), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -33,6 +36,9 @@ func TestStorageOptionsLegacyParityWithoutDeviceProbes(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, path), []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "sys/sda1/partition"), []byte("1"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	s := &service{filepath.Join(root, "sys"), filepath.Join(root, "fstab"), func(context.Context) ([]map[string]any, error) { return devices, nil }, func(path string) (string, error) { return path, nil }}
 	env := optionsEnvironment{filepath.Join(root, "units"), filepath.Join(root, "health"), time.Now(), func(name string) bool { return name == "mkfs.ext4" }, func() (map[string]any, error) {

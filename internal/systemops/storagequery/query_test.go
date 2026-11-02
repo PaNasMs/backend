@@ -26,6 +26,9 @@ func TestRaidCandidatesUseMembersProtectRootAndRejectBusy(t *testing.T) {
 	sys := filepath.Join(root, "sys")
 	for _, name := range []string{"sda", "sda1", "sdb", "sdc", "sdd", "sde", "sdf", "md0"} {
 		for _, dir := range []string{"slaves", "holders"} {
+			if name == "sda1" && dir == "slaves" {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Join(sys, name, dir), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -35,6 +38,9 @@ func TestRaidCandidatesUseMembersProtectRootAndRejectBusy(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(sys, path), 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "sys/sda1/partition"), []byte("1"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	fstab := filepath.Join(root, "fstab")
 	if err := os.WriteFile(fstab, nil, 0600); err != nil {

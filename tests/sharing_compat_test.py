@@ -554,6 +554,22 @@ class PairedRollback(unittest.TestCase):
                 self.assertFalse(compat.ACTIVATION.exists())
                 compat.MARKER.unlink(missing_ok=True)
 
+    def test_retained_reinstall_accepts_only_terminal_updater_phases(self):
+        self.reinstall_fixture()
+        compat.UPDATE_ROOT.mkdir()
+        for phase in ('', 'checked', 'downloaded', 'complete', 'failed', 'rolled-back'):
+            with self.subTest(phase=phase):
+                compat.ACTIVATION.unlink(missing_ok=True)
+                compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'phase': phase}).encode())
+                compat.prepare_reinstall('2.0', '1.0')
+        compat.ACTIVATION.unlink()
+        for phase in ('queued', 'checking', 'downloading', 'preparing', 'backing-up', 'installing', 'verifying', 'rolling-back', 'recovery-required', 'unknown'):
+            with self.subTest(phase=phase):
+                compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'phase': phase}).encode())
+                with self.assertRaises(Rejected):
+                    compat.prepare_reinstall('2.0', '1.0')
+                self.assertFalse(compat.ACTIVATION.exists())
+
     def test_native_upgrade_keeps_optional_previous_ticket_and_checks_witness(self):
         source = {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1}
         native = {'schema': 1, 'packageVersion': '1.0', 'nonce': 'old-nonce'}

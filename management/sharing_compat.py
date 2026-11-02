@@ -206,7 +206,7 @@ def prepare_reinstall(target_version, old_version):
         state_path = UPDATE_ROOT / 'state.json'
         if state_path.exists() or state_path.is_symlink():
             state = json.loads(secure_read(state_path))
-            require(isinstance(state, dict) and state.get('phase', '') in ('', 'complete', 'failed'),
+            require(isinstance(state, dict) and state.get('phase', '') in ('', 'checked', 'downloaded', 'complete', 'failed', 'rolled-back'),
                     'Complete the system update before reinstalling sharing')
         files = capture()
         require(files[str(FILES[0])]['exists'], 'Sharing setup is incomplete. Finish the system update before continuing.')

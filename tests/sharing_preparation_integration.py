@@ -83,6 +83,8 @@ def main():
     parser.add_argument('--reupgrade-after-rollback', action='store_true')
     parser.add_argument('--root-retry-after-interruption', action='store_true')
     parser.add_argument('--native-activation', action='store_true')
+    parser.add_argument('--native-failure-stage', choices=('pending', 'committed'))
+    parser.add_argument('--failure-package-resumed', action='store_true')
     args = parser.parse_args()
     prove_guest(args.vm_uuid)
     with tempfile.TemporaryDirectory(prefix='panasms-go06-package-', dir='/run') as folder:
@@ -120,6 +122,8 @@ def run(args, folder):
     assert not args.reupgrade_after_rollback or ((not prepared or args.native_activation) and not args.expect_configure_failure)
     assert not args.root_retry_after_interruption or (prepared and args.interrupt_paired_restore)
     assert not args.native_activation or prepared
+    assert bool(args.native_failure_stage) == bool(args.native_activation and args.expect_configure_failure)
+    assert not args.failure_package_resumed or args.native_failure_stage == 'committed'
     if args.root_retry_after_interruption:
         assert 'retry' in old.recover.__code__.co_varnames, 'The source worker must support explicit root recovery'
         worker = old.ROOT / 'worker'
@@ -154,15 +158,26 @@ def run(args, folder):
                 witness = json.loads(command('/usr/lib/panasms/panasms-system-helper', 'sharing', 'rollback-check'))
                 assert witness['schema'] == 1 and witness['journalsAbsent'] is True
             else:
-                assert FILES[5].exists(), 'The fixture did not reach native activation preparation'
+                if args.native_failure_stage == 'pending':
+                    ticket = json.loads(FILES[5].read_bytes())
+                    assert ticket['targetVersion'] == target and len(ticket['nonce']) == 32
+                    assert capture()[str(FILES[4])] == baseline[str(FILES[4])], 'The failure passed receipt commit'
+                else:
+                    receipt = json.loads(FILES[4].read_bytes())
+                    assert receipt['packageVersion'] == target and not FILES[5].exists()
+                    witness = json.loads(command('/usr/lib/panasms/panasms-system-helper', 'sharing', 'rollback-check'))
+                    assert witness['schema'] == 1 and witness['journalsAbsent'] is True
         else:
             assert capture() == baseline, 'Preparation changed sharing policy before rollback'
         assert ('sharing_compat' in old.__dict__) == prepared, 'The in-memory updater changed unexpectedly'
         if prepared and args.expect_configure_failure:
             package_state = Path('/var/lib/panasms-installer/sharing-package-state.json')
-            assert package_state.exists(), 'Inject failure before target package-resume for this reverse-transition test'
-            record = json.loads(package_state.read_text())
-            assert record['sourceVersion'] == args.old_version and record['targetVersion'] == target
+            if args.failure_package_resumed:
+                assert not package_state.exists(), 'The injected failure preceded package resume'
+            else:
+                assert package_state.exists(), 'Inject failure before target package-resume for this reverse-transition test'
+                record = json.loads(package_state.read_text())
+                assert record['sourceVersion'] == args.old_version and record['targetVersion'] == target
         assert command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype') == target
         if not prepared:
             assert hashlib.sha256(source.read_bytes()).hexdigest() != args.old_updater_sha256
@@ -218,6 +233,8 @@ def run(args, folder):
     print(json.dumps({'result': 'PASS', 'scenario': args.updater_kind + '-in-memory-worker-to-' + ('native' if args.native_activation else 'preparation') + '-and-back',
                       'oldVersion': args.old_version, 'targetVersion': target,
                       'configureFailureInjected': args.expect_configure_failure,
+                      'nativeFailureStage': args.native_failure_stage,
+                      'packageResumedBeforeFailure': args.failure_package_resumed,
                       'pairedRestoreInterruptionAndRetry': args.interrupt_paired_restore,
                       'reupgradeAfterOldRollback': args.reupgrade_after_rollback,
                       'rootRetryWithoutAgent': args.root_retry_after_interruption,

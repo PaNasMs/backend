@@ -47,6 +47,15 @@ done
 install -D -m 0644 packaging/panasms-mdns.conf "$stage/usr/lib/systemd/system/avahi-daemon.service.d/panasms-mdns.conf"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
 sed -i "s/@PANASMS_PACKAGE_VERSION@/$version/g" "$stage/DEBIAN/preinst"
+python3 - "$stage/DEBIAN/preinst" <<'REINSTALL'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = Path('management/sharing_compat.py').read_text().split("if __name__ == '__main__':", 1)[0]
+source = source.replace('from common import Rejected, require', 'class Rejected(Exception): pass\ndef require(condition, message):\n    if not condition: raise Rejected(message)')
+source += '\nprepare_reinstall(sys.argv[1], sys.argv[2])\n'
+path.write_text(path.read_text().replace('@PANASMS_REINSTALL_PREFLIGHT@', source))
+REINSTALL
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"
 printf 'Source: panasms-prototype\nSection: admin\nPriority: optional\nMaintainer: PaNasMs\n\nPackage: panasms-prototype\nArchitecture: any\nDescription: PaNasMs\n' > "$stage/debian/control"

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"strings"
@@ -76,6 +77,138 @@ func TestSharingActivationPreparedAndFreshInstall(t *testing.T) {
 			}
 			if pending, _ := sharingExists(s.activationTicket); pending {
 				t.Fatal("committed ticket was not consumed")
+			}
+		})
+	}
+}
+
+func TestSharingPendingActivationCleanupAndRetry(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		for _, removed := range []string{"", "smb", "nfs"} {
+			t.Run(map[bool]string{false: "prepared", true: "fresh"}[fresh]+removed, func(t *testing.T) {
+				s, ticket := sharingActivationFixture(t, fresh)
+				if !fresh {
+					smb, nfs := sharingConfig(nil, true, false)
+					s.write(s.smb, smb, 0644)
+					s.write(s.exports, nfs, 0644)
+					for _, path := range []string{s.smb, s.exports} {
+						ticket.Files[path], _ = s.fileSnapshot(path)
+					}
+					writeActivationTicket(t, s, ticket)
+				}
+				seed, err := s.activationSeed(ticket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.write(s.state, string(seed), 0600)
+				if removed == "smb" {
+					os.Remove(s.smb)
+				} else if removed == "nfs" {
+					os.Remove(s.exports)
+				}
+				before, _ := os.ReadFile(s.activationTicket)
+				for _, action := range []string{"remove", "remove", "uninstall"} {
+					if err = s.cli(context.Background(), []string{action}, nil, io.Discard); err != nil {
+						t.Fatal(action, err)
+					}
+				}
+				after, _ := os.ReadFile(s.activationTicket)
+				if string(before) != string(after) {
+					t.Fatal("cleanup consumed activation evidence")
+				}
+				if exists, _ := sharingExists(s.activationReceipt); exists {
+					t.Fatal("cleanup committed activation")
+				}
+				if err = s.cli(context.Background(), []string{"republish"}, nil, io.Discard); err == nil {
+					t.Fatal("cleanup authorized unrelated mutation")
+				}
+			})
+		}
+	}
+}
+
+func TestSharingPendingCleanupRefusesForeignFilesBeforeCommands(t *testing.T) {
+	for _, changed := range []string{"state", "smb", "nfs", "legacy", "guard", "journal", "legacy-journal", "ticket"} {
+		t.Run(changed, func(t *testing.T) {
+			s, _ := sharingActivationFixture(t, false)
+			paths := map[string]string{"state": s.state, "smb": s.smb, "nfs": s.exports, "legacy": s.legacy, "guard": s.restoreGuard, "journal": s.journal, "legacy-journal": filepath.Join(filepath.Dir(s.journal), "sharing-legacy-nfs-transaction.json"), "ticket": s.activationTicket}
+			s.write(paths[changed], "foreign", 0600)
+			commands := 0
+			s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+				commands++
+				return nil, nil
+			}
+			for _, action := range []string{"remove", "uninstall"} {
+				if err := s.cli(context.Background(), []string{action}, nil, io.Discard); err == nil {
+					t.Fatal("foreign state accepted", action)
+				}
+			}
+			if commands != 0 {
+				t.Fatal("foreign state reached a command")
+			}
+		})
+	}
+}
+
+func sharingReinstallFixture(t *testing.T) (*sharingService, sharingActivationTicket) {
+	t.Helper()
+	s, ticket := sharingActivationFixture(t, false)
+	ticket.Source.Reinstall = true
+	ticket.Source.Native = true
+	state := sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}}
+	state.LegacyExportRevision = sharingSnapshotRevision(ticket.Files[s.legacy])
+	saveSharingFixture(t, s, state)
+	ticket.Files[s.state], _ = s.fileSnapshot(s.state)
+	for _, path := range []string{s.smb, s.exports} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		ticket.Files[path] = sharingFileSnapshot{}
+	}
+	ticket.SourceActivation = map[string]sharingFileSnapshot{s.activationReceipt: {}, s.activationTicket: {}}
+	writeActivationTicket(t, s, ticket)
+	return s, ticket
+}
+
+func TestSharingReinstallAcceptsRemovedPublicationsOnlyDuringActivation(t *testing.T) {
+	s, ticket := sharingReinstallFixture(t)
+	if err := s.requireNativeSharing(context.Background(), "rollback-check"); err == nil {
+		t.Fatal("uncommitted reinstall authorized rollback")
+	}
+	if err := s.activateSharing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.read()
+	if err != nil || len(state.Shares) != 1 {
+		t.Fatal("retained state lost", state, err)
+	}
+	for _, path := range []string{s.smb, s.exports, s.legacy} {
+		current, _ := s.fileSnapshot(path)
+		if !sharingSnapshotsEqual(current, ticket.Files[path]) {
+			t.Fatal("activation republished before installation", path)
+		}
+	}
+}
+
+func TestSharingReinstallRefusesForeignPolicyAndMetadata(t *testing.T) {
+	for _, change := range []string{"smb", "nfs", "legacy", "receipt", "ticket", "receipt-after-lock"} {
+		t.Run(change, func(t *testing.T) {
+			s, _ := sharingReinstallFixture(t)
+			before, _ := os.ReadFile(s.state)
+			if change == "receipt-after-lock" {
+				s.authorizeTarget = func(context.Context, string) error {
+					return s.write(s.activationReceipt, `{}`, 0600)
+				}
+			} else {
+				path := map[string]string{"smb": s.smb, "nfs": s.exports, "legacy": s.legacy, "receipt": s.activationReceipt, "ticket": s.activationTicket}[change]
+				s.write(path, `{}`, 0600)
+			}
+			if err := s.activateSharing(context.Background()); err == nil {
+				t.Fatal("foreign change accepted")
+			}
+			after, _ := os.ReadFile(s.state)
+			if string(before) != string(after) {
+				t.Fatal("foreign metadata allowed seed write")
 			}
 		})
 	}

@@ -478,6 +478,18 @@ package and its configured files. A pristine fresh installation uses a separate 
 skipping the compatibility update is refused. Activation commits a version- and nonce-bound receipt
 before ordinary sharing operations are enabled.
 
+After a non-purge removal, reinstalling retained sharing configuration requires a completed
+compatibility configuration and exclusive maintenance. Because removal also removes
+`panasms-maintenance`, use the system lock directly for this case:
+
+```sh
+sudo flock -n /run/lock/panasms-maintenance.lock env PANASMS_MAINTENANCE=1 apt-get install ./panasms-prototype.deb
+```
+
+Pending updates, incomplete activation and changed retained files require recovery before
+reinstallation. Removal can unpublish a verified interrupted activation without committing it;
+the installer preserves its activation evidence.
+
 Supported updater rollback uses a paired snapshot of sharing policy and generated SMB/NFS files.
 It refuses unresolved journals, foreign edits, or changed SMB account state that cannot be restored
 from a configuration-only backup. Samba's password database is not included or reverted. If the

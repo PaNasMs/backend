@@ -99,8 +99,10 @@ case "${1:-}" in
  ;;
  install)
   if [ -n "${2:-}" ]; then
-   echo 'Install the compatibility update in System updates before continuing.' >&2
-   exit 1
+   python3 - "$target" "$2" <<'REINSTALL'
+@PANASMS_REINSTALL_PREFLIGHT@
+REINSTALL
+   exit 0
   fi
   python3 - "$target" <<'ACTIVATION'
 import json, os, secrets, stat, sys, tempfile

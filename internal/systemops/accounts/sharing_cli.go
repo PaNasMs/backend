@@ -105,6 +105,7 @@ func (s *sharingService) cli(ctx context.Context, args []string, input io.Reader
 			return err
 		}
 	case "uninstall":
+		s.guardMode = "uninstall"
 		unlock, err := s.locked()
 		if err != nil {
 			return err

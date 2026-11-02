@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 
@@ -106,7 +107,7 @@ def attest():
 
 def configure():
     check_install()
-    value = {'schema': SCHEMA, 'packageVersion': package_version(configuring=True), 'files': attest()}
+    value = {'schema': SCHEMA, 'packageVersion': package_version(configuring=True), 'files': attest(), 'native': True}
     atomic(MARKER, json.dumps(value, sort_keys=True).encode())
     if INSTALL_MODE.exists() or INSTALL_MODE.is_symlink():
         require(secure_read(INSTALL_MODE) == b'install\n', 'Invalid sharing install marker')
@@ -135,6 +136,97 @@ ACTIVATION = Path('/var/lib/panasms-installer/sharing-activation-v1.json')
 NATIVE = Path('/var/lib/panasms-installer/sharing-native-v1.json')
 PACKAGE_STATE = Path('/var/lib/panasms-installer/sharing-package-state.json')
 UPDATE_ROOT = Path('/var/lib/panasms-updates')
+MAINTENANCE_LOCK = Path('/run/lock/panasms-maintenance.lock')
+
+
+def valid_source(value):
+    if not isinstance(value, dict):
+        return False
+    if value == {'fresh': True}:
+        return True
+    return (set(value) <= {'schema', 'packageVersion', 'pairedRestore', 'native', 'reinstall'}
+            and value.get('schema') == 1 and value.get('pairedRestore') == 1
+            and isinstance(value.get('packageVersion'), str) and bool(value['packageVersion'])
+            and type(value.get('native', False)) is bool and type(value.get('reinstall', False)) is bool)
+
+
+def valid_receipt(value):
+    return (isinstance(value, dict) and set(value) == {'schema', 'packageVersion', 'nonce', 'source'}
+            and value['schema'] == 1 and isinstance(value['packageVersion'], str)
+            and isinstance(value['nonce'], str) and len(value['nonce']) == 32
+            and all(c in '0123456789abcdef' for c in value['nonce']) and valid_source(value['source']))
+
+
+def require_maintenance_ancestor():
+    require(os.environ.get('PANASMS_MAINTENANCE') == '1', 'Native preparation requires exclusive maintenance')
+    _, info = read_file(MAINTENANCE_LOCK)
+    ancestors = set()
+    process = os.getppid()
+    while process > 1 and process not in ancestors:
+        ancestors.add(process)
+        process = int(Path('/proc', str(process), 'stat').read_text().rsplit(')', 1)[1].split()[1])
+    for row in Path('/proc/locks').read_text().splitlines():
+        fields = row.split()
+        if len(fields) < 6 or fields[1:4] != ['FLOCK', 'ADVISORY', 'WRITE']:
+            continue
+        major, minor, inode = fields[5].split(':')
+        if (int(fields[4]) in ancestors and int(major, 16) == os.major(info.st_dev)
+                and int(minor, 16) == os.minor(info.st_dev) and int(inode) == info.st_ino):
+            return
+    raise Rejected('Native preparation requires exclusive maintenance')
+
+
+def trusted_marker_parents():
+    for parent in MARKER.parents:
+        info = parent.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == OWNER and info.st_mode & 0o022 == 0,
+                'Untrusted sharing compatibility directory')
+
+
+def prepare_reinstall(target_version, old_version):
+    require_maintenance_ancestor()
+    require(subprocess.run(['dpkg', '--validate-version', target_version], capture_output=True).returncode == 0,
+            'Invalid native target package version')
+    status = subprocess.check_output(['dpkg-query', '-W', '-f=${db:Status-Status} ${Version} ${Config-Version}',
+                                      'panasms-prototype'], text=True).split()
+    require(status == ['half-installed', old_version, old_version] and bool(old_version),
+            'Install the compatibility update in System updates before continuing.')
+    trusted_marker_parents()
+    raw, info = read_file(MARKER)
+    marker = json.loads(raw)
+    require(stat.S_IMODE(info.st_mode) == 0o600 and set(marker) <= {'schema', 'packageVersion', 'files', 'native'}
+            and marker.get('schema') == 1 and marker.get('packageVersion') == old_version
+            and type(marker.get('native', False)) is bool and isinstance(marker.get('files'), dict)
+            and set(marker['files']) == {str(path) for path in ATTESTED}
+            and all(isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+                    for value in marker['files'].values()), 'Sharing compatibility preparation is not verified')
+    with locked():
+        require(secure_read(MARKER) == raw, 'Sharing compatibility preparation changed')
+        resume_check()
+        state_path = UPDATE_ROOT / 'state.json'
+        if state_path.exists() or state_path.is_symlink():
+            state = json.loads(secure_read(state_path))
+            require(isinstance(state, dict) and state.get('phase', '') in ('', 'complete', 'failed'),
+                    'Complete the system update before reinstalling sharing')
+        files = capture()
+        require(files[str(FILES[0])]['exists'], 'Sharing setup is incomplete. Finish the system update before continuing.')
+        activation = capture_activation()
+        require(not activation[str(ACTIVATION)]['exists'], 'Native source activation is incomplete')
+        receipt = None
+        if activation[str(NATIVE)]['exists']:
+            require(activation[str(NATIVE)]['mode'] == 0o600, 'Invalid native sharing receipt')
+            receipt = json.loads(base64.b64decode(activation[str(NATIVE)]['data']))
+            require(valid_receipt(receipt), 'Invalid native sharing receipt')
+        native = bool(marker.get('native'))
+        require(bool(receipt and receipt['packageVersion'] == old_version) == native,
+                'Native sharing requires recovery before another package transition')
+        source = {'schema': 1, 'packageVersion': old_version, 'pairedRestore': 1, 'native': native, 'reinstall': True}
+        ticket = {'schema': 1, 'targetVersion': target_version, 'nonce': uuid.uuid4().hex,
+                  'source': source, 'files': files, 'sourceActivation': activation}
+        require(capture() == files and capture_activation() == activation,
+                'Sharing changed during native transition preparation')
+        atomic(ACTIVATION, json.dumps(ticket, sort_keys=True).encode())
+    return ticket
 
 
 @contextmanager
@@ -361,12 +453,15 @@ def prepare_activation(target_version):
     result = subprocess.run(['dpkg', '--validate-version', target_version], capture_output=True, text=True)
     require(result.returncode == 0, 'Invalid native target package version')
     source = capabilities()
+    marker = json.loads(secure_read(MARKER))
+    require(type(marker.get('native', False)) is bool, 'Invalid sharing compatibility preparation')
     native = None
     if NATIVE.exists() or NATIVE.is_symlink():
         native = json.loads(secure_read(NATIVE))
         require(native.get('schema') == SCHEMA and isinstance(native.get('packageVersion'), str),
                 'Invalid native sharing receipt')
     source['native'] = bool(native and native['packageVersion'] == source['packageVersion'])
+    require(not marker.get('native') or source['native'], 'Native sharing requires recovery before another package transition')
     previous = None
     witness = None
     if source['native']:

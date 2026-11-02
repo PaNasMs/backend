@@ -56,6 +56,23 @@ class Preparation(unittest.TestCase):
             with self.assertRaises(Rejected):
                 compat.capabilities()
 
+    def test_reinstall_requires_real_maintenance_ancestor_not_environment_flag(self):
+        lock = self.root / 'maintenance-lock'
+        lock.touch(mode=0o600)
+        with patch.object(compat, 'MAINTENANCE_LOCK', lock), patch.dict(os.environ, {'PANASMS_MAINTENANCE': '1'}):
+            with self.assertRaises(Rejected):
+                compat.require_maintenance_ancestor()
+        import fcntl
+        with lock.open() as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code = ('import os,sys;from pathlib import Path;'
+                    'sys.path.insert(0,sys.argv[1]);import sharing_compat as c;'
+                    'c.OWNER=os.getuid();c.MAINTENANCE_LOCK=Path(sys.argv[2]);c.require_maintenance_ancestor()')
+            result = subprocess.run([sys.executable, '-c', code, str(Path(__file__).parents[1] / 'management'), str(lock)],
+                                    env={'PATH': '/usr/bin:/bin', 'PANASMS_MAINTENANCE': '1', 'PYTHONDONTWRITEBYTECODE': '1'},
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_legacy_reupgrade_consumes_only_proven_completed_package_record(self):
         template = (Path(__file__).parents[1] / 'packaging/preinst').read_text().split("<<'MODE'\n", 1)[1].split('\nMODE', 1)[0]
         template = template.replace('/var/lib/panasms-installer', str(self.root / 'installer'))
@@ -262,10 +279,12 @@ class PairedRollback(unittest.TestCase):
                             ('GUARD', self.root / 'restore-guard'),
                             ('ACTIVATION', self.root / 'activation'), ('NATIVE', self.root / 'native'),
                             ('PACKAGE_STATE', self.root / 'package-state'), ('UPDATE_ROOT', self.root / 'updates'),
+                            ('MARKER', self.root / 'compat-marker'),
                             ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal'))):
             guard = patch.object(compat, name, value)
             guard.start()
             self.addCleanup(guard.stop)
+        compat.atomic(compat.MARKER, b'{"schema":1}')
         paths[0].write_bytes(b'{"shares":[],"accounts":{}}')
         paths[0].chmod(0o600)
         paths[1].write_bytes(b'original SMB policy')
@@ -467,6 +486,73 @@ class PairedRollback(unittest.TestCase):
         self.assertEqual(second['files'], before)
         self.assertEqual(compat.capture(), before)
         self.assertFalse(compat.NATIVE.exists())
+
+    def reinstall_fixture(self, native=False):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(compat, 'ATTESTED', (self.root / 'installed-source',)))
+        stack.enter_context(patch.object(compat, 'trusted_marker_parents'))
+        stack.enter_context(patch.object(compat, 'require_maintenance_ancestor'))
+        stack.enter_context(patch.object(compat.subprocess, 'check_output', return_value='half-installed 1.0 1.0'))
+        stack.enter_context(patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
+        marker = {'schema': 1, 'packageVersion': '1.0', 'files': {str(compat.ATTESTED[0]): 'a' * 64}}
+        if native:
+            marker['native'] = True
+            compat.atomic(compat.NATIVE, json.dumps({'schema': 1, 'packageVersion': '1.0', 'nonce': 'a' * 32,
+                                                    'source': {'fresh': True}}).encode())
+        compat.atomic(compat.MARKER, json.dumps(marker).encode())
+        return marker
+
+    def test_retained_reinstall_captures_policy_and_metadata_without_publication(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                compat.ACTIVATION.unlink(missing_ok=True)
+                self.reinstall_fixture(native)
+                before, metadata = compat.capture(), compat.capture_activation()
+                ticket = compat.prepare_reinstall('2.0', '1.0')
+                self.assertEqual(ticket['files'], before)
+                self.assertEqual(ticket['sourceActivation'], metadata)
+                self.assertEqual(ticket['source']['native'], native)
+                self.assertTrue(ticket['source']['reinstall'])
+                self.assertEqual(compat.capture(), before)
+                with self.assertRaises(Rejected):
+                    compat.prepare_reinstall('2.0', '1.0')
+                self.assertEqual(json.loads(compat.ACTIVATION.read_bytes()), ticket)
+
+    def test_retained_reinstall_refuses_unknown_or_incomplete_source(self):
+        for changed in ('missing-marker', 'mode', 'version', 'digest', 'symlink', 'native-missing-receipt',
+                        'native-stale-receipt', 'native-malformed-receipt', 'guard', 'journal', 'active-updater', 'missing-json'):
+            with self.subTest(changed=changed):
+                self.reinstall_fixture(native=True)
+                compat.GUARD.unlink(missing_ok=True)
+                compat.JOURNALS[0].unlink(missing_ok=True)
+                compat.UPDATE_ROOT.mkdir(exist_ok=True)
+                state = compat.UPDATE_ROOT / 'state.json'
+                state.unlink(missing_ok=True)
+                compat.FILES[0].write_bytes(b'{"shares":[],"accounts":{}}')
+                marker = json.loads(compat.MARKER.read_bytes())
+                if changed == 'missing-marker': compat.MARKER.unlink()
+                elif changed == 'mode': compat.MARKER.chmod(0o644)
+                elif changed == 'version': marker['packageVersion'] = 'other'
+                elif changed == 'digest': marker['files'][str(compat.ATTESTED[0])] = 'invalid'
+                elif changed == 'symlink':
+                    compat.MARKER.unlink(); compat.MARKER.symlink_to(compat.FILES[0])
+                elif changed == 'native-missing-receipt': compat.NATIVE.unlink()
+                elif changed == 'native-stale-receipt':
+                    receipt = json.loads(compat.NATIVE.read_bytes()); receipt['packageVersion'] = 'old'
+                    compat.atomic(compat.NATIVE, json.dumps(receipt).encode())
+                elif changed == 'native-malformed-receipt': compat.atomic(compat.NATIVE, b'{}')
+                elif changed == 'guard': compat.atomic(compat.GUARD, b'{}')
+                elif changed == 'journal': compat.atomic(compat.JOURNALS[0], b'{}')
+                elif changed == 'active-updater': compat.atomic(state, b'{"phase":"installing"}')
+                elif changed == 'missing-json': compat.FILES[0].unlink()
+                if changed in ('version', 'digest'): compat.atomic(compat.MARKER, json.dumps(marker).encode())
+                with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'matching-is-not-a-bypass'}):
+                    with self.assertRaises((Rejected, OSError)):
+                        compat.prepare_reinstall('2.0', '1.0')
+                self.assertFalse(compat.ACTIVATION.exists())
+                compat.MARKER.unlink(missing_ok=True)
 
     def test_native_upgrade_keeps_optional_previous_ticket_and_checks_witness(self):
         source = {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1}

@@ -28,14 +28,16 @@ type sharingActivationSource struct {
 	PackageVersion string `json:"packageVersion,omitempty"`
 	PairedRestore  int    `json:"pairedRestore,omitempty"`
 	Native         bool   `json:"native,omitempty"`
+	Reinstall      bool   `json:"reinstall,omitempty"`
 }
 type sharingActivationTicket struct {
-	Schema        int                            `json:"schema"`
-	TargetVersion string                         `json:"targetVersion"`
-	Nonce         string                         `json:"nonce"`
-	Source        sharingActivationSource        `json:"source"`
-	Files         map[string]sharingFileSnapshot `json:"files"`
-	Previous      *sharingActivationTicket       `json:"previous,omitempty"`
+	Schema           int                            `json:"schema"`
+	TargetVersion    string                         `json:"targetVersion"`
+	Nonce            string                         `json:"nonce"`
+	Source           sharingActivationSource        `json:"source"`
+	Files            map[string]sharingFileSnapshot `json:"files"`
+	Previous         *sharingActivationTicket       `json:"previous,omitempty"`
+	SourceActivation map[string]sharingFileSnapshot `json:"sourceActivation,omitempty"`
 }
 type sharingActivationReceipt struct {
 	Schema         int                     `json:"schema"`
@@ -98,7 +100,7 @@ func sharingNonce(value string) bool {
 }
 func sharingSourceValid(source sharingActivationSource) bool {
 	if source.Fresh {
-		return source.Schema == 0 && source.PackageVersion == "" && source.PairedRestore == 0 && !source.Native
+		return source.Schema == 0 && source.PackageVersion == "" && source.PairedRestore == 0 && !source.Native && !source.Reinstall
 	}
 	return source.Schema == 1 && source.PackageVersion != "" && source.PairedRestore == 1
 }
@@ -125,6 +127,19 @@ func (s *sharingService) validTicket(ticket *sharingActivationTicket) error {
 			return reject(sharingActivationPending)
 		}
 	}
+	if ticket.Source.Reinstall {
+		if len(ticket.SourceActivation) != 2 || !ticket.Files[s.state].Exists {
+			return reject(sharingActivationPending)
+		}
+		for _, path := range []string{s.activationReceipt, s.activationTicket} {
+			entry, ok := ticket.SourceActivation[path]
+			if !ok || entry.Exists && (int(entry.UID) != s.ownerUID || entry.Mode != 0600) || path == s.activationTicket && entry.Exists {
+				return reject(sharingActivationPending)
+			}
+		}
+	} else if ticket.SourceActivation != nil {
+		return reject(sharingActivationPending)
+	}
 	return nil
 }
 func (s *sharingService) requireNativeSharing(ctx context.Context, mode string) error {
@@ -148,7 +163,10 @@ func (s *sharingService) requireNativeSharing(ctx context.Context, mode string) 
 		authorized = false
 	}
 	if !authorized {
-		if !pending || s.validTicket(&ticket) != nil || ticket.TargetVersion != version || ticket.Source.Fresh || (mode != "rollback-check" && mode != "prepare-downgrade") {
+		if pending && s.validTicket(&ticket) == nil && ticket.TargetVersion == version && (mode == "remove" || mode == "uninstall") {
+			return s.pendingCleanupFiles(ticket)
+		}
+		if !pending || s.validTicket(&ticket) != nil || ticket.TargetVersion != version || ticket.Source.Fresh || ticket.Source.Reinstall || (mode != "rollback-check" && mode != "prepare-downgrade") {
 			return reject(sharingActivationRequired)
 		}
 		if mode == "rollback-check" && !sharingFileMapsEqual(s.rollbackSource, ticket.Files) {
@@ -266,6 +284,16 @@ func (s *sharingService) activateSharing(ctx context.Context) error {
 	if committed && receipt.Schema == 1 && receipt.PackageVersion == version && receipt.Nonce == ticket.Nonce && receipt.Source == ticket.Source && sharingSourceValid(receipt.Source) {
 		return removeSharingFile(s.activationTicket)
 	}
+	var ticketBefore sharingFileSnapshot
+	if ticket.Source.Reinstall {
+		ticketBefore, err = s.fileSnapshot(s.activationTicket)
+		if err != nil || !ticketBefore.Exists {
+			return reject(sharingActivationPending)
+		}
+		if err = s.reinstallMetadata(ticket, ticketBefore); err != nil {
+			return err
+		}
+	}
 	guard, err := sharingExists(s.restoreGuard)
 	if err != nil || guard {
 		return reject(sharingRestorePending)
@@ -280,6 +308,11 @@ func (s *sharingService) activateSharing(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	if ticket.Source.Reinstall {
+		if err = s.reinstallMetadata(ticket, ticketBefore); err != nil {
+			return err
+		}
+	}
 	if guard, e := sharingExists(s.restoreGuard); e != nil || guard {
 		return reject(sharingRestorePending)
 	}
@@ -297,7 +330,7 @@ func (s *sharingService) activateSharing(ctx context.Context) error {
 			return err
 		}
 	}
-	if !s.knownSharingConfig(ticket.Files, baseline) {
+	if !s.knownActivationConfig(ticket, baseline) {
 		return reject(sharingDrift)
 	}
 	seeded, err := s.activationSeed(ticket)
@@ -306,6 +339,11 @@ func (s *sharingService) activateSharing(ctx context.Context) error {
 	}
 	if _, err = s.pendingActivationFiles(ticket); err != nil {
 		return err
+	}
+	if ticket.Source.Reinstall {
+		if err = s.reinstallMetadata(ticket, ticketBefore); err != nil {
+			return err
+		}
 	}
 	if err = s.write(s.state, string(seeded), 0600); err != nil {
 		return err
@@ -319,6 +357,44 @@ func (s *sharingService) activateSharing(ctx context.Context) error {
 		return err
 	}
 	return removeSharingFile(s.activationTicket)
+}
+
+func (s *sharingService) reinstallMetadata(ticket sharingActivationTicket, before sharingFileSnapshot) error {
+	var decoded sharingActivationTicket
+	if sharingDecodeMetadata(before.Data, &decoded) != nil {
+		return reject(sharingActivationChanged)
+	}
+	loaded, _ := json.Marshal(ticket)
+	currentTicket, _ := json.Marshal(decoded)
+	if !bytes.Equal(loaded, currentTicket) {
+		return reject(sharingActivationChanged)
+	}
+	for _, path := range []string{s.activationReceipt, s.activationTicket} {
+		expected := ticket.SourceActivation[path]
+		if path == s.activationTicket {
+			expected = before
+		}
+		current, err := s.fileSnapshot(path)
+		if err != nil || !sharingSnapshotsEqual(current, expected) {
+			return reject(sharingActivationChanged)
+		}
+	}
+	return nil
+}
+
+func (s *sharingService) knownActivationConfig(ticket sharingActivationTicket, state sharingState) bool {
+	if !ticket.Source.Reinstall {
+		return s.knownSharingConfig(ticket.Files, state)
+	}
+	for _, python := range []bool{false, true} {
+		for _, legacy := range []bool{false, true} {
+			smb, nfs := sharingConfig(state.Shares, python, legacy)
+			if (!ticket.Files[s.smb].Exists || string(ticket.Files[s.smb].Data) == smb) && (!ticket.Files[s.exports].Exists || string(ticket.Files[s.exports].Data) == nfs) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *sharingService) abortSharingActivation(ctx context.Context) error {
@@ -435,6 +511,34 @@ func (s *sharingService) activationSeed(ticket sharingActivationTicket) ([]byte,
 	return json.Marshal(st)
 }
 func (s *sharingService) pendingActivationFiles(ticket sharingActivationTicket) (map[string]sharingFileSnapshot, error) {
+	return s.pendingFiles(ticket, false)
+}
+func (s *sharingService) pendingCleanupFiles(ticket sharingActivationTicket) error {
+	if guard, err := sharingExists(s.restoreGuard); err != nil || guard {
+		return reject(sharingRestorePending)
+	}
+	var baseline sharingState
+	if ticket.Files[s.state].Exists {
+		if err := systemops.Decode(ticket.Files[s.state].Data, &baseline); err != nil {
+			return err
+		}
+	}
+	if !s.knownActivationConfig(ticket, baseline) {
+		return reject(sharingDrift)
+	}
+	if ticket.Source.Reinstall {
+		before, err := s.fileSnapshot(s.activationTicket)
+		if err != nil {
+			return err
+		}
+		if err = s.reinstallMetadata(ticket, before); err != nil {
+			return err
+		}
+	}
+	_, err := s.pendingFiles(ticket, true)
+	return err
+}
+func (s *sharingService) pendingFiles(ticket sharingActivationTicket, cleanup bool) (map[string]sharingFileSnapshot, error) {
 	for _, path := range []string{s.journal, filepath.Join(filepath.Dir(s.journal), "sharing-legacy-nfs-transaction.json")} {
 		if exists, err := sharingExists(path); err != nil || exists {
 			return nil, reject(sharingPending)
@@ -451,6 +555,10 @@ func (s *sharingService) pendingActivationFiles(ticket sharingActivationTicket) 
 			return nil, err
 		}
 		if !sharingSnapshotsEqual(current, before) {
+			if cleanup && !current.Exists && (path == s.smb || path == s.exports) {
+				files[path] = current
+				continue
+			}
 			if path != s.state || !current.Exists || current.Mode != 0600 || !bytes.Equal(current.Data, seeded) {
 				return nil, reject(sharingActivationChanged)
 			}

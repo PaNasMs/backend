@@ -133,6 +133,7 @@ raise SystemExit('Unexpected fixture service operation: '+repr(args))
 def namespace(root, loop, binary, prepared, version, nonce):
     if os.getpid() != 1:
         raise SystemExit('Namespace setup requires a fresh PID namespace')
+    prove_guest()
     command('mount', '--make-rprivate', '/')
     root = Path(root)
     for name in ('usr/bin', 'usr/sbin', 'usr/lib/panasms', 'etc/default', 'etc/panasms', 'etc/pam.d',
@@ -255,6 +256,9 @@ def smb(user, password, cmd, success=True):
 
 
 def scenarios():
+    nonce = os.environ.get('PANASMS_SHARING_NONCE', '')
+    if os.getpid() != 1 or len(nonce) != 32 or not Path('/fixture/nonce').is_file() or Path('/fixture/nonce').read_text() != nonce:
+        raise SystemExit('Scenarios require the verified private namespace root')
     command('ip', 'link', 'set', 'lo', 'up')
     Path('/etc/passwd').write_text('root:x:0:0:root:/root:/bin/bash\nadmin:x:15000:15000:Admin:/root/admin:/bin/bash\nalice:x:15001:15001:Alice:/home/alice:/bin/bash\nbob:x:15002:15002:Bob:/home/bob:/bin/bash\neve:x:15003:15003:Eve:/home/eve:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n_rpc:x:15004:15004:rpcbind:/run/rpcbind:/usr/sbin/nologin\n')
     Path('/etc/group').write_text('root:x:0:\nsudo:x:27:admin\nadmin:x:15000:\nalice:x:15001:\nbob:x:15002:\neve:x:15003:\nnogroup:x:65534:\n_rpc:x:15004:\n')
@@ -276,7 +280,7 @@ def scenarios():
     assert ticket['source'] == {'schema': 1, 'packageVersion': version, 'pairedRestore': 1, 'native': False}
     tracer = ['/usr/bin/strace']
     if Path('/fixture/strace-runtime/strace').exists():
-        tracer = ['/lib64/ld-linux-x86-64.so.2', '--library-path', '/fixture/strace-runtime/lib', '/fixture/strace-runtime/strace']
+        tracer = ['/fixture/strace-runtime/ld-linux-x86-64.so.2', '--library-path', '/fixture/strace-runtime/lib', '/fixture/strace-runtime/strace']
     for boundary, syscalls, path in (
             ('receipt', 'rename,renameat,renameat2', '/var/lib/panasms-installer/sharing-native-v1.json'),
             ('ticket', 'unlink,unlinkat', '/var/lib/panasms-installer/sharing-activation-v1.json')):

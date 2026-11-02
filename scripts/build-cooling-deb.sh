@@ -26,12 +26,19 @@ install -m755 cooling/preinst "$stage/DEBIAN/preinst"
 install -m755 cooling/postinst "$stage/DEBIAN/postinst"
 install -m755 cooling/prerm "$stage/DEBIAN/prerm"
 rm -r "$stage/build-pinctrl" "$stage/build-dtmerge"
+mkdir -p "$stage/debian"
+printf 'Source: panasms-cooling\nSection: admin\nPriority: optional\nMaintainer: PaNasMs\n\nPackage: panasms-cooling\nArchitecture: any\nDescription: PaNasMs cooling\n' > "$stage/debian/control"
+shared_deps=$(cd "$stage" && dpkg-shlibdeps -O -eusr/lib/panasms-cooling/pinctrl -eusr/lib/panasms-cooling/dtoverlay)
+shared_deps=$(printf '%s\n' "$shared_deps" | sed -n 's/^shlibs:Depends=//p')
+[ -n "$shared_deps" ] || { echo 'Runtime library dependencies missing' >&2; exit 1; }
+rm "$stage/debian/control"
+rmdir "$stage/debian"
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: panasms-cooling
 Version: $version
 Architecture: $arch
 Maintainer: PaNasMs local development
-Depends: libc6 (>= 2.36), libfdt1, smartmontools, systemd
+Depends: $shared_deps, smartmontools, systemd
 Description: Independent configurable disk cooling controller for PaNasMs
 CONTROL
 dpkg-deb --root-owner-group --build "$stage" "dist/panasms-cooling_${version}_${arch}.deb"

@@ -17,17 +17,18 @@ import (
 )
 
 type nmFixture struct {
-	mu             sync.Mutex
-	props          map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-	profiles       map[dbus.ObjectPath]settings
-	checkpoints    []dbus.ObjectPath
-	saved          int
-	failActivation bool
-	failDevice     dbus.ObjectPath
-	missing        bool
-	nextProfile    int
-	calls          [][]string
-	service        *dbus.Conn
+	mu               sync.Mutex
+	props            map[dbus.ObjectPath]map[string]map[string]dbus.Variant
+	profiles         map[dbus.ObjectPath]settings
+	checkpoints      []dbus.ObjectPath
+	saved            int
+	failActivation   bool
+	failDevice       dbus.ObjectPath
+	failActiveDevice dbus.ObjectPath
+	missing          bool
+	nextProfile      int
+	calls            [][]string
+	service          *dbus.Conn
 }
 
 func newNMFixture(t *testing.T) (*adapter, *nmFixture) {
@@ -463,6 +464,10 @@ func (f *nmFixture) activateProfile(t *testing.T, profile, device dbus.ObjectPat
 	f.props[active] = map[string]map[string]dbus.Variant{nm + ".Connection.Active": {"State": dbus.MakeVariant(uint32(2)), "Connection": dbus.MakeVariant(profile), "Uuid": s["connection"]["uuid"]}}
 	f.props[device][nm+".Device"]["ActiveConnection"] = dbus.MakeVariant(active)
 	f.props[device][nm+".Device"]["State"] = dbus.MakeVariant(uint32(100))
+	if f.failActiveDevice == device {
+		f.props[active][nm+".Connection.Active"]["State"] = dbus.MakeVariant(uint32(4))
+		f.props[device][nm+".Device"]["State"] = dbus.MakeVariant(uint32(120))
+	}
 	paths, _ := objectPaths(f.props[nmPath][nm]["ActiveConnections"])
 	if !slices.Contains(paths, active) {
 		paths = append(paths, active)
@@ -911,6 +916,22 @@ func TestNMSharingFailedRestoreRetainsStagedProfiles(t *testing.T) {
 	}
 	f.mu.Lock()
 	f.failDevice = ""
+	f.failActiveDevice = "/device/1"
+	f.mu.Unlock()
+	if e = a.rollbackNMSharing(s); e == nil {
+		t.Fatal("asynchronous activation failure treated as restored")
+	}
+	profiles, e = a.profiles()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range s.NewUUIDs {
+		if profiles[id].Path == "" {
+			t.Fatal("staged profile deleted after asynchronous restore failure", id)
+		}
+	}
+	f.mu.Lock()
+	f.failActiveDevice = ""
 	f.mu.Unlock()
 	if e = a.rollbackNMSharing(s); e != nil {
 		t.Fatal("retry failed", e)
@@ -923,5 +944,36 @@ func TestNMSharingFailedRestoreRetainsStagedProfiles(t *testing.T) {
 		if profiles[id].Path != "" {
 			t.Fatal("staged profile retained after successful restore", id)
 		}
+	}
+}
+
+func TestNMIPv6ProfileCloneRestoresDBusStructSignatures(t *testing.T) {
+	for _, populated := range []bool{false, true} {
+		t.Run(fmt.Sprint(populated), func(t *testing.T) {
+			a, f := newNMSharingFixture(t)
+			addresses := []nmIPv6Address{}
+			routes := []nmIPv6Route{}
+			if populated {
+				addresses = append(addresses, nmIPv6Address{make([]byte, 16), 64, make([]byte, 16)})
+				routes = append(routes, nmIPv6Route{make([]byte, 16), 64, make([]byte, 16), 10})
+			}
+			f.mu.Lock()
+			f.profiles["/profile/1"]["ipv6"] = map[string]dbus.Variant{"method": dbus.MakeVariant("disabled"), "addresses": dbus.MakeVariant(addresses), "routes": dbus.MakeVariant(routes)}
+			f.mu.Unlock()
+			settings, e := a.getSettings("/profile/1")
+			if e != nil {
+				t.Fatal(e)
+			}
+			copied, e := cloneNMFields("ipv6", settings["ipv6"])
+			if e != nil {
+				t.Fatal(e)
+			}
+			if copied["addresses"].Signature().String() != "a(ayuay)" || copied["routes"].Signature().String() != "a(ayuayu)" {
+				t.Fatal("legacy IPv6 signatures lost", copied)
+			}
+			if len(copied["addresses"].Value().([]nmIPv6Address)) != len(addresses) || len(copied["routes"].Value().([]nmIPv6Route)) != len(routes) {
+				t.Fatal("legacy IPv6 contents lost")
+			}
+		})
 	}
 }

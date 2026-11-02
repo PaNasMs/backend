@@ -78,15 +78,24 @@ func (a *adapter) restoreNM(previous map[string]*string) error {
 			if e = a.call(nmPath, nm+".ActivateConnection", profile.Path, path, dbus.ObjectPath("/")).Store(&connection); e != nil {
 				return e
 			}
+			restored := false
 			for i := 0; i < 30; i++ {
 				props, e := a.props(connection, nm+".Connection.Active")
 				if e != nil {
 					return e
 				}
-				if num(props["State"]) == 2 || num(props["State"]) == 4 {
+				state := num(props["State"])
+				if state == 2 {
+					restored = true
+					break
+				}
+				if state == 4 {
 					break
 				}
 				time.Sleep(500 * time.Millisecond)
+			}
+			if !restored {
+				return fmt.Errorf("Network rollback could not restore every interface; check the local console")
 			}
 		} else if active != "" && active != "/" {
 			if e = a.call(path, nm+".Device.Disconnect").Err; e != nil {

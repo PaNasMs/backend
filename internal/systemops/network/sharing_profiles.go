@@ -103,12 +103,39 @@ func freeNMSlot(groups []nmGroup) (int, error) {
 	}
 	return 0, fmt.Errorf("No free routing table available for sharing")
 }
-func cloneNMFields(fields map[string]dbus.Variant) map[string]dbus.Variant {
+
+type nmIPv6Address struct {
+	Address []byte
+	Prefix  uint32
+	Gateway []byte
+}
+type nmIPv6Route struct {
+	Destination []byte
+	Prefix      uint32
+	NextHop     []byte
+	Metric      uint32
+}
+
+func cloneNMFields(family string, fields map[string]dbus.Variant) (map[string]dbus.Variant, error) {
 	result := map[string]dbus.Variant{}
 	for k, v := range fields {
+		// dbus.Store decodes legacy IPv6 structs into slices; restore their wire types before sending.
+		if family == "ipv6" && k == "addresses" {
+			var values []nmIPv6Address
+			if e := dbus.Store([]any{v.Value()}, &values); e != nil {
+				return nil, e
+			}
+			v = dbus.MakeVariant(values)
+		} else if family == "ipv6" && k == "routes" {
+			var values []nmIPv6Route
+			if e := dbus.Store([]any{v.Value()}, &values); e != nil {
+				return nil, e
+			}
+			v = dbus.MakeVariant(values)
+		}
 		result[k] = v
 	}
-	return result
+	return result, nil
 }
 func (a *adapter) buildNMGroup(conf nmGroup, p map[string]any, old *nmGroup, s *nmChange) (nmGroup, error) {
 	g := conf
@@ -164,7 +191,10 @@ func (a *adapter) buildNMGroup(conf nmGroup, p map[string]any, old *nmGroup, s *
 		}
 		for _, key := range []string{"ipv4", "ipv6"} {
 			if value, ok := profile.Settings[key]; ok {
-				fields[key] = cloneNMFields(value)
+				fields[key], e = cloneNMFields(key, value)
+				if e != nil {
+					return g, e
+				}
 			} else {
 				fields[key] = map[string]dbus.Variant{"method": dbus.MakeVariant("auto")}
 			}

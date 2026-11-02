@@ -244,6 +244,14 @@ class PackagingTest(unittest.TestCase):
             helper.chmod(0o755)
             script = script.replace("/usr/lib/panasms/panasms-system-helper", str(helper))
             script = script.replace("/usr/lib/panasms/management/storage_reshape.py", str(wifi)).replace("/usr/lib/panasms/management/wifi.py", str(wifi)).replace("/usr/lib/panasms/management/sharing.py", str(wifi)).replace("/usr/lib/panasms/sharing-install.py", str(wifi))
+            for prefix in ("/etc/NetworkManager/conf.d", "/run/panasms-disk-sleep", "/var/lib/panasms-updates", "/var/lib/panasms-agent"):
+                script = script.replace(prefix, str(root) + prefix)
+            policies = root / "etc/NetworkManager/conf.d"
+            policies.mkdir(parents=True)
+            owned = policies / "90-panasms-wifi-001122334455.conf"
+            unowned = policies / "10-user.conf"
+            owned.write_text("managed=0")
+            unowned.write_text("keep")
             path = root / "prerm"
             path.write_text(script)
             env = dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"])
@@ -256,6 +264,11 @@ class PackagingTest(unittest.TestCase):
             subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
             self.assertIn("stop panasms-core.service panasms-agent.service", log.read_text())
             self.assertIn("helper network-access remove", log.read_text())
+            self.assertTrue(owned.exists())
+            tool.write_text('#!/bin/sh\nif [ "$1" = is-active ]; then exit 3; fi\n')
+            subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
+            self.assertFalse(owned.exists())
+            self.assertEqual(unowned.read_text(), "keep")
 
     def test_purge_refuses_symlink_parent(self):
         with tempfile.TemporaryDirectory() as d:

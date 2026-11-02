@@ -22,8 +22,8 @@ func fixtureInventory(t *testing.T, text string) *Inventory {
 
 func TestRepeatedArrayKeepsEveryBackingDisk(t *testing.T) {
 	inv := fixtureInventory(t, `[
- {"path":"/dev/sda","kname":"sda","type":"disk","children":[{"path":"/dev/md0","kname":"md0","type":"raid1","mountpoints":["/"]}]},
- {"path":"/dev/sdb","kname":"sdb","type":"disk","children":[{"path":"/dev/md0","kname":"md0","type":"raid1","mountpoints":["/"]}]},
+ {"path":"/dev/sda","kname":"sda","type":"disk","children":[{"path":"/dev/md0","kname":"md0","type":"raid1","pkname":"sda","mountpoints":["/"]}]},
+ {"path":"/dev/sdb","kname":"sdb","type":"disk","children":[{"path":"/dev/md0","kname":"md0","type":"raid1","pkname":"sdb","mountpoints":["/"]}]},
  {"path":"/dev/sdc","kname":"sdc","type":"disk","tran":"usb","mountpoints":[]} ]`)
 	system, carriers, err := inv.Protection(nil, func(string) ([]string, error) { return nil, nil })
 	if err != nil {

@@ -44,7 +44,7 @@ func (s *service) preflight(ctx context.Context) (*Preflight, error) {
 	}
 	inv, err := NewInventory(rows, s.resolve)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Could not verify storage dependencies. No changes were made.")
 	}
 	for _, row := range inv.Rows {
 		if err := validateObservation(row); err != nil {
@@ -126,7 +126,7 @@ func RaidCandidates(ctx context.Context, target string) (any, error) {
 }
 
 func validateObservation(row map[string]any) error {
-	bad := func() error { return fmt.Errorf("Incomplete block device inventory") }
+	bad := func() error { return fmt.Errorf("Could not verify storage dependencies. No changes were made.") }
 	if kind, ok := row["type"].(string); !ok || kind == "" {
 		return bad()
 	}

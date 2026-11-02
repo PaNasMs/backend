@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -52,6 +53,19 @@ func TestRaidCandidatesUseMembersProtectRootAndRejectBusy(t *testing.T) {
 	candidates := result.(map[string]any)["devices"].([]map[string]any)
 	if len(candidates) != 1 || candidates[0]["path"] != "/dev/sdc" {
 		t.Fatalf("%v", candidates)
+	}
+	inv, err := NewInventory(rows, s.resolve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := legacyQuery(t, root, inv, "raid-candidates", "/dev/md0", result)
+	encoded, _ := json.Marshal(result)
+	var normalized any
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(expected, normalized) {
+		t.Fatalf("Go %v Python %v", normalized, expected)
 	}
 	if err := os.Mkdir(filepath.Join(sys, "md0/slaves/gone"), 0700); err != nil {
 		t.Fatal(err)

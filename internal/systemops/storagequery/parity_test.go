@@ -35,7 +35,9 @@ func TestStorageOptionsLegacyParityWithoutDeviceProbes(t *testing.T) {
 		}
 	}
 	s := &service{filepath.Join(root, "sys"), filepath.Join(root, "fstab"), func(context.Context) ([]map[string]any, error) { return devices, nil }, func(path string) (string, error) { return path, nil }}
-	env := optionsEnvironment{filepath.Join(root, "units"), filepath.Join(root, "health"), time.Now(), func(name string) bool { return name == "mkfs.ext4" }, func() (map[string]any, error) { return map[string]any{"sleepMinutes": 0}, nil }}
+	env := optionsEnvironment{filepath.Join(root, "units"), filepath.Join(root, "health"), time.Now(), func(name string) bool { return name == "mkfs.ext4" }, func() (map[string]any, error) {
+		return map[string]any{"sleepSettings": map[string]any{"minutes": 0}, "sleepStatus": map[string]any{}, "sleepRuntime": map[string]any{"status": "disabled", "timerActive": true, "timerEnabled": true, "applied": 0, "total": 0}}, nil
+	}}
 	result, err := s.options(context.Background(), env)
 	if err != nil {
 		t.Fatal(err)
@@ -44,18 +46,8 @@ func TestStorageOptionsLegacyParityWithoutDeviceProbes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := json.Marshal(map[string]any{"root": root, "inventory": inv.Rows, "order": inv.Order, "view": "storage-options"})
-	cmd := exec.Command("python3", "../../../tests/storage_query_fixture.py")
-	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
-	cmd.Stdin = bytes.NewReader(request)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("legacy oracle: %v\n%s", err, output)
-	}
-	var expected, actual any
-	if err := json.Unmarshal(output, &expected); err != nil {
-		t.Fatal(err)
-	}
+	expected := legacyQuery(t, root, inv, "storage-options", "", result)
+	var actual any
 	actualBytes, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +56,24 @@ func TestStorageOptionsLegacyParityWithoutDeviceProbes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(actual, expected) {
-		t.Fatalf("Go: %s\nPython: %s", actualBytes, output)
+		t.Fatalf("Go: %s\nPython: %v", actualBytes, expected)
 	}
+}
+
+func legacyQuery(t *testing.T, root string, inv *Inventory, view, target string, candidate any) any {
+	t.Helper()
+	request, _ := json.Marshal(map[string]any{"root": root, "inventory": inv.Rows, "order": inv.Order, "view": view, "target": target, "candidate": candidate})
+	cmd := exec.Command("python3", "../../../tests/storage_query_fixture.py")
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	cmd.Stdin = bytes.NewReader(request)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("legacy oracle: %v\n%s", err, output)
+	}
+
+	var expected any
+	if err := json.Unmarshal(output, &expected); err != nil {
+		t.Fatal(err)
+	}
+	return expected
 }

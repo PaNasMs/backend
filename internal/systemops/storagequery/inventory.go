@@ -46,12 +46,12 @@ func NewInventory(devices []map[string]any, resolve func(string) (string, error)
 		}
 		if previous, exists := inv.Rows[path]; exists {
 			for key, value := range row {
-				if key != "parent" && !reflect.DeepEqual(previous[key], value) {
+				if key != "parent" && key != "pkname" && !reflect.DeepEqual(previous[key], value) {
 					return fmt.Errorf("inconsistent block device identity")
 				}
 			}
 			for key, value := range previous {
-				if key != "parent" && !reflect.DeepEqual(row[key], value) {
+				if key != "parent" && key != "pkname" && !reflect.DeepEqual(row[key], value) {
 					return fmt.Errorf("inconsistent block device identity")
 				}
 			}

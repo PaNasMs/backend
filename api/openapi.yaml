@@ -3455,12 +3455,14 @@ components:
               type: integer
           required: [status, timerActive, timerEnabled, applied, total]
         sleepSettings:
-          type: object
-          properties:
-            minutes:
-              type: integer
-          required:
-          - minutes
+          anyOf:
+          - type: object
+            properties:
+              minutes:
+                type: integer
+            required:
+            - minutes
+          - type: 'null'
         sleepStatus:
           type: object
           additionalProperties:

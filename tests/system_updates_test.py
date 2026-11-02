@@ -214,6 +214,30 @@ class Updates(unittest.TestCase):
             self.assertEqual(restore.called,phase in ('installing','verifying','rolling-back'))
             start.assert_called_once_with(['core','agent'],boot=True)
 
+    def test_explicit_root_retry_admits_recovery_required_without_agent(self):
+        u.save('state.json',{'id':'original','phase':'recovery-required'})
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',return_value=['core','agent']) as restore:
+            u.recover(boot=False,retry=True)
+        restore.assert_called_once_with(boot=False)
+        self.assertEqual(os.environ['PANASMS_UPDATE_TRANSACTION'],'original')
+        self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
+
+    def test_root_retry_failure_keeps_guard_and_requires_explicit_retry(self):
+        u.save('state.json',{'id':'original','phase':'recovery-required'})
+        u.sharing_compat.GUARD.write_bytes(b'recovery evidence')
+        with patch.object(u,'restore') as restore:
+            u.recover()
+            restore.assert_not_called()
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',side_effect=Rejected('foreign sharing file')):
+            with self.assertRaisesRegex(Rejected,'foreign sharing file'):
+                u.recover(boot=False,retry=True)
+        self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
+        self.assertEqual(u.sharing_compat.GUARD.read_bytes(),b'recovery evidence')
+        with patch.object(u.os,'geteuid',return_value=1000),patch.object(u,'restore') as restore:
+            with self.assertRaisesRegex(Rejected,'requires root'):
+                u.recover(boot=False,retry=True)
+            restore.assert_not_called()
+
     def test_boot_restart_does_not_wait_for_units_ordered_after_recovery(self):
         with patch.object(u,'run') as run:u.start(['core','agent'],boot=True)
         self.assertEqual(run.call_args_list[-1].args[0],['systemctl','start','--no-block','core','agent'])

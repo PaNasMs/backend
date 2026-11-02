@@ -494,16 +494,18 @@ def work():
                 finish('failed',str(e))
 
 
-def recover(boot=True):
+def recover(boot=True, retry=False):
+    if retry:require(os.geteuid()==0,'Retrying a failed rollback requires root')
     with locked():
         s=read('state.json',{})
-        if s.get('phase') in ('installing','verifying','rolling-back'):
+        if retry:require(s.get('phase')=='recovery-required','No failed rollback requires an explicit retry')
+        if s.get('phase') in ('installing','verifying','rolling-back') or retry:
             try:
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
                 with maintenance():restored_units=restore(boot=boot)
                 # Package removal cancels boot jobs; queue them again without waiting on this unit.
                 if boot:start(restored_units if restored_units is not None else read('backup.json',{})['units'],boot=True)
-                finish('rolled-back','Interrupted update restored during boot')
+                finish('rolled-back','Failed rollback retried by administrator' if retry else 'Interrupted update restored during boot')
             except Exception as e:finish('recovery-required',str(e));raise
         elif s.get('phase') in ACTIVE:
             start(read('active-units.json',[]),boot=boot)
@@ -539,5 +541,5 @@ def tick():
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','tick']);a=p.parse_args()
-    {'work':work,'recover':lambda:recover(boot=os.environ.get('PANASMS_UPDATE_RUNTIME')!='1'),'tick':tick}[a.mode]()
+    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','retry-rollback','tick']);a=p.parse_args()
+    {'work':work,'recover':lambda:recover(boot=os.environ.get('PANASMS_UPDATE_RUNTIME')!='1'),'retry-rollback':lambda:recover(boot=False,retry=True),'tick':tick}[a.mode]()

@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import subprocess
 import sys
 import uuid
@@ -76,6 +77,7 @@ def main():
     parser.add_argument('--updater-kind', choices=('legacy', 'prepared'), default='legacy')
     parser.add_argument('--interrupt-paired-restore', action='store_true')
     parser.add_argument('--reupgrade-after-rollback', action='store_true')
+    parser.add_argument('--root-retry-after-interruption', action='store_true')
     args = parser.parse_args()
     prove_guest(args.vm_uuid)
     assert args.package.is_file() and not args.package.is_symlink()
@@ -94,6 +96,15 @@ def main():
     assert old.read('state.json', {}).get('phase') not in old.ACTIVE | {'recovery-required'}
     assert not args.interrupt_paired_restore or prepared
     assert not args.reupgrade_after_rollback or (not prepared and not args.expect_configure_failure)
+    assert not args.root_retry_after_interruption or (prepared and args.interrupt_paired_restore)
+    if args.root_retry_after_interruption:
+        assert 'retry' in old.recover.__code__.co_varnames, 'The source worker must support explicit root recovery'
+        worker = old.ROOT / 'worker'
+        worker.mkdir(mode=0o700, exist_ok=True)
+        for name in ('system_updates.py', 'common.py', 'sharing_compat.py'):
+            shutil.copy2(source.parent / name, worker / name)
+            with (worker / name).open('rb') as stream:
+                os.fsync(stream.fileno())
     baseline = capture()
     baseline_services = service_states()
     units = old.services()
@@ -139,7 +150,12 @@ def main():
                 raise AssertionError('The paired restore interruption was not exercised')
             finally:
                 old.run = real_run
-        old.restore()
+        if args.root_retry_after_interruption:
+            old.finish('recovery-required', 'Injected after real tar extraction')
+            subprocess.run([sys.executable, str(old.ROOT / 'worker/system_updates.py'), 'retry-rollback'],
+                           check=True, capture_output=True)
+        else:
+            old.restore()
         assert command('dpkg-query', '-W', '-f=${db:Status-Status} ${Version}', 'panasms-prototype') == 'installed ' + args.old_version
         assert capture() == baseline, 'In-memory rollback changed the original sharing policy'
         assert service_states() == baseline_services, 'Rollback did not preserve prior protocol/timer active and enabled states'
@@ -163,6 +179,7 @@ def main():
                       'configureFailureInjected': args.expect_configure_failure,
                       'pairedRestoreInterruptionAndRetry': args.interrupt_paired_restore,
                       'reupgradeAfterOldRollback': args.reupgrade_after_rollback,
+                      'rootRetryWithoutAgent': args.root_retry_after_interruption,
                       'finalInstalledVersion': command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype'),
                       'protocolServiceStatePreserved': True,
                       'packageSHA256': args.package_sha256, 'updaterSHA256': args.old_updater_sha256,

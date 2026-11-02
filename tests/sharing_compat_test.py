@@ -292,6 +292,33 @@ class PairedRollback(unittest.TestCase):
         compat.restore_pair(retry)
         self.assertEqual(compat.capture_activation(), self.source_activation)
 
+    def test_prepared_source_restores_both_absent_activation_files(self):
+        compat.atomic(compat.ACTIVATION, b'pending ticket')
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        compat.restore_pair(guard)
+        self.assertEqual(compat.capture_activation(), self.source_activation)
+        self.assertFalse(compat.NATIVE.exists())
+        self.assertFalse(compat.ACTIVATION.exists())
+
+    def test_activation_edit_during_policy_restore_is_preserved(self):
+        compat.atomic(compat.NATIVE, b'candidate')
+        self.candidate()
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        original = compat.atomic
+        def interfere(path, data, **kwargs):
+            original(path, data, **kwargs)
+            if path == compat.FILES[0]:
+                original(compat.NATIVE, b'foreign during policy restore')
+        with patch.object(compat, 'atomic', side_effect=interfere):
+            with self.assertRaises(Rejected):
+                compat.restore_pair(guard)
+        self.assertEqual(compat.NATIVE.read_bytes(), b'foreign during policy restore')
+        self.assertTrue(compat.GUARD.exists())
+        with self.assertRaises(Rejected):
+            compat.begin_restore(self.prepare())
+
     def test_activation_foreign_edit_blocks_before_any_policy_restore(self):
         compat.atomic(compat.NATIVE, b'candidate')
         self.candidate()

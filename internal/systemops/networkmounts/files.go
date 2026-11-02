@@ -75,31 +75,38 @@ func (s *service) createCredential(state *transaction, p map[string]any) error {
 	}
 	return syncDirectory(s.credentials)
 }
-func (s *service) removeCredential(state *transaction) error {
+func (s *service) credentialExists(state *transaction) (bool, error) {
 	if !state.Credential {
-		return nil
+		return false, nil
 	}
 	if err := secureDirectory(s.credentials, s.owner, false); err != nil {
-		return err
+		return false, err
 	}
 	path := filepath.Join(s.credentials, Key(state.Point))
 	file, err := secureFile(path, s.owner)
 	if os.IsNotExist(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	info, err := file.Stat()
 	file.Close()
 	if err != nil {
-		return err
+		return false, err
 	}
 	st := info.Sys().(*syscall.Stat_t)
 	if uint64(st.Dev) != state.CredentialDevice || st.Ino != state.CredentialInode {
-		return reject("Network credentials changed; preserve them and review recovery")
+		return false, reject("Network credentials changed; preserve them and review recovery")
 	}
-	if err = os.Remove(path); err != nil {
+	return true, nil
+}
+func (s *service) removeCredential(state *transaction) error {
+	exists, err := s.credentialExists(state)
+	if err != nil || !exists {
+		return err
+	}
+	if err = os.Remove(filepath.Join(s.credentials, Key(state.Point))); err != nil {
 		return err
 	}
 	return syncDirectory(s.credentials)

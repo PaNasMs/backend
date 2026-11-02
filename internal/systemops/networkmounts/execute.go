@@ -34,6 +34,13 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	if strings.HasSuffix(action, ".unmount") {
 		return s.executeUnmount(ctx, action, plan, r)
 	}
+	if plan.record != nil {
+		stale := *plan.record
+		stale.MountID = 0
+		if err = s.cleanupMount(ctx, &stale, hashText(plan.conf), r); err != nil {
+			return nil, err
+		}
+	}
 	state := &transaction{Schema: 1, Point: plan.point, Source: param(p, "target"), FSType: "nfs", Phase: "preparing", BeforeHash: hashText(plan.conf)}
 	if action == "smb.mount" {
 		state.FSType = "cifs"

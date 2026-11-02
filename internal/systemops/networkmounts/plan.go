@@ -143,7 +143,20 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	identity := []string{}
 	if mounting {
 		if record != nil {
-			return nil, reject("A network mount operation already exists; unmount the share before trying again")
+			boot, err := currentBootID()
+			if err != nil {
+				return nil, err
+			}
+			stale := record.BootID != "" && record.BootID != boot && len(matches) == 0
+			stage := filepath.Join(s.root, Key(point)+".stage")
+			for _, mount := range mounts {
+				if within(mount.Target, stage) {
+					stale = false
+				}
+			}
+			if !stale {
+				return nil, reject("A network mount operation already exists; unmount the share before trying again")
+			}
 		}
 		valid := nfsSource.MatchString(target)
 		if action == "smb.mount" {
@@ -199,7 +212,12 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 			}
 			identity = []string{account.Uid, account.Gid}
 			if _, err = os.Lstat(filepath.Join(s.credentials, Key(point))); err == nil {
-				return nil, reject("Credentials are already stored for this mount point; choose another")
+				if record == nil || !record.Credential {
+					return nil, reject("Credentials are already stored for this mount point; choose another")
+				}
+				if _, err = s.credentialExists(record); err != nil {
+					return nil, err
+				}
 			} else if !os.IsNotExist(err) {
 				return nil, err
 			}

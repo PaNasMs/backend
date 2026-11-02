@@ -386,3 +386,71 @@ func TestStageIntentInterruptionAndForeignStagePreservation(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviousBootNonpersistentMountCanBeRemounted(t *testing.T) {
+	for _, blocked := range []string{"allowed", "current-boot", "configured", "stage-mounted", "foreign-credential"} {
+		t.Run(blocked, func(t *testing.T) {
+			s, p, fake := executionFixture(t)
+			p["automount"] = blocked == "configured"
+			fp := plannedFingerprint(t, s, "smb.mount", p)
+			if _, err := s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err != nil {
+				t.Fatal(err)
+			}
+			point := param(p, "point")
+			state, err := s.load(point)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.BootID = "previous-boot-fixture"
+			if blocked == "current-boot" {
+				state.BootID, err = currentBootID()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = s.save(state); err != nil {
+				t.Fatal(err)
+			}
+			fake.rows = nil
+			if blocked == "stage-mounted" {
+				fake.rows = []folders.LiveMount{{ID: 300, Target: filepath.Join(s.root, Key(point)+".stage"), FSType: "tmpfs", Source: "foreign"}}
+			}
+			credential := filepath.Join(s.credentials, Key(point))
+			if blocked == "foreign-credential" {
+				os.Rename(credential, credential+".saved")
+				os.WriteFile(credential, []byte("foreign"), 0600)
+			}
+			raw, err := s.plan(context.Background(), "smb.mount", p, "member")
+			if blocked != "allowed" {
+				if err == nil {
+					t.Fatal("unsafe remount planned")
+				}
+				return
+			}
+			before, _ := os.ReadFile(credential)
+			if len(before) == 0 {
+				t.Fatal("plan removed credential")
+			}
+			var public struct{ Fingerprint string }
+			json.Unmarshal(raw, &public)
+			// A previous boot's mount ID can now name an unrelated live mount.
+			originalMounts := s.mounts
+			fake.rows = []folders.LiveMount{{ID: state.MountID, Target: "/elsewhere", Source: "unrelated", FSType: "ext4"}}
+			s.attach = func(stage string, target *os.File, before func(uint64) error) (uint64, error) {
+				if err := before(201); err != nil {
+					return 0, err
+				}
+				fake.rows = []folders.LiveMount{fake.rows[0], {ID: 201, Target: target.Name(), Source: param(p, "target"), FSType: "cifs"}}
+				return 201, nil
+			}
+			s.mounts = originalMounts
+			fp = plannedFingerprint(t, s, "smb.mount", p)
+			if _, err = s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.rows) != 2 || fake.rows[0].Target != "/elsewhere" {
+				t.Fatal("reused old mount ID was touched", fake.rows)
+			}
+		})
+	}
+}

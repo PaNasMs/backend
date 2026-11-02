@@ -50,6 +50,7 @@ type nmAP struct {
 }
 type nmChange struct {
 	state
+	Confirming     bool               `json:"confirming,omitempty"`
 	HashVersion    int                `json:"hashVersion,omitempty"`
 	Boot           string             `json:"boot"`
 	RadioBefore    bool               `json:"radioBefore"`

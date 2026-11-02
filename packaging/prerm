@@ -47,6 +47,8 @@ CHECK
   systemctl stop panasms-network-sharing.service || true
   if systemctl is-active --quiet NetworkManager; then
    /usr/lib/panasms/panasms-system-helper network-services remove
+  else
+   rm -f /etc/NetworkManager/conf.d/90-panasms-wifi-*.conf
   fi
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' 'panasms-share-rollback-*.timer' panasms-network-recovery.service || true

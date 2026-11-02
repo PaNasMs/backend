@@ -717,3 +717,86 @@ func TestNMInventoryToleratesAnAdapterRemovedAfterLinkRead(t *testing.T) {
 		t.Fatal("controls exposed for removed adapter")
 	}
 }
+
+func TestNMWifiConfirmationFailureRestoresPreviousConnection(t *testing.T) {
+	for _, stage := range []string{"before-destroy", "after-destroy", "legacy-after-destroy"} {
+		t.Run(stage, func(t *testing.T) {
+			a, f := newNMFixture(t)
+			const original = "previous-wifi-uuid"
+			f.mu.Lock()
+			f.profiles["/profile/original"] = wifiConnection(wifiChoice{SSID: []byte("original"), Security: "open"}, "pnwifi0", original)
+			f.mu.Unlock()
+			f.installProfile(t, "/profile/original")
+			if _, e := f.activateProfile(t, "/profile/original", "/device/1"); e != nil {
+				t.Fatal(e)
+			}
+			if _, e := a.wifiExecute("network.wifi.connect", "admin", map[string]any{"interface": "pnwifi0", "ssid": "fixture", "security": "wpa2", "password": "fixture-password"}); e != nil {
+				t.Fatal(e)
+			}
+			s, e := readNMChange(wifiRecoveryPath)
+			if e != nil || s.Previous["pnwifi0"] == nil || *s.Previous["pnwifi0"] != original {
+				t.Fatalf("previous connection missing: %+v %v", s, e)
+			}
+			if stage == "legacy-after-destroy" {
+				s.Previous = nil
+				if e = s.remember(); e != nil {
+					t.Fatal(e)
+				}
+			}
+			writer := nmWrite
+			injected := false
+			nmWrite = func(path, content string, mode os.FileMode) error {
+				match := strings.Contains(content, `"status":"confirmed"`)
+				if stage == "before-destroy" {
+					match = strings.Contains(content, `"confirming":true`)
+				}
+				if !injected && path == wifiRecoveryPath && match {
+					injected = true
+					return fmt.Errorf("injected confirmation write failure")
+				}
+				return writer(path, content, mode)
+			}
+			if e = a.confirmWifi(s); e == nil || !injected {
+				t.Fatal("confirmation should fail", e)
+			}
+			nmWrite = writer
+			durable, e := readNMChange(wifiRecoveryPath)
+			if e != nil || durable.Status != "pending" {
+				t.Fatalf("false durable confirmation: %+v %v", durable, e)
+			}
+			checkpoints, e := a.checkpoints()
+			if e != nil || (len(checkpoints) > 0) != (stage == "before-destroy") {
+				t.Fatal("unexpected checkpoint boundary", checkpoints, e)
+			}
+			e = a.rollbackWifi(durable)
+			if stage == "legacy-after-destroy" {
+				if e == nil {
+					t.Fatal("legacy ambiguity must require recovery")
+				}
+				profiles, pe := a.profiles()
+				if pe != nil || profiles[durable.NewUUID].Path == "" {
+					t.Fatal("legacy ambiguous recovery deleted active profile", pe)
+				}
+				return
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = a.rollbackWifi(durable); e != nil {
+				t.Fatal("repeated rollback", e)
+			}
+			_, props, e := a.device("pnwifi0")
+			if e != nil {
+				t.Fatal(e)
+			}
+			active, e := a.props(obj(props["ActiveConnection"]), nm+".Connection.Active")
+			if e != nil || str(active["Uuid"]) != original {
+				t.Fatal("previous connection not restored", active, e)
+			}
+			profiles, e := a.profiles()
+			if e != nil || profiles[durable.NewUUID].Path != "" {
+				t.Fatal("staged profile not removed", e)
+			}
+		})
+	}
+}

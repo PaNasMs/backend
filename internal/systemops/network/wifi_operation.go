@@ -210,6 +210,10 @@ func (a *adapter) wifiExecute(action, user string, p map[string]any) (any, error
 		return nil, e
 	}
 	s := &nmChange{state: state{ID: id, Kind: action, Interface: name, User: user, Status: "applying", Deadline: float64(time.Now().Unix()) + 120, Addresses: []string{}}, HashVersion: 1, Boot: boot, RadioBefore: radios.Enabled}
+	s.Previous, e = a.originalNM([]string{name})
+	if e != nil {
+		return nil, e
+	}
 	if action == "network.wifi.radio" {
 		before, e := a.radioSnapshot()
 		if e != nil {
@@ -335,6 +339,14 @@ func (a *adapter) rollbackWifi(s *nmChange) error {
 		if e = a.rollback(s.Checkpoint); e != nil {
 			return e
 		}
+	} else if s.Confirming && s.Previous == nil {
+		// Legacy journals cannot reconstruct a connection after its checkpoint is destroyed.
+		return fmt.Errorf("Wi-Fi operation interrupted; recovery is required")
+	}
+	if s.Previous != nil {
+		if e = a.restoreNM(s.Previous); e != nil {
+			return e
+		}
 	}
 	if s.NewUUID != "" {
 		if e = a.deleteProfiles([]string{s.NewUUID}); e != nil {
@@ -388,6 +400,10 @@ func (a *adapter) confirmWifi(s *nmChange) error {
 		}
 	default:
 		return fmt.Errorf("Unknown network operation")
+	}
+	s.Confirming = true
+	if e = s.remember(); e != nil {
+		return e
 	}
 	if e = a.call(nmPath, nm+".CheckpointDestroy", s.Checkpoint).Err; e != nil {
 		return e

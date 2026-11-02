@@ -62,6 +62,7 @@ def main():
     parser.add_argument('--package', type=Path, required=True)
     parser.add_argument('--package-sha256', required=True)
     parser.add_argument('--expect-configure-failure', action='store_true')
+    parser.add_argument('--updater-kind', choices=('legacy', 'prepared'), default='legacy')
     args = parser.parse_args()
     prove_guest(args.vm_uuid)
     assert args.package.is_file() and not args.package.is_symlink()
@@ -75,7 +76,8 @@ def main():
     spec = importlib.util.spec_from_file_location('preloaded_old_updater', source)
     old = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(old)
-    assert 'sharing_compat' not in old.__dict__, 'Select the released pre-preparation updater'
+    prepared = args.updater_kind == 'prepared'
+    assert ('sharing_compat' in old.__dict__) == prepared, 'The installed updater does not match the selected fixture kind'
     assert old.read('state.json', {}).get('phase') not in old.ACTIVE | {'recovery-required'}
     baseline = capture()
     units = old.services()
@@ -92,14 +94,20 @@ def main():
         installed = subprocess.run(['dpkg', '--force-confold', '-i', str(args.package)], capture_output=True, text=True)
         assert (installed.returncode != 0) == args.expect_configure_failure, 'Unexpected package result; restore operator snapshot'
         assert capture() == baseline, 'Preparation changed sharing policy before rollback'
-        assert 'sharing_compat' not in old.__dict__, 'The in-memory updater changed unexpectedly'
+        assert ('sharing_compat' in old.__dict__) == prepared, 'The in-memory updater changed unexpectedly'
+        if prepared and args.expect_configure_failure:
+            package_state = Path('/var/lib/panasms-installer/sharing-package-state.json')
+            assert package_state.exists(), 'Inject failure before target package-resume for this reverse-transition test'
+            record = json.loads(package_state.read_text())
+            assert record['sourceVersion'] == args.old_version and record['targetVersion'] == target
         assert hashlib.sha256(source.read_bytes()).hexdigest() != args.old_updater_sha256
         old.restore()
         assert command('dpkg-query', '-W', '-f=${db:Status-Status} ${Version}', 'panasms-prototype') == 'installed ' + args.old_version
         assert capture() == baseline, 'Old in-memory rollback changed the original sharing policy'
         assert not Path('/var/lib/panasms-agent/sharing-transaction.json').exists()
+        assert not Path('/var/lib/panasms-agent/sharing-restore.json').exists()
         old.finish('rolled-back', 'Explicit disposable-VM preparation acceptance')
-    print(json.dumps({'result': 'PASS', 'scenario': 'old-in-memory-worker-to-preparation-and-back',
+    print(json.dumps({'result': 'PASS', 'scenario': args.updater_kind + '-in-memory-worker-to-preparation-and-back',
                       'oldVersion': args.old_version, 'targetVersion': target,
                       'configureFailureInjected': args.expect_configure_failure,
                       'packageSHA256': args.package_sha256, 'updaterSHA256': args.old_updater_sha256,

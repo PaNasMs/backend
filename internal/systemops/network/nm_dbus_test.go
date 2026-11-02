@@ -553,3 +553,98 @@ func TestNMSharingPrivateDBusNATAndBridge(t *testing.T) {
 		})
 	}
 }
+
+func TestNMDurableJournalSurvivesRuntimePublicationFailure(t *testing.T) {
+	a, _ := newNMFixture(t)
+	writer := nmWrite
+	nmWrite = func(path, content string, mode os.FileMode) error {
+		if path == statePath {
+			return fmt.Errorf("injected runtime publication failure")
+		}
+		return writer(path, content, mode)
+	}
+	boot, e := bootID()
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := &nmChange{state: state{ID: strings.Repeat("d", 32), Kind: "network.wifi.radio", Status: "pending", Deadline: 1e12}, Boot: boot}
+	if e = s.remember(); e == nil {
+		t.Fatal("injected mirror write unexpectedly succeeded")
+	}
+	nmWrite = writer
+	got, e := currentNMChange(true)
+	if e != nil || got.ID != s.ID || got.Status != "pending" {
+		t.Fatalf("durable record lost: %+v %v", got, e)
+	}
+	if _, e = a.wifiPlan("network.wifi.radio", "admin", map[string]any{"interface": "pnwifi0", "enabled": false}); e == nil || !strings.Contains(e.Error(), "pending network change") {
+		t.Fatalf("new operation could overwrite durable recovery: %v", e)
+	}
+	// A durable confirmation supersedes an older pending mirror too.
+	s.Status = "confirmed"
+	if e = writeNetworkJSON(wifiRecoveryPath, s); e != nil {
+		t.Fatal(e)
+	}
+	got, e = currentNMChange(true)
+	if e != nil || got.Status != "confirmed" {
+		t.Fatalf("durable confirmation lost: %+v %v", got, e)
+	}
+	if e = writeNetworkJSON(statePath, map[string]any{"id": "native", "kind": "network.native", "status": "pending", "before": map[string]any{"/etc/test": "old"}}); e != nil {
+		t.Fatal(e)
+	}
+	got, e = currentNMChange(false)
+	if e != nil || got.Kind != "network.native" {
+		t.Fatalf("foreign backend journal decoding changed: %+v %v", got, e)
+	}
+}
+
+func TestNMFailedExpiryRemainsVisibleAndBlocksNewOperations(t *testing.T) {
+	a, f := newNMFixture(t)
+	if _, e := a.wifiExecute("network.wifi.radio", "admin", map[string]any{"interface": "pnwifi0", "enabled": false}); e != nil {
+		t.Fatal(e)
+	}
+	s, e := readNMChange(wifiRecoveryPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Deadline = 1
+	f.mu.Lock()
+	f.props["/device/1"][nm+".Device.Wireless"]["PermHwAddress"] = dbus.MakeVariant("00:11:22:33:44:66")
+	f.mu.Unlock()
+	if e = a.currentNM(s); e != nil {
+		t.Fatal("failed rollback hid inventory", e)
+	}
+	visible, e := current(a)
+	if e != nil || visible.Status != "rollback-failed" || visible.Error == "" {
+		t.Fatalf("failed recovery unavailable: %+v %v", visible, e)
+	}
+	if _, e = a.wifiPlan("network.wifi.scan", "admin", map[string]any{"interface": "pnwifi0"}); e == nil {
+		t.Fatal("new operation accepted during failed recovery")
+	}
+	f.mu.Lock()
+	f.props["/device/1"][nm+".Device.Wireless"]["PermHwAddress"] = dbus.MakeVariant("00:11:22:33:44:55")
+	f.mu.Unlock()
+	if e = a.rollbackWifi(s); e != nil || s.Error != "" || s.Status != "rolled-back" {
+		t.Fatalf("recovery could not be retried: %+v %v", s, e)
+	}
+}
+
+func TestNMInventoryToleratesUnsupportedWifiPolicy(t *testing.T) {
+	a, f := newNMFixture(t)
+	f.mu.Lock()
+	f.props["/device/1"][nm+".Device.Wireless"]["PermHwAddress"] = dbus.MakeVariant("")
+	f.mu.Unlock()
+	rows := []map[string]any{{"name": "pnwifi0", "kind": "wifi"}}
+	if _, e := a.wifiInventory(rows); e != nil {
+		t.Fatal("unsupported policy hid inventory", e)
+	}
+	if _, ok := rows[0]["wifi"]; ok {
+		t.Fatal("unsupported radio controls exposed")
+	}
+	before, e := a.radioSnapshot()
+	if e != nil || len(before.Devices) != 0 {
+		t.Fatal("snapshot failed on unsupported adapter", before, e)
+	}
+	if e = a.configureRadio("pnwifi0", false); e == nil {
+		t.Fatal("policy mutation accepted without stable identity")
+	}
+}

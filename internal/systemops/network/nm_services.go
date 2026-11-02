@@ -21,7 +21,7 @@ func supplementalKind(kind string) bool {
 	return strings.HasPrefix(kind, "network.wifi.") || strings.HasPrefix(kind, "network.share.")
 }
 func (a *adapter) currentNM(s *nmChange) error {
-	if s == nil || !active(&s.state) {
+	if s == nil || !active(&s.state) || s.Status == "rollback-failed" {
 		return nil
 	}
 	boot, e := bootID()
@@ -45,9 +45,12 @@ func (a *adapter) currentNM(s *nmChange) error {
 		e = a.rollbackWifi(s)
 	}
 	if e != nil {
-		return e
+		s.Status = "rollback-failed"
+		s.Error = publicNMError(e)
+		return s.remember()
 	}
 	s.Status = "expired"
+	s.Error = ""
 	return s.remember()
 }
 func supplementalOperation(mode, action, user string, p map[string]any) (json.RawMessage, error) {
@@ -61,7 +64,10 @@ func supplementalOperation(mode, action, user string, p map[string]any) (json.Ra
 		return nil, e
 	}
 	defer a.bus.Close()
-	s, e := readNMChange(statePath)
+	if _, e = current(a); e != nil {
+		return nil, e
+	}
+	s, e := currentNMChange(true)
 	if e != nil {
 		return nil, e
 	}
@@ -85,7 +91,7 @@ func supplementalOperation(mode, action, user string, p map[string]any) (json.Ra
 			result, e = a.sharingExecute(action, user, p)
 		}
 	case action == "network.confirm" || action == "network.rollback":
-		if s == nil || !supplementalKind(s.Kind) || s.Status != "pending" || p["id"] != s.ID || s.User != user {
+		if s == nil || !supplementalKind(s.Kind) || (s.Status != "pending" && !(action == "network.rollback" && s.Status == "rollback-failed")) || p["id"] != s.ID || s.User != user {
 			return nil, fmt.Errorf("This network change has expired or is no longer pending")
 		}
 		if mode == "plan" {
@@ -125,7 +131,10 @@ func publicNMError(e error) string {
 	// D-Bus error details may contain connection settings; keep them out of task results.
 	var value dbus.Error
 	var pointer *dbus.Error
-	if errors.As(e, &value) || errors.As(e, &pointer) {
+	var pathError *os.PathError
+	var syntaxError *json.SyntaxError
+	var typeError *json.UnmarshalTypeError
+	if errors.As(e, &value) || errors.As(e, &pointer) || errors.As(e, &pathError) || errors.As(e, &syntaxError) || errors.As(e, &typeError) {
 		return "NetworkManager operation failed; check the connection state"
 	}
 	return e.Error()
@@ -193,9 +202,15 @@ func recoverNMServicesLocked(expected string, force bool) error {
 			e = a.rollbackWifi(s)
 		}
 		if e != nil {
+			s.Status = "rollback-failed"
+			s.Error = publicNMError(e)
+			if persist := s.remember(); persist != nil {
+				return persist
+			}
 			return e
 		}
 		s.Status = "expired"
+		s.Error = ""
 		if e = s.remember(); e != nil {
 			return e
 		}
@@ -207,7 +222,7 @@ func recoverNMServicesLocked(expected string, force bool) error {
 }
 func RunNMServices() error {
 	if e := RecoverNMServices(""); e != nil {
-		return e
+		fmt.Fprintln(os.Stderr, "Network recovery requires attention")
 	}
 	a, e := connect()
 	if e != nil {
@@ -249,7 +264,7 @@ func RunNMServices() error {
 					}
 				}
 			}
-			s, e := readNMChange(statePath)
+			s, e := currentNMChange(true)
 			if e != nil {
 				return e
 			}
@@ -295,7 +310,7 @@ func RemoveNMServices() error {
 		return e
 	}
 	defer a.bus.Close()
-	groups, e := loadNMGroups()
+	groups, preserved, e := removalNMGroups()
 	if e != nil {
 		return e
 	}
@@ -313,8 +328,10 @@ func RemoveNMServices() error {
 			return e
 		}
 	}
-	if e = storeNMGroups([]nmGroup{}); e != nil {
-		return e
+	if len(groups) > 0 {
+		if e = writeNetworkJSON(filepath.Join(sharingRoot, "groups.json"), preserved); e != nil {
+			return e
+		}
 	}
 	snapshot, e := a.radioSnapshot()
 	if e != nil {
@@ -359,4 +376,38 @@ func CheckServiceRemoval() error {
 		}
 	}
 	return nil
+}
+
+func removalNMGroups() ([]nmGroup, []json.RawMessage, error) {
+	owned := []nmGroup{}
+	preserved := []json.RawMessage{}
+	raw, e := os.ReadFile(filepath.Join(sharingRoot, "groups.json"))
+	if os.IsNotExist(e) {
+		return owned, preserved, nil
+	}
+	if e != nil {
+		return nil, nil, e
+	}
+	var records []json.RawMessage
+	if e = json.Unmarshal(raw, &records); e != nil {
+		return nil, nil, e
+	}
+	for _, record := range records {
+		var identity struct {
+			Provider string `json:"provider"`
+		}
+		if e = json.Unmarshal(record, &identity); e != nil {
+			return nil, nil, e
+		}
+		if identity.Provider != "" && identity.Provider != "NetworkManager" {
+			preserved = append(preserved, record)
+			continue
+		}
+		var g nmGroup
+		if e = json.Unmarshal(record, &g); e != nil {
+			return nil, nil, e
+		}
+		owned = append(owned, g)
+	}
+	return owned, preserved, nil
 }

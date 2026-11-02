@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 var wifiConfigRoot = "/etc/NetworkManager/conf.d"
 var netClassRoot = "/sys/class/net"
+var errWifiPolicyUnavailable = errors.New("Wi-Fi adapter has no stable hardware address")
+
 var macPattern = regexp.MustCompile(`^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$`)
 
 type radioState struct {
@@ -44,7 +47,7 @@ func (a *adapter) devices() ([]dbus.ObjectPath, error) {
 }
 func wifiPolicyPath(mac string) (string, error) {
 	if !macPattern.MatchString(mac) {
-		return "", fmt.Errorf("Wi-Fi adapter has no stable hardware address")
+		return "", errWifiPolicyUnavailable
 	}
 	return filepath.Join(wifiConfigRoot, "90-panasms-wifi-"+strings.ReplaceAll(mac, ":", "")+".conf"), nil
 }
@@ -187,6 +190,9 @@ func (a *adapter) radioSnapshot() (radioSnapshot, error) {
 		}
 		name := str(props["Interface"])
 		file, mac, e := a.wifiPolicy(name)
+		if errors.Is(e, errWifiPolicyUnavailable) {
+			continue
+		}
 		if e != nil {
 			return result, e
 		}
@@ -211,6 +217,21 @@ func (a *adapter) enableRadio(name string) error {
 		return e
 	}
 	if !global.Enabled {
+		paths, e := a.devices()
+		if e != nil {
+			return e
+		}
+		for _, path := range paths {
+			props, e := a.props(path, nm+".Device")
+			if e != nil {
+				return e
+			}
+			if num(props["DeviceType"]) == 2 && boolean(props["Managed"]) {
+				if _, _, e = a.wifiPolicy(str(props["Interface"])); e != nil {
+					return e
+				}
+			}
+		}
 		before, e := a.radioSnapshot()
 		if e != nil {
 			return e

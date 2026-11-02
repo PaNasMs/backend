@@ -173,3 +173,18 @@ func TestNMSubnetSelectionIncludesHostRoutes(t *testing.T) {
 		t.Fatalf("host routes must block overlap without rejecting inventory: %s %v", subnet, e)
 	}
 }
+
+func TestNMRemovalPreservesForeignProviderSchema(t *testing.T) {
+	old := sharingRoot
+	sharingRoot = t.TempDir()
+	t.Cleanup(func() { sharingRoot = old })
+	raw := `[{'id':'nm','provider':'NetworkManager'},{'id':'native','provider':'networkd','wifi':['foreign-schema'],'custom':{'retain':true}}]`
+	raw = strings.ReplaceAll(raw, "'", "\"")
+	if e := os.WriteFile(filepath.Join(sharingRoot, "groups.json"), []byte(raw), 0600); e != nil {
+		t.Fatal(e)
+	}
+	owned, foreign, e := removalNMGroups()
+	if e != nil || len(owned) != 1 || owned[0].ID != "nm" || len(foreign) != 1 || !strings.Contains(string(foreign[0]), `"retain":true`) || !strings.Contains(string(foreign[0]), `"wifi":["foreign-schema"]`) {
+		t.Fatalf("foreign provider state lost: %+v %s %v", owned, foreign, e)
+	}
+}

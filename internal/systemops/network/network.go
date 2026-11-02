@@ -76,16 +76,13 @@ func active(s *state) bool {
 	return s != nil && (s.Status == "pending" || s.Status == "applying" || s.Status == "rollback-failed")
 }
 func current(a *adapter) (*state, error) {
-	s, e := readState()
-	if e != nil || s == nil {
-		return s, e
+	full, e := currentNMChange(true)
+	if e != nil || full == nil {
+		return nil, e
 	}
+	s := &full.state
 	if a != nil && supplementalKind(s.Kind) {
-		full, err := readNMChange(statePath)
-		if err != nil {
-			return nil, err
-		}
-		if err = a.currentNM(full); err != nil {
+		if err := a.currentNM(full); err != nil {
 			return nil, err
 		}
 		return &full.state, nil
@@ -103,6 +100,7 @@ func current(a *adapter) (*state, error) {
 	}
 	return s, nil
 }
+
 func public(s *state) any {
 	if s == nil {
 		return nil
@@ -155,9 +153,13 @@ func guard(name string) error {
 	return nil
 }
 func Operation(ctx context.Context, mode, action, user string, p map[string]any) (json.RawMessage, error) {
-	s, e := readState()
+	full, e := currentNMChange(false)
 	if e != nil {
 		return nil, e
+	}
+	var s *state
+	if full != nil {
+		s = &full.state
 	}
 	if s != nil && s.Kind == "network.native" && (action == "network.confirm" || action == "network.rollback") {
 		return networknative.Operation(mode, action, user, p)

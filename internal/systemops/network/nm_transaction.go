@@ -73,6 +73,13 @@ func readNMChange(path string) (*nmChange, error) {
 	if e != nil {
 		return nil, e
 	}
+	var base state
+	if e = json.Unmarshal(raw, &base); e != nil {
+		return nil, e
+	}
+	if !supplementalKind(base.Kind) {
+		return &nmChange{state: base}, nil
+	}
 	var s nmChange
 	if e = json.Unmarshal(raw, &s); e != nil {
 		return nil, e
@@ -205,4 +212,44 @@ func (a *adapter) deleteProfiles(ids []string) error {
 		}
 	}
 	return nil
+}
+
+func currentNMChange(publish bool) (*nmChange, error) {
+	runtime, e := readNMChange(statePath)
+	if e != nil {
+		return nil, e
+	}
+	current := runtime
+	records := []*nmChange{}
+	for _, path := range []string{wifiRecoveryPath, filepath.Join(sharingRoot, "pending.json")} {
+		saved, e := readNMChange(path)
+		if e != nil {
+			return nil, e
+		}
+		if saved == nil {
+			continue
+		}
+		if !supplementalKind(saved.Kind) {
+			return nil, fmt.Errorf("Invalid network recovery state")
+		}
+		records = append(records, saved)
+		if runtime != nil && runtime.ID == saved.ID {
+			current = saved
+		}
+	}
+	for _, saved := range records {
+		if !active(&saved.state) {
+			continue
+		}
+		if current != nil && active(&current.state) && current.ID != saved.ID {
+			return nil, fmt.Errorf("Confirm or roll back the pending network change first")
+		}
+		current = saved
+	}
+	if publish && current != nil && digest(current) != digest(runtime) {
+		if e = writeNetworkJSON(statePath, current); e != nil {
+			return nil, e
+		}
+	}
+	return current, nil
 }

@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -151,6 +152,9 @@ func (a *adapter) wifiInventory(rows []map[string]any) (map[string]any, error) {
 			}
 		}
 		radio, e := a.adapterRadio(name)
+		if errors.Is(e, errWifiPolicyUnavailable) {
+			continue
+		}
 		if e != nil {
 			return nil, e
 		}

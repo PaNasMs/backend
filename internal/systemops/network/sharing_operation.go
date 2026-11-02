@@ -251,6 +251,7 @@ func (a *adapter) rollbackNMSharing(s *nmChange) error {
 		}
 	}
 	s.Status = "rolled-back"
+	s.Error = ""
 	if e = s.remember(); e != nil {
 		return e
 	}

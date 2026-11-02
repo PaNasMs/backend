@@ -342,6 +342,7 @@ func (a *adapter) rollbackWifi(s *nmChange) error {
 		}
 	}
 	s.Status = "rolled-back"
+	s.Error = ""
 	return s.remember()
 }
 func (a *adapter) confirmWifi(s *nmChange) error {

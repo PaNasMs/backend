@@ -45,7 +45,9 @@ CHECK
   python3 /usr/lib/panasms/management/sharing.py --remove
   python3 /usr/lib/panasms/sharing-install.py --remove
   systemctl stop panasms-network-sharing.service || true
-  /usr/lib/panasms/panasms-system-helper network-services remove
+  if systemctl is-active --quiet NetworkManager; then
+   /usr/lib/panasms/panasms-system-helper network-services remove
+  fi
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' 'panasms-share-rollback-*.timer' panasms-network-recovery.service || true
   systemctl stop panasms-networkd-recovery.service || true

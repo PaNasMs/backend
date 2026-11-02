@@ -173,6 +173,7 @@ def execute(action,p,user=None):
             publish_status()
             return {'message':'Update preferences saved'}
         operation=action.rsplit('.',1)[1]
+        transaction=sharing_compat.retry_transaction(read('backup.json',{}).get('sharingPairHash')) if operation=='rollback' else None
         save('active-units.json',[])
         worker=ROOT/'worker';worker.mkdir(exist_ok=True)
         for name in ('system_updates.py','common.py','sharing_compat.py'):
@@ -181,7 +182,7 @@ def execute(action,p,user=None):
         fd=os.open(worker,os.O_RDONLY|os.O_DIRECTORY)
         try:os.fsync(fd)
         finally:os.close(fd)
-        save('state.json',{'id':uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':read('backup.json',{}).get('version') if operation=='rollback' else (query()['candidate'] or {}).get('version'),'error':''})
+        save('state.json',{'id':transaction or uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':read('backup.json',{}).get('version') if operation=='rollback' else (query()['candidate'] or {}).get('version'),'error':''})
         try:run(['systemctl','start','--no-block','panasms-update.service'],timeout=30)
         except Exception:
             save('state.json',{});raise

@@ -118,6 +118,7 @@ class PairedRollback(unittest.TestCase):
         for name, value in (('OWNER', os.getuid()), ('FILES', paths),
                             ('LOCKS', (self.root / 'lock', self.root / 'old-lock')),
                             ('GUARD', self.root / 'restore-guard'),
+                            ('ACTIVATION', self.root / 'activation'), ('NATIVE', self.root / 'native'),
                             ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal'))):
             guard = patch.object(compat, name, value)
             guard.start()
@@ -147,6 +148,43 @@ class PairedRollback(unittest.TestCase):
         reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
         with patch.object(compat.subprocess, 'run', return_value=reply):
             return compat.prepare_restore(self.source, self.source_hash, 'transaction')
+
+    def test_activation_ticket_attests_old_source_without_mutating_publications(self):
+        before = compat.capture()
+        source = {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1}
+        with patch.object(compat, 'capabilities', side_effect=lambda: dict(source)):
+            with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                with patch.dict(os.environ, {'PANASMS_MAINTENANCE': '1'}):
+                    first = compat.prepare_activation('2.0')
+                    second = compat.prepare_activation('2.0')
+        self.assertNotEqual(first['nonce'], second['nonce'])
+        self.assertFalse(second['source']['native'])
+        self.assertEqual(second['files'], before)
+        self.assertEqual(compat.capture(), before)
+        self.assertFalse(compat.NATIVE.exists())
+
+    def test_native_upgrade_keeps_optional_previous_ticket_and_checks_witness(self):
+        source = {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1}
+        native = {'schema': 1, 'packageVersion': '1.0', 'nonce': 'old-nonce'}
+        compat.atomic(compat.NATIVE, json.dumps(native).encode())
+        before = compat.capture()
+        def run(args, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': before, 'journalsAbsent': True}))
+        previous = {'schema': 1, 'targetVersion': '1.0', 'nonce': 'old-nonce', 'previous': {'older': True}}
+        for had_ticket in (False, True):
+            with self.subTest(had_ticket=had_ticket):
+                compat.ACTIVATION.unlink(missing_ok=True)
+                if had_ticket:
+                    compat.atomic(compat.ACTIVATION, json.dumps(previous).encode())
+                with patch.object(compat, 'capabilities', side_effect=lambda: dict(source)):
+                    with patch.object(compat.subprocess, 'run', side_effect=run):
+                        with patch.dict(os.environ, {'PANASMS_MAINTENANCE': '1'}):
+                            ticket = compat.prepare_activation('2.0')
+                self.assertTrue(ticket['source']['native'])
+                self.assertEqual('previous' in ticket, had_ticket)
+                if had_ticket:
+                    self.assertNotIn('previous', ticket['previous'])
+                self.assertEqual(compat.capture(), before)
 
     def test_real_archive_binding_and_exact_absence_empty_file_mode_restore(self):
         self.assertEqual(compat.load_pair(self.folder, self.source_hash), self.source)

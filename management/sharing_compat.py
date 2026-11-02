@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import subprocess
 import tempfile
+import uuid
 
 from common import Rejected, require
 
@@ -119,6 +120,8 @@ FILES = tuple(Path(p) for p in ('/etc/panasms/sharing.json', '/etc/samba/panasms
 LOCKS = (Path('/var/lib/panasms-agent/sharing.lock'), Path('/run/panasms-agent/sharing.lock'))
 GUARD = Path('/var/lib/panasms-agent/sharing-restore.json')
 HELPER = '/usr/lib/panasms/panasms-system-helper'
+ACTIVATION = Path('/var/lib/panasms-installer/sharing-activation-v1.json')
+NATIVE = Path('/var/lib/panasms-installer/sharing-native-v1.json')
 
 
 @contextmanager
@@ -251,6 +254,54 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
     return guard
 
 
+def prepare_activation(target_version):
+    require(os.environ.get('PANASMS_MAINTENANCE') == '1', 'Native preparation requires exclusive maintenance')
+    result = subprocess.run(['dpkg', '--validate-version', target_version], capture_output=True, text=True)
+    require(result.returncode == 0, 'Invalid native target package version')
+    source = capabilities()
+    native = None
+    if NATIVE.exists() or NATIVE.is_symlink():
+        native = json.loads(secure_read(NATIVE))
+        require(native.get('schema') == SCHEMA and isinstance(native.get('packageVersion'), str),
+                'Invalid native sharing receipt')
+    source['native'] = bool(native and native['packageVersion'] == source['packageVersion'])
+    previous = None
+    witness = None
+    if source['native']:
+        if ACTIVATION.exists() or ACTIVATION.is_symlink():
+            previous = json.loads(secure_read(ACTIVATION))
+            require(previous.get('schema') == SCHEMA and previous.get('targetVersion') == source['packageVersion']
+                    and previous.get('nonce') == native.get('nonce'), 'Native source activation is incomplete')
+            previous.pop('previous', None)
+        result = subprocess.run([HELPER, 'sharing', 'rollback-check'], capture_output=True, text=True, timeout=60)
+        require(result.returncode == 0, 'Native sharing requires recovery before another package transition')
+        witness = json.loads(result.stdout)
+        require(witness.get('schema') == SCHEMA and witness.get('journalsAbsent') is True,
+                'Unsupported native sharing witness')
+        validate_entries(witness['files'])
+    with locked():
+        resume_check()
+        files = capture()
+        if witness is not None:
+            require(files == witness['files'], 'Sharing changed during native transition preparation')
+        ticket = {'schema': SCHEMA, 'targetVersion': target_version, 'nonce': uuid.uuid4().hex,
+                  'source': source, 'files': files}
+        if previous is not None:
+            ticket['previous'] = previous
+        atomic(ACTIVATION, json.dumps(ticket, sort_keys=True).encode())
+    return ticket
+
+
+def retry_transaction(source_hash):
+    if not GUARD.exists() and not GUARD.is_symlink():
+        return None
+    guard = json.loads(secure_read(GUARD))
+    require(guard.get('schema') == SCHEMA and guard.get('sourceHash') == source_hash
+            and isinstance(guard.get('transaction'), str) and bool(guard['transaction']),
+            'Another sharing rollback requires recovery')
+    return guard['transaction']
+
+
 def begin_restore(guard):
     current = capture()
     expected = converted(guard['witness'])
@@ -297,8 +348,12 @@ def finish_restore():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check'))
-    mode = parser.parse_args().mode
+    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation'))
+    parser.add_argument('target_version', nargs='?')
+    args = parser.parse_args()
+    mode = args.mode
+    if (mode == 'prepare-activation') != (args.target_version is not None):
+        parser.error('Only prepare-activation requires a target package version')
     require(os.geteuid() == OWNER, 'Sharing compatibility requires root')
     if mode == 'capabilities':
         print(json.dumps(capabilities(), sort_keys=True))
@@ -306,5 +361,7 @@ if __name__ == '__main__':
         configure()
     elif mode == 'resume-check':
         resume_check()
+    elif mode == 'prepare-activation':
+        prepare_activation(args.target_version)
     else:
         check_install()

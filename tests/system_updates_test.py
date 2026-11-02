@@ -172,6 +172,16 @@ class Updates(unittest.TestCase):
                 state=u.read('state.json',{})
                 self.assertEqual(state['phase'],'rolled-back')
                 self.assertIn('Installed version' if cooling=='stale' else 'panasms-cooling.service',state['error'])
+    def test_explicit_retry_keeps_guard_transaction_and_original_resume_units(self):
+        guard={'schema':1,'transaction':'original-transaction','sourceHash':'snapshot',
+               'resumeUnits':['smbd.service']}
+        u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps(guard).encode())
+        u.save('backup.json',{'version':'0.2.5','sharingPairHash':'snapshot'})
+        with patch.object(u,'plan'),patch.object(u,'run'):
+            u.execute('system.update.rollback',{})
+        self.assertEqual(u.read('state.json',{})['id'],'original-transaction')
+        self.assertEqual(json.loads(u.sharing_compat.GUARD.read_text()),guard)
+
     def test_backup_repacks_every_installed_package(self):
         u.save('state.json',{'id':'a'*32,'phase':'backing-up','version':'0.2.6'})
         current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}

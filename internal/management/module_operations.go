@@ -77,7 +77,7 @@ func moduleHandler(core systemops.Handler, authorize func(string) (auth.Identity
 		if m == nil || !m.Enabled || m.Operations == "" {
 			return nil, deny("Module is not installed or is disabled")
 		}
-		if m.ID == "file" {
+		if m.ID != "files" && memberModuleActions[req.Action] {
 			return nil, deny("Module registration uses the reserved Files namespace")
 		}
 		if id.Role != "admin" && m.ID != "files" {

@@ -625,8 +625,8 @@ func TestLegacyFileModuleCustomActionsWithoutMemberAlias(t *testing.T) {
 	m.Operations = "bin/server"
 	m.Files["bin/server"] = strings.Repeat("a", 64)
 	save()
-	if _, e := moduleDestination("actions", "file.custom"); e == nil {
-		t.Fatal("native file alias accepted")
+	if dst, e := moduleDestination("actions", "file.custom"); e != nil || dst != goNative {
+		t.Fatalf("native administrative custom route lost: %v", e)
 	}
 }
 func TestCrossModuleRegistrationStillConflicts(t *testing.T) {
@@ -637,5 +637,49 @@ func TestCrossModuleRegistrationStillConflicts(t *testing.T) {
 	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
 	if _, e := moduleDestination("actions", "file.custom"); e == nil {
 		t.Fatal("multiple handler owners accepted")
+	}
+}
+
+func TestLegacyNativeFileCustomRemainsAdminOnly(t *testing.T) {
+	m, _, original := moduleFixture(t, moduleScript)
+	dir := filepath.Join(modules.Root, "file", "bin")
+	if e := os.MkdirAll(dir, 0755); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Rename(original, filepath.Join(dir, "server")); e != nil {
+		t.Fatal(e)
+	}
+	m.ID = "file"
+	m.Actions = []string{"file.custom", "file.copy"}
+	m.Queries = []string{"file.custom"}
+	raw, _ := json.Marshal(map[string]modules.Manifest{"file": m})
+	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	admin := fixtureHandler("admin", false)
+	member := fixtureHandler("user", false)
+	req := &systemops.Request{Action: "file.custom", Params: map[string]any{}}
+	raw, e := admin(systemops.ModePlan, "alice", req, quietReporter())
+	if e != nil {
+		t.Fatal(e)
+	}
+	var plan struct{ Fingerprint, Confirmation string }
+	json.Unmarshal(raw, &plan)
+	req.Fingerprint = plan.Fingerprint
+	req.Confirmation = plan.Confirmation
+	if _, e = admin(systemops.ModeExecute, "alice", req, quietReporter()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = admin(systemops.ModeQuery, "alice", &systemops.Request{View: "file.custom"}, quietReporter()); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = member(systemops.ModePlan, "alice", req, quietReporter()); e == nil {
+		t.Fatal("member custom action accepted")
+	}
+	if _, e = member(systemops.ModeQuery, "alice", &systemops.Request{View: "file.custom"}, quietReporter()); e == nil {
+		t.Fatal("member custom query accepted")
+	}
+	for _, h := range []systemops.Handler{admin, member} {
+		if _, e = h(systemops.ModePlan, "alice", &systemops.Request{Action: "file.copy", Params: map[string]any{}}, quietReporter()); e == nil || !strings.Contains(e.Error(), "reserved Files") {
+			t.Fatalf("protected member alias bypassed helper: %v", e)
+		}
 	}
 }

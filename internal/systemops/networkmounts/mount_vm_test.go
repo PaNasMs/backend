@@ -11,12 +11,12 @@ import (
 )
 
 func TestMountPrimitivesVM(t *testing.T) {
-	const uuid = "c37154d3-9ce3-4440-bae7-507700ae8108"
+	uuid := strings.ToLower(os.Getenv("PANASMS_TEST_VM_UUID"))
 	if os.Getenv("PANASMS_GO07_VM_PRIMITIVES") != "1" {
 		t.Skip("disposable VM mount-namespace acceptance only")
 	}
 	raw, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
-	if err != nil || strings.TrimSpace(strings.ToLower(string(raw))) != uuid || os.Geteuid() != 0 {
+	if err != nil || uuid == "" || strings.TrimSpace(strings.ToLower(string(raw))) != uuid || os.Geteuid() != 0 {
 		t.Fatal("wrong disposable VM")
 	}
 	self, err := os.Readlink("/proc/self/ns/mnt")

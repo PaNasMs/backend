@@ -468,3 +468,39 @@ func TestSharingForeignActivationMetadataStopsPackageConversion(t *testing.T) {
 		})
 	}
 }
+
+func TestSharingAbortValidatesPreviousTicketSourceBeforeRestoring(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid", true: "foreign"}[foreign], func(t *testing.T) {
+			s, previous := sharingActivationFixture(t, false)
+			if err := s.activateSharing(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			ticket := previous
+			ticket.TargetVersion = "fixture-next"
+			ticket.Nonce = nextFixtureNonce
+			ticket.Source = sharingActivationSource{Schema: 1, PackageVersion: "fixture-native", PairedRestore: 1, Native: true}
+			ticket.Files = map[string]sharingFileSnapshot{}
+			for path := range previous.Files {
+				ticket.Files[path], _ = s.fileSnapshot(path)
+			}
+			if foreign {
+				previous.Source.Native = true
+			}
+			ticket.Previous = &previous
+			writeActivationTicket(t, s, ticket)
+			err := s.abortSharingActivation(context.Background())
+			if (err != nil) != foreign {
+				t.Fatal(err)
+			}
+			var actual sharingActivationTicket
+			s.metadata(s.activationTicket, &actual)
+			if foreign && actual.Nonce != nextFixtureNonce {
+				t.Fatal("foreign previous ticket overwrote current evidence")
+			}
+			if !foreign && (actual.Nonce != fixtureNonce || actual.Source != previous.Source) {
+				t.Fatal("previous ticket not restored")
+			}
+		})
+	}
+}

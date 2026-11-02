@@ -64,6 +64,9 @@ def outer():
     if command('dpkg-deb', '-f', str(preparation), 'Package') != 'panasms-prototype':
         raise SystemExit('The preparation fixture must be the core package')
     version = command('dpkg-deb', '-f', str(preparation), 'Version')
+    trace_runtime = binary.parent / 'strace-runtime'
+    if not (trace_runtime / 'strace').is_file() and not shutil.which('strace'):
+        raise SystemExit('Supply strace in the guest or as the owned strace-runtime fixture')
     with tempfile.TemporaryDirectory(prefix='panasms-sharing-', dir='/var/tmp') as temporary:
         scratch = Path(temporary)
         root = scratch / 'root'
@@ -198,6 +201,9 @@ def namespace(root, loop, binary, prepared, version, nonce):
     database = root / 'var/lib/dpkg/status'
     database.parent.mkdir(parents=True, exist_ok=True)
     database.write_text('Package: panasms-prototype\nStatus: install ok installed\nPriority: optional\nSection: admin\nArchitecture: amd64\nVersion: ' + version + '\nMaintainer: Fixture\nDescription: Private sharing protocol fixture\n\n')
+    trace_runtime = Path(binary).parent / 'strace-runtime'
+    if (trace_runtime / 'strace').is_file():
+        shutil.copytree(trace_runtime, root / 'fixture/strace-runtime')
     shutil.copy(__file__, root / 'fixture/harness.py')
     os.chroot(root)
     os.chdir('/fixture')
@@ -262,14 +268,45 @@ def scenarios():
     version = command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype')
     denied = subprocess.run([HELPER, 'sharing', 'install'], capture_output=True, text=True)
     assert denied.returncode != 0 and not Path('/etc/panasms/sharing.json').exists()
-    ticket = {'schema': 1, 'targetVersion': version, 'nonce': secrets.token_hex(16), 'source': {'fresh': True},
-              'files': {name: {'exists': False} for name in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf',
-                        '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports')}}
-    Path('/var/lib/panasms-installer/sharing-activation-v1.json').write_text(json.dumps(ticket))
-    Path('/var/lib/panasms-installer/sharing-activation-v1.json').chmod(0o600)
+    compatibility = '/usr/lib/panasms/management/sharing_compat.py'
+    command('/usr/bin/python3', compatibility, 'configure')
+    command('/usr/bin/python3', compatibility, 'prepare-activation', version,
+            env={**os.environ, 'PANASMS_MAINTENANCE': '1'})
+    ticket = json.loads(Path('/var/lib/panasms-installer/sharing-activation-v1.json').read_text())
+    assert ticket['source'] == {'schema': 1, 'packageVersion': version, 'pairedRestore': 1, 'native': False}
+    tracer = ['/usr/bin/strace']
+    if Path('/fixture/strace-runtime/strace').exists():
+        tracer = ['/lib64/ld-linux-x86-64.so.2', '--library-path', '/fixture/strace-runtime/lib', '/fixture/strace-runtime/strace']
+    for boundary, syscalls, path in (
+            ('receipt', 'rename,renameat,renameat2', '/var/lib/panasms-installer/sharing-native-v1.json'),
+            ('ticket', 'unlink,unlinkat', '/var/lib/panasms-installer/sharing-activation-v1.json')):
+        trace = '/fixture/activation-' + boundary + '-kill.trace'
+        result = subprocess.run([*tracer, '-f', '-e', 'trace=' + syscalls, '-P', path,
+                                 '--inject=' + syscalls + ':signal=SIGKILL', '-o', trace,
+                                 HELPER, 'sharing', 'activate'], capture_output=True, text=True)
+        assert result.returncode == -signal.SIGKILL, (boundary, result.returncode, result.stderr)
+        assert path in Path(trace).read_text()
+        assert json.loads(Path('/etc/panasms/sharing.json').read_text())['legacyExportRevision']
+        assert json.loads(Path('/var/lib/panasms-installer/sharing-activation-v1.json').read_text()) == ticket
+        if boundary == 'receipt':
+            assert not Path('/var/lib/panasms-installer/sharing-native-v1.json').exists()
+            refused = subprocess.run([HELPER, 'sharing', 'reconcile'], capture_output=True, text=True)
+            assert refused.returncode != 0
+            rollback = subprocess.run([HELPER, 'sharing', 'rollback-check', '--source'],
+                                      input=json.dumps({'schema': 1, 'source': ticket['files']}), capture_output=True, text=True)
+            assert rollback.returncode == 0, rollback.stderr
+        else:
+            receipt = json.loads(Path('/var/lib/panasms-installer/sharing-native-v1.json').read_text())
+            assert receipt['nonce'] == ticket['nonce'] and receipt['packageVersion'] == version
+            cli('install')
+            operation('share.account', {'target': 'alice', 'enabled': True})
+    committed_state = Path('/etc/panasms/sharing.json').read_bytes()
     cli('activate')
+    assert Path('/etc/panasms/sharing.json').read_bytes() == committed_state
+    assert not Path('/var/lib/panasms-installer/sharing-activation-v1.json').exists()
     cli('install')
-    print('PASS private fixture activation uses actual preparation capability CLI; no runtime authorization bypass', flush=True)
+    print('PASS real helper SIGKILL at seed-to-receipt and receipt-to-ticket-unlink boundaries; nonce commit retry preserves later state', flush=True)
+    print('PASS private fixture activation uses actual configured preparation CLI and ticket; no runtime authorization bypass', flush=True)
     main = Path('/etc/samba/smb.conf')
     main.write_text(main.read_text().replace('include = ', 'pid directory = /run\ninterfaces = lo\nbind interfaces only = yes\ninclude = '))
     processes = []

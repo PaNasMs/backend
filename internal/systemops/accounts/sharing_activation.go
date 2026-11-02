@@ -356,7 +356,7 @@ func (s *sharingService) abortSharingActivation(ctx context.Context) error {
 		return reject(sharingActivationPending)
 	}
 	if ticket.Previous != nil {
-		if s.validTicket(ticket.Previous) != nil || ticket.Previous.TargetVersion != version || ticket.Previous.Nonce != receipt.Nonce {
+		if s.validTicket(ticket.Previous) != nil || ticket.Previous.TargetVersion != version || ticket.Previous.Nonce != receipt.Nonce || ticket.Previous.Source != receipt.Source {
 			return reject(sharingActivationPending)
 		}
 		raw, err := json.Marshal(ticket.Previous)

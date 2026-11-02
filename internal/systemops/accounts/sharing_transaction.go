@@ -88,11 +88,22 @@ func (s *sharingService) validate(ctx context.Context, shares []sharedFolder, r 
 		return err
 	}
 	for _, share := range shares {
-		if slices.ContainsFunc(previous.Shares, func(old sharedFolder) bool { return reflect.DeepEqual(old, share) }) {
-			continue
-		}
 		if share.SMB || share.NFS {
 			if err := s.check(ctx, share); err != nil {
+				if slices.ContainsFunc(previous.Shares, func(old sharedFolder) bool { return reflect.DeepEqual(old, share) }) {
+					var inventory struct {
+						Filesystems []struct{ Target string }
+					}
+					if e := s.jsonCommand(ctx, []string{"findmnt", "--json", "--list", "--output", "TARGET"}, &inventory); e != nil {
+						return e
+					}
+					if !slices.ContainsFunc(inventory.Filesystems, func(row struct{ Target string }) bool { return row.Target == share.Mountpoint }) {
+						if noLinks(share.Mountpoint) != nil {
+							return err
+						}
+						continue
+					}
+				}
 				return err
 			}
 		}
@@ -122,6 +133,9 @@ func (s *sharingService) validate(ctx context.Context, shares []sharedFolder, r 
 	return err
 }
 func (s *sharingService) reload(ctx context.Context, shares []sharedFolder, r *systemops.Reporter) error {
+	if err := s.validate(ctx, shares, r); err != nil {
+		return err
+	}
 	if s.tool("testparm") {
 		if _, err := s.run(ctx, []string{"testparm", "-s"}, systemops.CommandOptions{Timeout: 20 * time.Second}); err != nil {
 			return err

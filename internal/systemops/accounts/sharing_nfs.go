@@ -140,6 +140,13 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 		}
 		rows = append(rows, target+" "+strings.Join(clients, " "))
 	}
+	st, err := s.read()
+	if err != nil {
+		return nil, err
+	}
+	if err = s.validate(ctx, st.Shares, r); err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
 	if err = s.begin(true); err != nil {
 		return nil, err
 	}

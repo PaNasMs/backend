@@ -871,3 +871,39 @@ func TestSharingRemoveSelectedWhileUnchangedOtherVolumeIsOffline(t *testing.T) {
 		t.Fatal("unrelated offline share trapped recovery")
 	}
 }
+
+func TestSharingRetainedMountedShareStillValidatesIdentityAndLinks(t *testing.T) {
+	for _, cause := range []string{"volume", "link", "inventory"} {
+		t.Run(cause, func(t *testing.T) {
+			s := sharingFixture(t)
+			saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}})
+			s.locate = func(context.Context, string) (sharingMount, error) {
+				if cause == "volume" {
+					return sharingMount{Target: "/srv/data", UUID: "replaced-volume"}, nil
+				}
+				return sharingMount{}, reject("Links in the mount path are not allowed")
+			}
+			real := s.run
+			s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
+				if slices.Equal(args, []string{"findmnt", "--json", "--list", "--output", "TARGET"}) {
+					if cause == "inventory" {
+						return nil, errors.New("fixture mount inventory unavailable")
+					}
+					return []byte(`{"filesystems":[{"target":"/srv/data"}]}`), nil
+				}
+				return real(ctx, args, opt)
+			}
+			before, _ := os.ReadFile(s.smb)
+			if err := s.apply(context.Background(), sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}}, nil); err == nil {
+				t.Fatal("retained mounted share bypassed identity/link validation")
+			}
+			after, _ := os.ReadFile(s.smb)
+			if !bytes.Equal(before, after) {
+				t.Fatal("configuration changed before refusing mounted share")
+			}
+			if exists, _ := sharingExists(s.journal); exists {
+				t.Fatal("journal created before retained-share validation")
+			}
+		})
+	}
+}

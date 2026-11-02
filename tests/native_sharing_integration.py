@@ -556,6 +556,31 @@ def legacy_nfs_scenarios():
         assert before == {path: Path(path).read_text() for path in paths}
     assert (legacy / 'proof').read_text() == 'legacy NFS fixture'
     print('PASS real legacy NFS export and interrupted legacy export recovery twice', flush=True)
+    def refuse_republication():
+        for action, params in [('share.recover', {}), ('nfs.export-remove', {'target': str(legacy)})]:
+            plan = invoke('plan', {'action': action, 'params': params})
+            assert not plan.get('error'), plan
+            result = invoke('execute', dict(action=action, params=params, fingerprint=plan['fingerprint'], confirmation=plan['confirmation']))
+            assert result.get('error') == 'Shared volume unavailable', result
+            assert Path('/etc/exports.d/panasms.exports').read_text() == before['/etc/exports.d/panasms.exports']
+            assert not Path('/var/lib/panasms-agent/sharing-transaction.json').exists()
+    kept = Path('/srv/data/share')
+    kept.rename('/srv/data/share-kept')
+    kept.symlink_to(legacy)
+    try:
+        refuse_republication()
+    finally:
+        kept.unlink()
+        Path('/srv/data/share-kept').rename(kept)
+    print('PASS retained mounted share symlink refuses unrelated NFS reload', flush=True)
+    command('mount', '-t', 'tmpfs', 'go06-replacement', '/srv/data')
+    try:
+        Path('/srv/data/share').mkdir()
+        Path('/srv/data/legacy').mkdir()
+        refuse_republication()
+    finally:
+        command('umount', '/srv/data')
+    print('PASS foreign volume at retained mountpoint refuses unrelated NFS reload', flush=True)
     command('umount', '-l', '/srv/data')
     try:
         operation('nfs.export-remove', {'target': str(legacy)})

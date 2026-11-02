@@ -22,14 +22,9 @@ func defaultService() *service {
 	return &service{
 		sys: "/sys/class/block", fstab: "/etc/fstab", resolve: filepath.EvalSymlinks,
 		inventory: func(ctx context.Context) ([]map[string]any, error) {
-			rows, err := system.BlockDevicesRead(ctx, "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,LABEL,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN,MAJ:MIN")
-			if err != nil {
-				return nil, err
-			}
-			if err := requireMetadataCache(rows, "/run/udev/data"); err != nil {
-				return nil, err
-			}
-			return rows, nil
+			return observedBlockInventory(ctx, "/run/udev/data", func(ctx context.Context) ([]map[string]any, error) {
+				return system.BlockDevicesRead(ctx, "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,LABEL,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN,MAJ:MIN")
+			})
 		},
 	}
 }

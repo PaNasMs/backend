@@ -17,6 +17,13 @@ func Redact(raw json.RawMessage) (json.RawMessage, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("invalid storage result")
 	}
+	if object, ok := value.(map[string]any); ok {
+		// Disk-sleep state keys contain hardware serials, even after removing
+		// serial fields. Members cannot correlate those admin-only identities.
+		if _, exists := object["sleepStatus"]; exists {
+			object["sleepStatus"] = map[string]any{}
+		}
+	}
 	var visit func(any)
 	visit = func(value any) {
 		switch object := value.(type) {

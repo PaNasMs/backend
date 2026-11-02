@@ -34,3 +34,11 @@ func TestRedactionPreservesExactByteSizes(t *testing.T) {
 		t.Fatal("trailing result accepted")
 	}
 }
+
+func TestSleepStatusSerialKeysAreNotReturnedToMembers(t *testing.T) {
+	raw := json.RawMessage(`{"sleepStatus":{"private-disk:42":{"device":"/dev/sda"}},"sleepRuntime":{"total":1}}`)
+	result, err := Redact(raw)
+	if err != nil || strings.Contains(string(result), "private-disk") || !strings.Contains(string(result), `"sleepStatus":{}`) || !strings.Contains(string(result), `"total":1`) {
+		t.Fatalf("%s %v", result, err)
+	}
+}

@@ -54,3 +54,36 @@ func TestStorageQueryInvalidResultFailsBeforeExposure(t *testing.T) {
 		t.Fatalf("%s %v", result, err)
 	}
 }
+
+func TestMemberStorageQueryHidesSleepStateSerialKeys(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		d, _ := setup()
+		d.Authorize = func(string) (auth.Identity, error) {
+			role := "user"
+			if admin {
+				role = "admin"
+			}
+			return auth.Identity{Role: role}, nil
+		}
+		original := json.RawMessage(`{"sleepStatus":{"private-disk-serial:42":{"device":"/dev/sda","minutes":0,"status":"applied"}}}`)
+		d.Query = func(context.Context, string, string, string) (json.RawMessage, error) { return original, nil }
+		result, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: "storage-options"}, reporter())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(result), "private-disk-serial") != admin {
+			t.Fatalf("admin=%v output=%s", admin, result)
+		}
+		var output map[string]any
+		if err := json.Unmarshal(result, &output); err != nil {
+			t.Fatal(err)
+		}
+		states, ok := output["sleepStatus"].(map[string]any)
+		if !ok || (!admin && len(states) != 0) || (admin && len(states) != 1) {
+			t.Fatalf("%v", output)
+		}
+		if !strings.Contains(string(original), "private-disk-serial") {
+			t.Fatal("admin input mutated")
+		}
+	}
+}

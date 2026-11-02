@@ -54,6 +54,21 @@ func homeAffected(source string, users []passwdUser) []passwdUser {
 	return result
 }
 
+func homeValidateAffected(source, target string, all []passwdUser) error {
+	counts := map[string]int{}
+	for _, u := range all {
+		counts[u.Name]++
+	}
+	for _, u := range homeAffected(source, all) {
+		_, oldErr := systemops.CleanPath(u.Dir)
+		_, newErr := systemops.CleanPath(target + strings.TrimPrefix(u.Dir, source))
+		if !homeAccountName(u.Name) || counts[u.Name] != 1 || oldErr != nil || newErr != nil {
+			return reject("Invalid home-move account state; data was preserved")
+		}
+	}
+	return nil
+}
+
 func (s *homeService) query() (json.RawMessage, error) {
 	source, err := s.base()
 	if err != nil {
@@ -181,17 +196,14 @@ func (s *homeService) inspect(ctx context.Context, destination string) (string, 
 	if err != nil {
 		return "", "", nil, err
 	}
+	if err := homeValidateAffected(source, target, all); err != nil {
+		return "", "", nil, err
+	}
 	users := homeAffected(source, all)
 	for _, u := range all {
 		if strings.HasPrefix(u.Dir, source+"/") {
-			if !homeAccountName(u.Name) {
-				return "", "", nil, reject("Invalid home-move account state; data was preserved")
-			}
 			if u.UID == 0 {
 				return "", "", nil, reject("Root home cannot be moved")
-			}
-			if _, err := systemops.CleanPath(u.Dir); err != nil {
-				return "", "", nil, err
 			}
 			if info, err := os.Stat(u.Dir); err != nil || !info.IsDir() {
 				return "", "", nil, reject("Home folder unavailable: " + u.Name)
@@ -411,6 +423,9 @@ func (s *homeService) execute(ctx context.Context, params map[string]any, expect
 		return nil, systemops.BeforeMutation(err)
 	}
 	state.BackupIdentity, err = homeIdentity(state.Backup)
+	if err == nil {
+		err = s.validateJournal(&state)
+	}
 	if err == nil {
 		err = s.save(&state)
 	}

@@ -409,3 +409,26 @@ func TestHomesCommittedRecoveryPreservesOriginalWhenUserCopyMissing(t *testing.T
 		t.Fatal("recovery evidence removed", err)
 	}
 }
+
+func TestHomesPreflightRejectsAmbiguousNamesAndOversizedNewPaths(t *testing.T) {
+	alice := passwdUser{Name: "alice", UID: 15001, Dir: "/home/alice"}
+	long := alice
+	long.Dir = "/home/" + strings.Repeat(strings.Repeat("d", 250)+"/", 4) + "alice"
+	for _, users := range [][]passwdUser{{alice, alice}, {alice, {Name: "alice", UID: 15002, Dir: "/nonexistent"}}, {long}} {
+		err := homeValidateAffected("/home", "/srv/data/homes", users)
+		if err == nil || !systemops.IsRejected(err) {
+			t.Fatalf("incompatible journal user set accepted: %#v (%v)", users, err)
+		}
+	}
+	if err := homeValidateAffected("/home", "/srv/data/homes", []passwdUser{alice}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHomesInitialJournalUsesReaderValidation(t *testing.T) {
+	f := newHomeFixture(t, "copying")
+	f.state.Backup = filepath.Dir(f.state.Source) + "/.panasms-home-" + strings.Repeat("x", 1024)
+	if err := f.s.validateJournal(&f.state); err == nil || !systemops.IsRejected(err) {
+		t.Fatal("unreadable generated journal accepted", err)
+	}
+}

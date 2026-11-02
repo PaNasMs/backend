@@ -107,6 +107,11 @@ if name=='rsync':
  except Exception as e:
   with Path('/fixture/tool-errors.jsonl').open('a') as log:log.write(json.dumps({'command':[name,*args],'error':str(e)})+'\n')
   raise
+if name=='getent' and args==['passwd'] and Path('/fixture/duplicate-user').exists():
+ raw=subprocess.check_output(['/usr/bin/getent','passwd'],text=True)
+ duplicate=next(row.split(':') for row in raw.splitlines() if row.startswith('alice:'))
+ if Path('/fixture/duplicate-user').read_text()=='outside':duplicate[5]='/nonexistent'
+ print(raw.rstrip()+'\n'+':'.join(duplicate));sys.exit(0)
 if name=='systemctl':
  if '--property=Description' in args:print('Fixture background service')
  sys.exit(0)
@@ -171,7 +176,7 @@ def namespace(root, loop, binary, nonce):
     (root / 'etc/shells').write_text('/bin/bash\n/usr/sbin/nologin\n')
     (root / 'tmp').chmod(0o1777)
     (root / 'fixture/nonce').write_text(nonce)
-    for tool in ('du', 'mount', 'umount', 'rsync', 'usermod', 'useradd', 'sync', 'systemctl', 'findmnt', 'lsblk'):
+    for tool in ('getent', 'du', 'mount', 'umount', 'rsync', 'usermod', 'useradd', 'sync', 'systemctl', 'findmnt', 'lsblk'):
         path = root / 'fixture/bin' / tool
         path.write_text(TOOL)
         path.chmod(0o755)
@@ -224,7 +229,7 @@ def reset():
             stream.seek(5 * 1024 * 1024)
             stream.write(b'end')
         os.chown(sparse, uid, uid)
-    for path in ('/fixture/pause', '/fixture/event', '/fixture/replace-parent', '/fixture/replace-source', '/run/nologin'):
+    for path in ('/fixture/pause', '/fixture/event', '/fixture/replace-parent', '/fixture/replace-source', '/fixture/duplicate-user', '/run/nologin'):
         Path(path).unlink(missing_ok=True)
 
 
@@ -371,6 +376,43 @@ def scenarios():
     print('PASS existing NSS account name moves and committed cleanup completes', flush=True)
     reset()
     interrupted('journal-committed', snapshot('/home'), missing_home=True)
+    reset()
+    for duplicate in ('inside', 'outside'):
+        original = snapshot('/home')
+        Path('/fixture/duplicate-user').write_text(duplicate)
+        rejected = invoke('plan', {'action': 'homes.move', 'params': {'destination': TARGET}})
+        assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
+        assert not Path(TARGET).exists() and not Path('/run/nologin').exists() and snapshot('/home') == original
+        Path('/fixture/duplicate-user').unlink()
+        print('PASS duplicate NSS name ' + duplicate + ' source rejected before mutation', flush=True)
+    reset()
+    parent = Path('/home')
+    for _ in range(4):
+        parent = parent / ('d' * 250)
+        parent.mkdir()
+    Path('/home/alice').rename(parent / 'alice')
+    Path('/etc/passwd').write_text(Path('/etc/passwd').read_text().replace('/home/alice:', str(parent / 'alice') + ':'))
+    rejected = invoke('plan', {'action': 'homes.move', 'params': {'destination': TARGET}})
+    assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
+    assert not Path(TARGET).exists() and not Path('/run/nologin').exists() and (parent / 'alice/payload').is_file()
+    print('PASS oversized computed new home rejected before mutation', flush=True)
+    reset()
+    parent = Path('/home')
+    for _ in range(4):
+        parent = parent / ('d' * 250)
+        parent.mkdir()
+    source = parent / 's'
+    source.mkdir()
+    Path('/home/alice').rename(source / 'alice')
+    Path('/etc/default/useradd').write_text('HOME=' + str(source) + '\n')
+    Path('/etc/passwd').write_text(Path('/etc/passwd').read_text().replace('/home/alice:', str(source / 'alice') + ':'))
+    rejected = invoke('execute', plan())
+    assert rejected.get('error') and rejected.get('noChanges') and not JOURNAL.exists(), rejected
+    assert not Path(TARGET).exists() and not Path('/run/nologin').exists() and (source / 'alice/payload').is_file()
+    assert not list(parent.glob('.panasms-home-*'))
+    print('PASS generated backup path rejected by shared journal validation before publication', flush=True)
+
+
     for stage in ('journal-copying', 'target-created', 'copy-verified', 'journal-switching',
                   'one-user-switched', 'defaults-switched', 'journal-committed', 'old-tree-renamed'):
         reset()

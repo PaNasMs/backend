@@ -68,42 +68,49 @@ func (s *homeService) readJournal() (*homeJournal, error) {
 	if err := systemops.Decode(raw, &state); err != nil {
 		return nil, err
 	}
+	if err := s.validateJournal(&state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (s *homeService) validateJournal(state *homeJournal) error {
 	if state.Phase != "copying" && state.Phase != "switching" && state.Phase != "committed" {
-		return nil, reject("Unknown home-move recovery state; data was preserved")
+		return reject("Unknown home-move recovery state; data was preserved")
 	}
 	for _, p := range []string{state.Source, state.Target, state.Backup} {
 		if _, err := systemops.CleanPath(p); err != nil || p == "/" {
-			return nil, reject("Invalid home-move recovery path; data was preserved")
+			return reject("Invalid home-move recovery path; data was preserved")
 		}
 		if err := noLinks(p); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if childOf(state.Source, state.Target) || childOf(state.Target, state.Source) || filepath.Dir(state.Backup) != filepath.Dir(state.Source) || !strings.HasPrefix(filepath.Base(state.Backup), ".panasms-home-") {
-		return nil, reject("Invalid home-move recovery path; data was preserved")
+		return reject("Invalid home-move recovery path; data was preserved")
 	}
 	for _, id := range [][]uint64{state.SourceIdentity, state.TargetIdentity, state.BackupIdentity, state.NologinIdentity} {
 		if len(id) != 0 && len(id) != 2 {
-			return nil, reject("Invalid home-move recovery identity; data was preserved")
+			return reject("Invalid home-move recovery identity; data was preserved")
 		}
 	}
 	if state.NologinTemp != "" && (len(state.NologinIdentity) != 2 || filepath.Dir(state.NologinTemp) != filepath.Dir(s.nologin) || !strings.HasPrefix(filepath.Base(state.NologinTemp), ".panasms-home-nologin-")) {
-		return nil, reject("Invalid home maintenance marker; data was preserved")
+		return reject("Invalid home maintenance marker; data was preserved")
 	}
 	seen := map[string]bool{}
 	for _, u := range state.Users {
 		if _, err := systemops.CleanPath(u.Old); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := systemops.CleanPath(u.New); err != nil {
-			return nil, err
+			return err
 		}
 		if !homeAccountName(u.Name) || seen[u.Name] || !strings.HasPrefix(u.Old, state.Source+"/") || u.New != state.Target+strings.TrimPrefix(u.Old, state.Source) {
-			return nil, reject("Invalid home-move account state; data was preserved")
+			return reject("Invalid home-move account state; data was preserved")
 		}
 		seen[u.Name] = true
 	}
-	return &state, nil
+	return nil
 }
 
 func (s *homeService) recoveryUsers(state *homeJournal) ([]passwdUser, error) {

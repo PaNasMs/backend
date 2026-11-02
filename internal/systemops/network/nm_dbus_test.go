@@ -977,3 +977,59 @@ func TestNMIPv6ProfileCloneRestoresDBusStructSignatures(t *testing.T) {
 		})
 	}
 }
+
+func TestNMSharingPortsBindPermanentMAC(t *testing.T) {
+	for _, wireless := range []bool{false, true} {
+		for _, permanent := range []string{"00:11:22:33:44:66", "", "invalid"} {
+			t.Run(fmt.Sprintf("wifi=%v/perm=%s", wireless, permanent), func(t *testing.T) {
+				a, f := newNMSharingFixture(t)
+				p := map[string]any{"name": "Fixture", "source": "pneth0", "outputs": []any{"pneth1"}, "mode": "nat", "wifi": map[string]any{}, "autostart": false}
+				g, _, e := a.reviewNMSharing(p, nil)
+				if e != nil {
+					t.Fatal(e)
+				}
+				iface, kind := nm+".Device.Wired", "802-3-ethernet"
+				if wireless {
+					iface, kind = nm+".Device.Wireless", "802-11-wireless"
+					g.Wifi = map[string]nmAP{"pneth1": {SSID: "fixture", Band: "bg", Channel: 6}}
+					p["wifi"] = map[string]any{"pneth1": map[string]any{"password": "fixture-password"}}
+				}
+				f.mu.Lock()
+				f.props["/device/2"][nm+".Device"]["HwAddress"] = dbus.MakeVariant("02:aa:bb:cc:dd:ee")
+				if wireless {
+					f.props["/device/2"][nm+".Device"]["DeviceType"] = dbus.MakeVariant(uint32(2))
+				}
+				f.props["/device/2"][iface] = map[string]dbus.Variant{"PermHwAddress": dbus.MakeVariant(permanent)}
+				f.mu.Unlock()
+				change := &nmChange{state: state{Kind: "network.share.save"}, NewProfiles: map[string]string{}}
+				g, e = a.buildNMGroup(g, p, nil, change)
+				if e != nil {
+					t.Fatal(e)
+				}
+				profiles, e := a.profiles()
+				if e != nil {
+					t.Fatal(e)
+				}
+				bound := bytesValue(profiles[g.Profiles["pneth1"]].Settings[kind]["mac-address"])
+				if permanent != "00:11:22:33:44:66" {
+					if len(bound) != 0 {
+						t.Fatalf("unavailable permanent MAC bound to current address: %x", bound)
+					}
+					return
+				}
+				if fmt.Sprintf("%x", bound) != "001122334466" {
+					t.Fatalf("randomized current MAC used: %x", bound)
+				}
+				if match, e := a.matchesNMAdapter(g, "pneth1", profiles); e != nil || !match {
+					t.Fatal("permanent adapter rejected", match, e)
+				}
+				f.mu.Lock()
+				f.props["/device/2"][iface]["PermHwAddress"] = dbus.MakeVariant("00:11:22:33:44:77")
+				f.mu.Unlock()
+				if match, e := a.matchesNMAdapter(g, "pneth1", profiles); e != nil || match {
+					t.Fatal("replacement adapter accepted", match, e)
+				}
+			})
+		}
+	}
+}

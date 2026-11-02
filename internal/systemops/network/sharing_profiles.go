@@ -227,7 +227,7 @@ func (a *adapter) buildNMGroup(conf nmGroup, p map[string]any, old *nmGroup, s *
 		return g, e
 	}
 	for _, name := range nmPortNames(g) {
-		_, props, e := a.device(name)
+		path, props, e := a.device(name)
 		if e != nil {
 			return g, e
 		}
@@ -236,7 +236,12 @@ func (a *adapter) buildNMGroup(conf nmGroup, p map[string]any, old *nmGroup, s *
 			kind = "802-11-wireless"
 		}
 		fields = settings{"connection": {"id": dbus.MakeVariant("PaNasMs " + g.Name + " " + name), "type": dbus.MakeVariant(kind), "interface-name": dbus.MakeVariant(name), "master": dbus.MakeVariant(g.Bridge), "slave-type": dbus.MakeVariant("bridge")}, kind: {}}
-		mac := strings.ToLower(str(props["HwAddress"]))
+		iface := nm + ".Device.Wired"
+		if kind == "802-11-wireless" {
+			iface = nm + ".Device.Wireless"
+		}
+		hardware, _ := a.props(path, iface)
+		mac := strings.ToLower(str(hardware["PermHwAddress"]))
 		if macPattern.MatchString(mac) {
 			raw, _ := hex.DecodeString(strings.ReplaceAll(mac, ":", ""))
 			fields[kind]["mac-address"] = dbus.MakeVariant(raw)

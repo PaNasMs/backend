@@ -201,14 +201,15 @@ func (a *adapter) matchesNMAdapter(g nmGroup, name string, saved map[string]nmPr
 			if e != nil {
 				return false, e
 			}
-			mac := str(props["HwAddress"])
+			iface := nm + ".Device.Wired"
 			if num(props["DeviceType"]) == 2 {
-				w, e := a.props(path, nm+".Device.Wireless")
-				if e != nil {
-					return false, e
-				}
-				mac = str(w["PermHwAddress"])
+				iface = nm + ".Device.Wireless"
 			}
+			hardware, e := a.props(path, iface)
+			if e != nil {
+				return false, e
+			}
+			mac := str(hardware["PermHwAddress"])
 			return strings.EqualFold(fmt.Sprintf("%x", bound), strings.ReplaceAll(mac, ":", "")), nil
 		}
 	}

@@ -8,6 +8,7 @@ extracts its real archive. No dpkg, tar, service or health calls are mocked. Res
 the operator snapshot after the scenario; updater evidence remains inside the VM.
 """
 import argparse
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import json
@@ -113,7 +114,8 @@ def main():
     old.save('active-units.json', units)
     old.stop_terminals(units)
     old.module_idle()
-    with old.maintenance():
+    with ExitStack() as maintenance_guard:
+        maintenance_guard.enter_context(old.maintenance())
         old.stop(units)
         old.backup(units)
         old.phase('installing')
@@ -152,6 +154,7 @@ def main():
                 old.run = real_run
         if args.root_retry_after_interruption:
             old.finish('recovery-required', 'Injected after real tar extraction')
+            maintenance_guard.close()
             subprocess.run([sys.executable, str(old.ROOT / 'worker/system_updates.py'), 'retry-rollback'],
                            check=True, capture_output=True)
         else:

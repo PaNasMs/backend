@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / 'management'))
 import sharing_compat as compat
 from common import Rejected
+from maintenance_fixture import MaintenanceFixture
 
 
 class Preparation(unittest.TestCase):
@@ -61,6 +62,7 @@ class Preparation(unittest.TestCase):
         template = template.replace('/var/lib/panasms-agent', str(self.root / 'agent'))
         template = template.replace('/usr/lib/panasms', str(self.root / 'usr'))
         template = template.replace('.st_uid != 0', '.st_uid != os.getuid()')
+        fixture = MaintenanceFixture(self.root)
         binary = self.root / 'bin'
         binary.mkdir()
         query = binary / 'dpkg-query'
@@ -71,7 +73,7 @@ class Preparation(unittest.TestCase):
         record = installer / 'sharing-package-state.json'
         value = {'schema': 1, 'sourceVersion': '1.0', 'targetVersion': '0.9', 'timerActive': True}
         compat.atomic(record, json.dumps(value).encode())
-        environment = {**os.environ, 'PATH': str(binary) + ':' + os.environ['PATH'], 'TEST_VERSION': '0.9', 'TEST_DECLARED': ''}
+        environment = {**fixture.env, 'PATH': str(binary) + ':' + fixture.env['PATH'], 'TEST_VERSION': '0.9', 'TEST_DECLARED': ''}
         declared = str(self.root / 'usr/management/sharing_compat.py')
         for changes in ({'TEST_VERSION': 'other'}, {'TEST_DECLARED': declared}):
             result = subprocess.run([sys.executable, '-c', template, 'upgrade', '0.9'],
@@ -100,13 +102,17 @@ class Preparation(unittest.TestCase):
         self.assertNotIn('ExecStartPre=', dropin)
 
     def test_failed_upgrade_target_never_overrides_installed_prerm_failure(self):
-        script = Path(__file__).parents[1] / 'packaging/prerm'
+        fixture = MaintenanceFixture(self.root)
+        script = self.root / 'prerm'
+        script.write_text(fixture.rebase((Path(__file__).parents[1] / 'packaging/prerm').read_text()))
         result = subprocess.run(['sh', str(script), 'failed-upgrade', '1.0', '2.0'],
-                                capture_output=True, text=True)
+                                env=fixture.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('preserving its failure', result.stderr)
+        self.assertEqual(fixture.calls(), [])
 
     def test_preparation_upgrade_and_nonpurge_reinstall_remain_distinct(self):
+        fixture = MaintenanceFixture(self.root)
         script = (Path(__file__).parents[1] / 'packaging/postinst').read_text()
         begin = script.index('  if [ -z "${2:-}" ]')
         end = script.index('  fi\n', begin) + len('  fi\n')
@@ -116,18 +122,19 @@ class Preparation(unittest.TestCase):
         timer = script[begin:end]
         marker = self.root / 'install-marker'
         command = (hook + '\n' + timer).replace('python3 ', 'echo python3 ').replace('systemctl ', 'echo systemctl ')
-        command = command.replace('/var/lib/panasms-installer/sharing-package-install', str(marker))
+        command = fixture.rebase(command.replace('/var/lib/panasms-installer/sharing-package-install', str(marker)))
         for previous, reinstall in (('1.0', False), ('', False), ('1.0', True)):
             with self.subTest(previous=previous, reinstall=reinstall):
                 marker.unlink(missing_ok=True)
                 if reinstall:
                     marker.touch()
                 result = subprocess.run(['sh', '-c', command, 'postinst', 'configure', previous],
-                                        capture_output=True, text=True, check=True)
+                                        env=fixture.env, capture_output=True, text=True, check=True)
                 initializes = not previous or reinstall
                 self.assertEqual('sharing-install.py' in result.stdout, initializes)
                 self.assertEqual('systemctl enable --now panasms-sharing.timer' in result.stdout, initializes)
                 self.assertEqual('package-resume' in result.stdout, not initializes)
+        self.assertEqual(fixture.calls(), [])
 
     def test_direct_package_upgrade_resumes_only_previously_active_timer(self):
         for active in (True, False):

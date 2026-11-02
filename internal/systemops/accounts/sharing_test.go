@@ -1066,3 +1066,50 @@ func TestSharingAccountCallbacksWaitAndReauthorize(t *testing.T) {
 		})
 	}
 }
+
+func TestSharingLegacyNFSMatchesPathFieldForRemoveAndReplace(t *testing.T) {
+	for _, prefix := range []string{"", "  ", "\t"} {
+		for _, separator := range []string{" ", "\t"} {
+			for _, action := range []string{"nfs.export-remove", "nfs.export"} {
+				t.Run(prefix+separator+action, func(t *testing.T) {
+					s := sharingFixture(t)
+					saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{}})
+					keep := "# retained comment\n/srv/data/legacy-other 192.0.2.1(ro,sync,no_subtree_check,root_squash)\n"
+					if err := os.WriteFile(s.legacy, []byte(keep+prefix+"/srv/data/legacy"+separator+"127.0.0.1(ro,sync,no_subtree_check,root_squash)\n"), 0644); err != nil {
+						t.Fatal(err)
+					}
+					sealLegacySharingFixture(t, s)
+					p := map[string]any{"target": "/srv/data/legacy", "clients": "127.0.0.2/32", "readOnly": false}
+					fp := sharingFingerprint(t, s, action, p)
+					if _, err := s.execute(context.Background(), action, p, fp, nil); err != nil {
+						t.Fatal(err)
+					}
+					text, err := sharingText(s.legacy)
+					if err != nil || !strings.HasPrefix(text, keep) {
+						t.Fatal(text, err)
+					}
+					rows, err := s.nfsEntries()
+					if err != nil {
+						t.Fatal(err)
+					}
+					count := 0
+					for _, row := range rows {
+						if row.Path == "/srv/data/legacy" {
+							count++
+							if action == "nfs.export" && (row.ReadOnly || !slices.Equal(row.Clients, []string{"127.0.0.2/32"})) {
+								t.Fatal(row)
+							}
+						}
+					}
+					expected := 0
+					if action == "nfs.export" {
+						expected = 1
+					}
+					if count != expected {
+						t.Fatal(rows)
+					}
+				})
+			}
+		}
+	}
+}

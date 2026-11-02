@@ -116,7 +116,7 @@ for directory in reversed((root, *root.parents)):
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
             raise SystemExit('Sharing configuration cannot be trusted. Ask an administrator to check its ownership and permissions.')
 if root.exists() and any(path.name not in ('sharing-package-install', 'sharing-activation-v1.json') for path in root.iterdir()):
-    raise SystemExit('Install the compatibility update in System updates before continuing.')
+    raise SystemExit('Previous setup records remain after package removal. Preserve them and ask an administrator to complete recovery before a fresh installation.')
 files = {path: {'exists': False} for path in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf', '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports')}
 for name in (*files, '/var/lib/panasms-agent/sharing-transaction.json', '/var/lib/panasms-agent/sharing-legacy-nfs-transaction.json', '/var/lib/panasms-agent/sharing-restore.json'):
     path = Path(name)

@@ -125,7 +125,8 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 	}
 	rows := []string{}
 	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
-		if line != "" && !strings.HasPrefix(line, target+" ") {
+		fields := strings.Fields(line)
+		if line != "" && (len(fields) == 0 || fields[0] != target) {
 			rows = append(rows, line)
 		}
 	}

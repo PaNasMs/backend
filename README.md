@@ -488,7 +488,13 @@ sudo flock -n /run/lock/panasms-maintenance.lock env PANASMS_MAINTENANCE=1 apt-g
 
 Pending updates, incomplete activation and changed retained files require recovery before
 reinstallation. Removal can unpublish a verified interrupted activation without committing it;
-the installer preserves its activation evidence.
+the installer preserves its activation evidence. A package purge is not proof of a pristine
+installation: installer ownership records, the locked service account and compatibility/activation
+recovery evidence can remain. A fresh installation refuses those records instead of guessing that
+an earlier setup completed. Preserve retained evidence and complete administrator-assisted recovery
+before attempting a fresh installation; neither a direct package purge nor removal of three
+bookkeeping files certifies that sharing recovery state is safe to discard.
+
 
 Supported updater rollback uses a paired snapshot of sharing policy and generated SMB/NFS files.
 It refuses unresolved journals, foreign edits, or changed SMB account state that cannot be restored

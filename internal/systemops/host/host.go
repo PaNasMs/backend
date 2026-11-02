@@ -58,8 +58,7 @@ func reject(msg string) error { return &systemops.Rejected{Message: msg} }
 func Query(ctx context.Context, view, target string) (json.RawMessage, error) {
 	switch view {
 	case "nfs":
-		// nfs export listing stays legacy (GO-07); this Go path is not routed
-		// for it, but guard anyway.
+		// NFS publication is owned by accounts/sharing, not this host dispatcher.
 		return nil, reject("Unknown system query")
 	case "power":
 		return powerQuery(ctx)

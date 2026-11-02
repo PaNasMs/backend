@@ -171,7 +171,7 @@ class PackagingTest(unittest.TestCase):
             ]
             for p in owned:
                 p.write_text("owned")
-            for name in ["jobs.db", "jobs.db-wal", "jobs.db-shm"]:
+            for name in ["jobs.db", "jobs.db-wal", "jobs.db-shm", "sharing.lock"]:
                 p = root / "var/lib/panasms-agent" / name
                 p.write_text("owned")
                 owned.append(p)
@@ -204,6 +204,8 @@ class PackagingTest(unittest.TestCase):
                 "/usr/lib/panasms",
                 "/etc/systemd/system",
                 "/run/panasms-filesystems",
+                "/run/panasms-network",
+                "/run/lock/panasms-oled-config.lock",
             ]:
                 script = script.replace(prefix, str(root) + prefix)
             path = root / "postrm"

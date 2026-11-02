@@ -22,6 +22,29 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case accounts.IsSharing(req.Action):
+		route = "/sharing"
+		raw, err := accounts.SharingRecovery()
+		if err != nil {
+			return nil, err
+		}
+		var state struct {
+			Shares   any
+			Exports  any
+			Recovery bool
+			Drift    bool
+		}
+		if err = json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(req.Action, "nfs.") {
+			add("NFS exports", state.Exports)
+		} else {
+			add("Shared folders", state.Shares)
+		}
+		if state.Recovery || state.Drift {
+			next = "share.recover"
+		}
 	case strings.HasPrefix(req.Action, "homes."):
 		route = "/settings/users"
 		raw, err := accounts.HomesQuery()

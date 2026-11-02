@@ -30,6 +30,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "sharing" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := accounts.SharingCommand(context.Background(), os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "homes" && os.Args[2] == "recover" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

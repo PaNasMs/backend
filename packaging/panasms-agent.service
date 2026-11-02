@@ -10,7 +10,7 @@ EnvironmentFile=/etc/panasms/panasms.env
 ExecStartPre=/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/lib/panasms/panasms-system-helper web-access --recover
 ExecStartPre=-/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/lib/panasms/panasms-system-helper homes recover
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/module_manager.py --recover
-ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing.py --recover
+ExecStartPre=/usr/bin/nsenter --mount=/proc/1/ns/mnt -- /usr/lib/panasms/panasms-system-helper sharing recover
 ExecStart=/usr/lib/panasms/start-agent
 KillMode=mixed
 TimeoutStopSec=30min

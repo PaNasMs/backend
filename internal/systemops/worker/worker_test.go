@@ -119,7 +119,7 @@ func TestOrdinaryQueriesAreOwnerScoped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, view := range []string{"accounts", "homes", "homes-check"} {
+	for _, view := range []string{"accounts", "homes", "homes-check", "sharing", "share-folders", "nfs"} {
 		if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: view}, reporter()); err == nil {
 			t.Fatal("ordinary query allowed", view)
 		}
@@ -149,5 +149,20 @@ func TestRecoveryNeverExecutes(t *testing.T) {
 	}
 	if _, err := d.Handle(systemops.ModeRecover, "admin", request(), reporter()); err != nil || *calls != 0 {
 		t.Fatal(err, *calls)
+	}
+}
+
+func TestSharingMutationsRemainAdministratorOnly(t *testing.T) {
+	d, calls := setup()
+	d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+	for _, action := range []string{"share.save", "share.remove", "share.account", "share.disconnect", "share.recover", "nfs.export", "nfs.export-remove"} {
+		req := request()
+		req.Action = action
+		if _, err := d.Handle(systemops.ModeExecute, "alice", req, reporter()); err == nil {
+			t.Fatal("ordinary mutation allowed", action)
+		}
+	}
+	if *calls != 0 {
+		t.Fatal("unauthorized sharing mutation executed")
 	}
 }

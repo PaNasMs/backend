@@ -11,7 +11,7 @@ STATE = Path('/etc/panasms/sharing.json')
 SMB = Path('/etc/samba/panasms-shares.conf')
 EXPORTS = Path('/etc/exports.d/panasms-shares.exports')
 JOURNAL = Path('/var/lib/panasms-agent/sharing-transaction.json')
-LOCK = Path('/run/panasms-agent/sharing.lock')
+LOCK = Path('/var/lib/panasms-agent/sharing.lock')
 HEADER = '# Managed by PaNasMs. Edit using Shared folders.\n'
 
 
@@ -48,7 +48,12 @@ def config(shares, legacy=False):
 
 def drift(state):
     expected = config(state['shares'])
-    return any(p.exists() and text(p) != v for p, v in zip((SMB, EXPORTS), expected)) or bool(state['shares']) and any(not p.exists() for p in (SMB, EXPORTS))
+    native_smb = expected[0].replace(
+        'root preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check ',
+        'root preexec = /usr/lib/panasms/panasms-system-helper sharing check ',
+    )
+    # Legacy storage planners still inspect managed files until their Go migration.
+    return (SMB.exists() and text(SMB) not in (expected[0], native_smb)) or (EXPORTS.exists() and text(EXPORTS) != expected[1]) or bool(state['shares']) and any(not p.exists() for p in (SMB, EXPORTS))
 
 
 def mountpoint(path):

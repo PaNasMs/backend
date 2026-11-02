@@ -34,10 +34,14 @@ func Password(ctx context.Context, user, current, next string) error {
 }
 
 func SyncSMB(ctx context.Context, user, password string) error {
+	return syncSMB(ctx, user, password, "/usr/lib/panasms/panasms-system-helper")
+}
+
+func syncSMB(ctx context.Context, user, password, helper string) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	raw, _ := json.Marshal(map[string]string{"user": user, "password": password})
-	cmd := exec.CommandContext(ctx, "/usr/bin/python3", "/usr/lib/panasms/management/sharing.py", "--sync")
+	cmd := exec.CommandContext(ctx, helper, "sharing", "sync")
 	cmd.Stdin = bytes.NewReader(raw)
 	if err := cmd.Run(); err != nil {
 		return errors.New("Linux password accepted, but SMB synchronization failed. See Users / Security; sign in again to retry.")

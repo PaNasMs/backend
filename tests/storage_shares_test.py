@@ -34,6 +34,7 @@ class DeleteArrayWithShares(unittest.TestCase):
         self.start(patch.object(sharing, "validate_config"))
         self.reload = self.start(patch.object(sharing, "reload_services"))
         self.start(patch.object(sharing.shutil, "which", return_value="/usr/bin/tool"))
+        self.start(patch.object(storage, "release_managed_shares", side_effect=sharing.remove_shares))
         self.commands = []
         self.start(patch.object(sharing, "command", side_effect=lambda argv, **_: self.commands.append(argv) or ""))
         md = root / "sys/class/block/md9/md"

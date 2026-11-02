@@ -42,11 +42,14 @@ CHECK
  if [ "$1" = remove ]; then systemctl disable panasms-mdns.timer panasms-hostname-recover.service || true; fi
  systemctl stop panasms-core.service panasms-agent.service
  systemctl stop panasms-sharing.timer panasms-sharing.service || true
+ if [ "$1" = upgrade ] && [ -n "${2:-}" ] && dpkg --compare-versions "$2" lt "$(dpkg-query -W '-f=${Version}' panasms-prototype)"; then
+  /usr/lib/panasms/panasms-system-helper sharing prepare-downgrade
+ fi
  if [ "$1" = remove ]; then
   systemctl disable --now panasms-update-check.timer panasms-update-recover.service || true
   systemctl disable panasms-sharing.timer || true
-  python3 /usr/lib/panasms/management/sharing.py --remove
-  python3 /usr/lib/panasms/sharing-install.py --remove
+  /usr/lib/panasms/panasms-system-helper sharing remove
+  /usr/lib/panasms/panasms-system-helper sharing uninstall
   systemctl stop panasms-network-sharing.service || true
   if [ -f /var/lib/panasms-agent/network-sharing/groups.json ]; then
    python3 /usr/lib/panasms/management/network_sharing.py --remove

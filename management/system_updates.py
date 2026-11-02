@@ -425,11 +425,13 @@ def restore(boot=False):
         run(['dpkg','--force-confold','-i',*b['packages']],timeout=900)
     with sharing_compat.locked():
         sharing_compat.begin_restore(guard)
-        for p in (Path('/var/lib/panasms'),Path('/etc/panasms')):
+        sharing_compat.clear_config_directory()
+        for p in (Path('/var/lib/panasms'),):
             require(not p.is_symlink(),'Refusing rollback through a symbolic link')
             if p.exists():shutil.rmtree(p)
         for suffix in ('','-wal','-shm'):Path('/var/lib/panasms-agent/jobs.db'+suffix).unlink(missing_ok=True)
-        run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/'],timeout=180)
+        run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/',
+             '--exclude=etc/panasms/sharing.json','--exclude=./etc/panasms/sharing.json'],timeout=180)
         sharing_compat.restore_pair(guard)
         sharing_compat.finish_restore()
     display=Path('/usr/lib/panasms/panasms-oled')

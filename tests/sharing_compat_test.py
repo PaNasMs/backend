@@ -24,9 +24,10 @@ class Preparation(unittest.TestCase):
         for path in self.files:
             path.write_bytes(b'installed package source')
             path.chmod(0o644)
-        for name, value in (('OWNER', os.getuid()), ('MARKER', self.root / 'marker'),
+        for name, value in (('OWNER', os.getuid()), ('MARKER', self.root / 'marker'), ('INSTALL_MODE', self.root / 'install-mode'),
                             ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal')),
-                            ('ATTESTED', self.files), ('package_version', lambda configuring=False: '1.0')):
+                            ('ATTESTED', self.files), ('PACKAGE_STATE', self.root / 'package-state'),
+                            ('GUARD', self.root / 'restore-guard'), ('package_version', lambda configuring=False: '1.0')):
             guard = patch.object(compat, name, value)
             guard.start()
             self.addCleanup(guard.stop)
@@ -56,17 +57,54 @@ class Preparation(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('preserving its failure', result.stderr)
 
-    def test_preparation_upgrade_does_not_republish_or_activate_sharing(self):
+    def test_preparation_upgrade_and_nonpurge_reinstall_remain_distinct(self):
         script = (Path(__file__).parents[1] / 'packaging/postinst').read_text()
-        begin = script.index('  if [ -z "${2:-}" ]; then\n')
+        begin = script.index('  if [ -z "${2:-}" ]')
         end = script.index('  fi\n', begin) + len('  fi\n')
-        hook = script[begin:end].replace('python3 ', 'echo python3 ')
-        timer = next(line for line in script.splitlines() if 'enable --now panasms-sharing.timer' in line)
-        timer = timer.replace('systemctl ', 'echo systemctl ')
-        for previous in ('1.0', ''):
-            result = subprocess.run(['sh', '-c', hook + '\n' + timer, 'postinst', 'configure', previous],
-                                    capture_output=True, text=True, check=True)
-            self.assertEqual(bool(result.stdout), not bool(previous))
+        hook = script[begin:end]
+        begin = script.index('  if [ -z "${2:-}" ]', end)
+        end = script.index('  fi\n', begin) + len('  fi\n')
+        timer = script[begin:end]
+        marker = self.root / 'install-marker'
+        command = (hook + '\n' + timer).replace('python3 ', 'echo python3 ').replace('systemctl ', 'echo systemctl ')
+        command = command.replace('/var/lib/panasms-installer/sharing-package-install', str(marker))
+        for previous, reinstall in (('1.0', False), ('', False), ('1.0', True)):
+            with self.subTest(previous=previous, reinstall=reinstall):
+                marker.unlink(missing_ok=True)
+                if reinstall:
+                    marker.touch()
+                result = subprocess.run(['sh', '-c', command, 'postinst', 'configure', previous],
+                                        capture_output=True, text=True, check=True)
+                initializes = not previous or reinstall
+                self.assertEqual('sharing-install.py' in result.stdout, initializes)
+                self.assertEqual('systemctl enable --now panasms-sharing.timer' in result.stdout, initializes)
+                self.assertEqual('package-resume' in result.stdout, not initializes)
+
+    def test_direct_package_upgrade_resumes_only_previously_active_timer(self):
+        for active in (True, False):
+            with self.subTest(active=active):
+                with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0 if active else 3)):
+                    compat.package_stop('2.0')
+                with patch.object(compat, 'package_version', return_value='2.0'):
+                    with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': ''}):
+                        with patch.object(compat.subprocess, 'run') as run:
+                            compat.package_resume()
+                self.assertEqual(run.call_args_list, [unittest.mock.call(['systemctl', 'start', 'panasms-sharing.timer'], check=True)] if active else [])
+                self.assertFalse(compat.PACKAGE_STATE.exists())
+
+    def test_package_abort_resumes_source_timer_but_restore_guard_defers_to_updater(self):
+        with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+            compat.package_stop('2.0')
+        compat.GUARD.write_bytes(b'rollback in progress')
+        with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': ''}):
+            with patch.object(compat.subprocess, 'run') as run:
+                compat.package_resume(abort=True)
+                run.assert_not_called()
+            self.assertTrue(compat.PACKAGE_STATE.exists())
+            compat.GUARD.unlink()
+            with patch.object(compat.subprocess, 'run') as run:
+                compat.package_resume(abort=True)
+                run.assert_called_once_with(['systemctl', 'start', 'panasms-sharing.timer'], check=True)
 
     def test_pre_unpack_capability_requires_maintenance_and_previously_configured_files(self):
         for state, maintenance, allowed in (('installed', '', True), ('half-installed', '', False),
@@ -79,6 +117,12 @@ class Preparation(unittest.TestCase):
                         else:
                             with self.assertRaises(Rejected):
                                 self.package_version()
+
+    def test_successful_configure_consumes_reinstall_intent(self):
+        compat.atomic(compat.INSTALL_MODE, b'install\n')
+        compat.configure()
+        self.assertFalse(compat.INSTALL_MODE.exists())
+        self.assertEqual(compat.capabilities()['pairedRestore'], 1)
 
     def test_pending_journals_are_neither_recovered_nor_deleted(self):
         for path in compat.JOURNALS:
@@ -252,6 +296,28 @@ class PairedRollback(unittest.TestCase):
         with self.assertRaises(Rejected):
             compat.begin_restore(retry)
         self.assertEqual(compat.FILES[3].read_bytes(), b'foreign after failure')
+
+    def test_real_tar_restore_never_deletes_or_overwrites_live_sharing_json(self):
+        fake_root = self.root / 'guest'
+        directory = fake_root / 'etc/panasms'
+        directory.mkdir(parents=True)
+        state = directory / 'sharing.json'
+        other = directory / 'other.json'
+        state.write_bytes(b'archive A')
+        other.write_bytes(b'other A')
+        archive = self.root / 'restore.tar'
+        with tarfile.open(archive, 'w') as stream:
+            stream.add(directory, arcname='etc/panasms')
+        state.write_bytes(b'live B')
+        other.write_bytes(b'other B')
+        with patch.object(compat, 'FILES', (state, *compat.FILES[1:])):
+            compat.clear_config_directory()
+        self.assertEqual(state.read_bytes(), b'live B')
+        self.assertFalse(other.exists())
+        subprocess.run(['tar', '-xpf', str(archive), '-C', str(fake_root),
+                        '--exclude=etc/panasms/sharing.json', '--exclude=./etc/panasms/sharing.json'], check=True)
+        self.assertEqual(state.read_bytes(), b'live B')
+        self.assertEqual(other.read_bytes(), b'other A')
 
     def test_foreign_edit_during_archive_restore_is_not_overwritten(self):
         self.candidate()

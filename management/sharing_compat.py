@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -17,6 +18,7 @@ from common import Rejected, require
 SCHEMA = 1
 OWNER = 0
 MARKER = Path('/var/lib/panasms-installer/sharing-compat-v1.json')
+INSTALL_MODE = Path('/var/lib/panasms-installer/sharing-package-install')
 JOURNALS = (Path('/var/lib/panasms-agent/sharing-transaction.json'),
             Path('/var/lib/panasms-agent/sharing-legacy-nfs-transaction.json'))
 ATTESTED = tuple(Path(p) for p in (
@@ -106,6 +108,9 @@ def configure():
     check_install()
     value = {'schema': SCHEMA, 'packageVersion': package_version(configuring=True), 'files': attest()}
     atomic(MARKER, json.dumps(value, sort_keys=True).encode())
+    if INSTALL_MODE.exists() or INSTALL_MODE.is_symlink():
+        require(secure_read(INSTALL_MODE) == b'install\n', 'Invalid sharing install marker')
+        unlink_sync(INSTALL_MODE)
 
 
 def capabilities():
@@ -122,6 +127,7 @@ GUARD = Path('/var/lib/panasms-agent/sharing-restore.json')
 HELPER = '/usr/lib/panasms/panasms-system-helper'
 ACTIVATION = Path('/var/lib/panasms-installer/sharing-activation-v1.json')
 NATIVE = Path('/var/lib/panasms-installer/sharing-native-v1.json')
+PACKAGE_STATE = Path('/var/lib/panasms-installer/sharing-package-state.json')
 
 
 @contextmanager
@@ -254,6 +260,30 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
     return guard
 
 
+def package_stop(target_version):
+    result = subprocess.run(['systemctl', 'is-active', '--quiet', 'panasms-sharing.timer'])
+    require(result.returncode in (0, 3, 4), 'Cannot determine the sharing timer state before replacement')
+    value = {'schema': SCHEMA, 'sourceVersion': package_version(), 'targetVersion': target_version,
+             'timerActive': result.returncode == 0}
+    atomic(PACKAGE_STATE, json.dumps(value, sort_keys=True).encode())
+
+
+def package_resume(abort=False):
+    if not PACKAGE_STATE.exists() and not PACKAGE_STATE.is_symlink():
+        return
+    value = json.loads(secure_read(PACKAGE_STATE))
+    require(value.get('schema') == SCHEMA and type(value.get('timerActive')) is bool,
+            'Invalid sharing package service state')
+    expected = value.get('sourceVersion' if abort else 'targetVersion')
+    if expected != package_version(configuring=True):
+        return
+    if GUARD.exists() or GUARD.is_symlink() or os.environ.get('PANASMS_UPDATE_TRANSACTION'):
+        return
+    if value['timerActive']:
+        subprocess.run(['systemctl', 'start', 'panasms-sharing.timer'], check=True)
+    unlink_sync(PACKAGE_STATE)
+
+
 def prepare_activation(target_version):
     require(os.environ.get('PANASMS_MAINTENANCE') == '1', 'Native preparation requires exclusive maintenance')
     result = subprocess.run(['dpkg', '--validate-version', target_version], capture_output=True, text=True)
@@ -314,6 +344,19 @@ def begin_restore(guard):
                 'Sharing changed after interrupted rollback; current files were preserved')
 
 
+def clear_config_directory():
+    directory = FILES[0].parent
+    require(not directory.is_symlink(), 'Refusing rollback through a symbolic link')
+    if directory.exists():
+        for child in directory.iterdir():
+            if child.name == FILES[0].name:
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+
 def restore_pair(guard):
     expected = converted(guard['witness'])
     current = capture()
@@ -337,23 +380,26 @@ def restore_pair(guard):
     require(capture() == guard['source'], 'Sharing rollback verification failed')
 
 
-def finish_restore():
-    GUARD.unlink()
-    fd = os.open(GUARD.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def unlink_sync(path):
+    path.unlink()
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
     finally:
         os.close(fd)
 
 
+def finish_restore():
+    unlink_sync(GUARD)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation'))
+    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation', 'package-stop', 'package-resume', 'package-abort'))
     parser.add_argument('target_version', nargs='?')
     args = parser.parse_args()
     mode = args.mode
-    if (mode == 'prepare-activation') != (args.target_version is not None):
-        parser.error('Only prepare-activation requires a target package version')
+    if (mode in ('prepare-activation', 'package-stop')) != (args.target_version is not None):
+        parser.error('prepare-activation and package-stop require a target package version')
     require(os.geteuid() == OWNER, 'Sharing compatibility requires root')
     if mode == 'capabilities':
         print(json.dumps(capabilities(), sort_keys=True))
@@ -363,5 +409,9 @@ if __name__ == '__main__':
         resume_check()
     elif mode == 'prepare-activation':
         prepare_activation(args.target_version)
+    elif mode == 'package-stop':
+        package_stop(args.target_version)
+    elif mode in ('package-resume', 'package-abort'):
+        package_resume(abort=mode == 'package-abort')
     else:
         check_install()

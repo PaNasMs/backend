@@ -28,3 +28,34 @@ if [ "${1:-}" = install ] && [ ! -f /var/lib/panasms-installer/generated-files ]
   exit 1
  fi
 fi
+python3 - "${1:-}" <<'MODE'
+import os, sys, tempfile
+from pathlib import Path
+root = Path('/var/lib/panasms-installer')
+if root.is_symlink():
+    raise SystemExit('Refusing sharing package state through a symbolic link')
+root.mkdir(mode=0o750, parents=True, exist_ok=True)
+info = root.stat()
+if info.st_uid != 0 or info.st_mode & 0o022:
+    raise SystemExit('Untrusted sharing package state directory')
+marker = root / 'sharing-package-install'
+if marker.is_symlink():
+    raise SystemExit('Refusing sharing install marker through a symbolic link')
+if sys.argv[1] == 'install':
+    with tempfile.NamedTemporaryFile(dir=root, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(b'install\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary.replace(marker)
+        finally:
+            temporary.unlink(missing_ok=True)
+else:
+    marker.unlink(missing_ok=True)
+fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+MODE

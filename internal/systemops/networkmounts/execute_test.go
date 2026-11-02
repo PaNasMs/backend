@@ -249,3 +249,140 @@ func TestBusyBlockerNamesServiceAndRecoveryIsReadOnly(t *testing.T) {
 		t.Fatal("read-only recovery created state", err)
 	}
 }
+
+func TestCrashAfterStageMkdirRemainsRecoverable(t *testing.T) {
+	s, p, _ := executionFixture(t)
+	real := s.write
+	s.write = func(path, text string, mode os.FileMode) error {
+		if filepath.Ext(path) == ".json" && stringContains(text, `"stage":true`) {
+			panic("power loss before stage ownership journal save")
+		}
+		return real(path, text, mode)
+	}
+	fp := plannedFingerprint(t, s, "smb.mount", p)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("no injected interruption")
+			}
+		}()
+		s.execute(context.Background(), "smb.mount", p, "member", fp, nil)
+	}()
+	s.write = real
+	u := map[string]any{"target": param(p, "point")}
+	fp = plannedFingerprint(t, s, "smb.unmount", u)
+	if _, err := s.execute(context.Background(), "smb.unmount", u, "member", fp, nil); err != nil {
+		t.Fatal(err)
+	}
+	fp = plannedFingerprint(t, s, "smb.mount", p)
+	if _, err := s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err != nil {
+		t.Fatalf("explicit recovery left next mount blocked: %v", err)
+	}
+}
+func stringContains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+func TestUnmountRetryReloadsRemovedFstab(t *testing.T) {
+	s, p, fake := executionFixture(t)
+	fp := plannedFingerprint(t, s, "smb.mount", p)
+	if _, err := s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err != nil {
+		t.Fatal(err)
+	}
+	run := s.run
+	failed := false
+	s.run = func(ctx context.Context, args []string, o systemops.CommandOptions) ([]byte, error) {
+		if args[0] == "systemctl" && !failed {
+			failed = true
+			return nil, errors.New("daemon reload unavailable")
+		}
+		return run(ctx, args, o)
+	}
+	u := map[string]any{"target": param(p, "point")}
+	fp = plannedFingerprint(t, s, "smb.unmount", u)
+	if _, err := s.execute(context.Background(), "smb.unmount", u, "member", fp, nil); err == nil {
+		t.Fatal("failure not injected")
+	}
+	fake.commands = nil
+	fp = plannedFingerprint(t, s, "smb.unmount", u)
+	if _, err := s.execute(context.Background(), "smb.unmount", u, "member", fp, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range fake.commands {
+		if args[0] == "systemctl" {
+			return
+		}
+	}
+	t.Fatal("retry deleted recovery state without retrying failed daemon-reload")
+}
+
+func TestStageIntentInterruptionAndForeignStagePreservation(t *testing.T) {
+	for _, boundary := range []string{"intent", "created", "foreign"} {
+		t.Run(boundary, func(t *testing.T) {
+			s, p, _ := executionFixture(t)
+			point := param(p, "point")
+			stage := filepath.Join(s.root, Key(point)+".stage")
+			original := s.write
+			s.write = func(path, text string, mode os.FileMode) error {
+				err := original(path, text, mode)
+				if err == nil && strings.HasSuffix(path, ".json") && strings.Contains(text, `"stage":true`) {
+					if boundary == "created" {
+						if err := os.Mkdir(stage, 0700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					panic("fixture after durable creation intent")
+				}
+				return err
+			}
+			if boundary == "foreign" {
+				if err := os.MkdirAll(stage, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stage, "keep"), []byte("foreign"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				s.write = original
+			}
+			fp := plannedFingerprint(t, s, "smb.mount", p)
+			if boundary == "foreign" {
+				if _, err := s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err == nil {
+					t.Fatal("foreign stage accepted")
+				}
+			} else {
+				func() {
+					defer func() {
+						if recover() == nil {
+							t.Fatal("no interruption")
+						}
+					}()
+					s.execute(context.Background(), "smb.mount", p, "member", fp, nil)
+				}()
+			}
+			s.write = original
+			u := map[string]any{"target": point}
+			fp = plannedFingerprint(t, s, "smb.unmount", u)
+			if _, err := s.execute(context.Background(), "smb.unmount", u, "member", fp, nil); err != nil {
+				t.Fatal(err)
+			}
+			if boundary == "foreign" {
+				if raw, err := os.ReadFile(filepath.Join(stage, "keep")); err != nil || string(raw) != "foreign" {
+					t.Fatal("foreign stage changed", err)
+				}
+			} else {
+				if _, err := os.Lstat(stage); !os.IsNotExist(err) {
+					t.Fatal("stage remains", err)
+				}
+				fp = plannedFingerprint(t, s, "smb.mount", p)
+				if _, err := s.execute(context.Background(), "smb.mount", p, "member", fp, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

@@ -50,12 +50,23 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		return nil, s.abortMount(ctx, state, err, r)
 	}
 	stage := filepath.Join(s.root, Key(plan.point)+".stage")
-	if err = os.Mkdir(stage, 0700); err != nil {
+	if _, err = os.Lstat(stage); err == nil {
+		return nil, reject("Network mount recovery is required; preserve its configuration and credentials")
+	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	state.Stage = true
 	if err = s.save(state); err != nil {
-		return nil, s.abortMount(ctx, state, err, r)
+		return nil, err
+	}
+	if err = os.Mkdir(stage, 0700); err != nil {
+		if os.IsExist(err) {
+			state.Stage = false
+			if saveErr := s.save(state); saveErr != nil {
+				return nil, saveErr
+			}
+		}
+		return nil, err
 	}
 	opts := "rw,nosuid,nodev,_netdev"
 	if p["readOnly"] == true {
@@ -164,6 +175,9 @@ func (s *service) cleanupMount(ctx context.Context, state *transaction, expected
 	}
 	stage := filepath.Join(s.root, Key(state.Point)+".stage")
 	for _, m := range mounts {
+		if state.Stage && m.Target != stage && within(m.Target, stage) {
+			return reject("Network mount recovery state is invalid")
+		}
 		ownedStage := state.Stage && m.Target == stage && m.Source == state.Source && compatibleFS(m.FSType, state.FSType)
 		ownedAttached := state.MountID != 0 && m.ID == state.MountID
 		if m.Target == stage && !ownedStage {
@@ -176,6 +190,11 @@ func (s *service) cleanupMount(ctx context.Context, state *transaction, expected
 			if err = s.unmount(m.Target, m); err != nil {
 				return err
 			}
+		}
+	}
+	if state.Stage {
+		if err = secureDirectory(stage, s.owner, false); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
 	if err = s.removeConfigured(ctx, state, expectedConf, r); err != nil {
@@ -205,7 +224,8 @@ func (s *service) removeConfigured(ctx context.Context, state *transaction, expe
 		return err
 	}
 	if row == nil {
-		return nil
+		_, err = s.run(ctx, []string{"systemctl", "daemon-reload"}, systemops.CommandOptions{Operation: true, Reporter: r})
+		return err
 	}
 	if row[0] != state.Source || !compatibleFS(row[2], state.FSType) {
 		return reject("Network mount configuration changed; review recovery before continuing")

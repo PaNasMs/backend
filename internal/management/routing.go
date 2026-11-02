@@ -44,9 +44,9 @@ var queryViews = map[string]impl{
 	"account-sessions":  goNative,
 	"sharing":           goNative,
 	"share-folders":     goNative,
-	"home-folders":      legacy,
-	"data-folders":      legacy,
-	"mount-folders":     legacy,
+	"home-folders":      goNative,
+	"data-folders":      goNative,
+	"mount-folders":     goNative,
 	"network":           goNative,
 	"network-access":    goNative,
 	"homes-check":       goNative,
@@ -82,7 +82,7 @@ var actionModules = map[string]impl{
 	"filesystem.snapshot-create":  legacy,
 	"filesystem.snapshot-delete":  legacy,
 	"filesystem.snapshot-restore": legacy,
-	"folder.permissions":          legacy,
+	"folder.permissions":          goNative,
 	"group.create":                goNative,
 	"group.delete":                goNative,
 	"group.edit":                  goNative,
@@ -127,8 +127,8 @@ var actionModules = map[string]impl{
 	"network.wifi.scan":         goNative,
 	"nfs.export":                goNative,
 	"nfs.export-remove":         goNative,
-	"nfs.mount":                 legacy,
-	"nfs.unmount":               legacy,
+	"nfs.mount":                 goNative,
+	"nfs.unmount":               goNative,
 	"partition.create":          legacy,
 	"partition.delete":          legacy,
 	"partition.resize":          legacy,
@@ -157,8 +157,8 @@ var actionModules = map[string]impl{
 	"smart.schedule":            legacy,
 	"smart.short":               legacy,
 	"smart.unschedule":          legacy,
-	"smb.mount":                 legacy,
-	"smb.unmount":               legacy,
+	"smb.mount":                 goNative,
+	"smb.unmount":               goNative,
 	"system.poweroff":           goNative,
 	"system.reboot":             goNative,
 	"system.update.check":       legacy,
@@ -243,6 +243,9 @@ func RouteInventory() Inventory {
 // they select the native or Python-only dispatcher. Only an empty view is rejected outright here. Ordinary-user access is enforced
 // separately in serve.
 func routeQuery(view string) (impl, error) {
+	if view == "personal-folders" {
+		return goNative, nil
+	}
 	if dst, ok := queryViews[view]; ok {
 		return dst, nil
 	}

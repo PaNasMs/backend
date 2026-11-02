@@ -141,3 +141,16 @@ func isolateModuleRegistry(t *testing.T) {
 	modules.Root = t.TempDir()
 	t.Cleanup(func() { modules.Root = previous })
 }
+
+func TestFolderQueriesNeverFallbackToPython(t *testing.T) {
+	for _, view := range []string{"home-folders", "data-folders", "mount-folders", "personal-folders"} {
+		hit := false
+		r := route(func(context.Context, string, string, any) (json.RawMessage, error) {
+			return nil, errors.New("native failure")
+		}, recordingRunner(&hit))
+		_, err := r(context.Background(), "query", "member", map[string]string{"view": view})
+		if err == nil || hit {
+			t.Fatal(view, err, hit)
+		}
+	}
+}

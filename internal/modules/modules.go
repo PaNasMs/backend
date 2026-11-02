@@ -15,6 +15,10 @@ var Root = "/var/lib/panasms-modules"
 var ID = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 
 type Manifest struct {
+	API          int               `json:"api"`
+	Operations   string            `json:"operations"`
+	Actions      []string          `json:"actions"`
+	Queries      []string          `json:"queries"`
 	Installation string            `json:"installation"`
 	ID           string            `json:"id"`
 	Title        string            `json:"title"`

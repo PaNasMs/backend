@@ -104,11 +104,11 @@ def dispatch(mode, user, request):
     require(not system_updates.changing() or action == "system.update.rollback", "A system update is in progress; wait for the panel to reconnect")
     params = request.get("params")
     require(isinstance(params, dict), 'Parameters must be an object')
-    extensions = module_manager.load_operations("actions", action)
-    module = next(
-        (m for m in (storage, storage_snapshots, storage_luks, storage_reshape, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources, *extensions) if action in m.ACTIONS),
-        None,
-    )
+    builtins = (storage, storage_snapshots, storage_luks, storage_reshape, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources)
+    module = next((m for m in builtins if action in m.ACTIONS), None)
+    if module is None:
+        extensions = module_manager.load_operations("actions", action)
+        module = next((m for m in extensions if action in m.ACTIONS), None)
     require(module, 'Unknown operation')
     if mode == "execute":
         job_control.capability(True)

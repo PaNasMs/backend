@@ -61,8 +61,13 @@ def save_registry(data):
     atomic(REGISTRY, json.dumps(data, ensure_ascii=False), 0o644)
 
 
-def manifest(m):
+CORE_MODULE_IDS = frozenset(['account-details', 'account-sessions', 'accounts', 'core', 'data-folders', 'disk', 'file', 'filesystem', 'folder', 'group', 'history', 'home-folders', 'homes', 'homes-check', 'hostname', 'job', 'jobs', 'journal', 'luks', 'module', 'module-catalog', 'module-sources', 'modules', 'mount', 'mount-folders', 'network', 'network-access', 'nfs', 'partition', 'personal-folders', 'power', 'raid', 'raid-candidates', 'service', 'services', 'settings', 'share', 'share-folders', 'sharing', 'smart', 'smb', 'storage', 'storage-luks', 'storage-options', 'storage-snapshots', 'system', 'system-updates', 'updates', 'user', 'users', 'web-access'])
+
+
+def manifest(m, install=True):
     identifier(m.get("id"))
+    if install:
+        require(m["id"] not in CORE_MODULE_IDS, "The identifier belongs to the core")
     version(m.get("version"))
     require(
         m.get("api") == 1 and satisfies(CORE, m.get("core")),
@@ -136,6 +141,8 @@ def manifest(m):
                 isinstance(value, str) and (value == prefix or value.startswith(prefix + ".")),
                 'Handlers must use the module prefix',
             )
+        if install:
+            require(len(m.get(kind, [])) == len(set(m.get(kind, []))), "Duplicate module handler")
     require("ui/index.js" in m["files"], 'Module UI is missing')
     require(
         not m.get("service") or m["service"] in m["files"], 'Service executable is missing'
@@ -403,9 +410,9 @@ def plan(action, p, user):
             require(not blockers, 'Dependent modules: ' + ", ".join(blockers))
             require_idle(target, installed)
         if action == "module.enable":
-            manifest(m)
+            manifest(m, install=False)
             order = resolve(target, {}, installed)
-            items = [manifest(installed[mid]) for mid in order]
+            items = [manifest(installed[mid], install=False) for mid in order]
             packages, changes = package_plan(items)
         details = [
             m["title"],
@@ -534,6 +541,7 @@ def remember_widgets(installed):
 def execute(action, p, user):
     ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
     with (ROOT / ".lock").open("w") as lock:
+        os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         recover()
         if action == 'module.recover':
@@ -555,8 +563,8 @@ def execute(action, p, user):
                 requested = identifier(p["target"])
             order = resolve(requested, available, installed)
             manifests = [available.get(mid) or installed[mid] for mid in order]
-            for item in manifests:
-                manifest(item)
+            for mid, item in zip(order, manifests):
+                manifest(item, install=mid in available)
             packages, _ = package_plan(manifests)
             if packages:
                 command(["apt-get", "-y", "--no-remove", "install", *packages], timeout=1800)
@@ -637,35 +645,6 @@ def execute(action, p, user):
         }
 
 
-class NativeOperations:
-    def __init__(self, executable, actions):
-        self.executable = executable
-        self.ACTIONS = actions
-
-    def invoke(self, mode, user, body):
-        control = os.environ.get("PANASMS_CONTROL_FD")
-        result = subprocess.run(
-            [str(self.executable), "operations", mode, user],
-            input=json.dumps(body), text=True, stdout=subprocess.PIPE,
-            pass_fds=(int(control),) if control is not None else (),
-        )
-        require(result.returncode == 0, "Native module worker failed")
-        value = json.loads(result.stdout)
-        if value.get("cancelled"):
-            import job_control
-            raise job_control.Cancelled()
-        require(not value.get("error"), value.get("error", "Native operation failed"))
-        return value
-
-    def query(self, user, target):
-        return self.invoke("query", user, {"target": target})
-
-    def plan(self, action, params, user):
-        return self.invoke("plan", user, {"action": action, "params": params})
-
-    def execute(self, action, params, user):
-        return self.invoke("execute", user, {"action": action, "params": params})
-
 
 def load_operations(kind, name):
     installed = registry()
@@ -678,8 +657,7 @@ def load_operations(kind, name):
         ):
             continue
         if m.get("operations") == "bin/server" and "bin/server" in m.get("files", {}):
-            result.append(NativeOperations(ROOT / mid / "bin/server", m.get("actions", [])))
-            continue
+            raise Rejected("Native module operations are managed by the native handler")
         import importlib.util
 
         path = ROOT / mid / "backend/operations.py"
@@ -719,6 +697,7 @@ if __name__ == "__main__":
     ROOT.mkdir(parents=True, exist_ok=True)
     ROOT.chmod(0o755)
     with (ROOT / ".lock").open("w") as lock:
+        os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         if sys.argv[1] == "--resume":
             failed = resume()

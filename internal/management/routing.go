@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+
+	"panasms.local/backend/internal/modules"
 )
 
 // Routing is the single, explicit decision table for where a management
 // operation runs. Every management query view and mutation action must appear
 // here exactly once. There is deliberately no runtime "try Go, then fall back
 // to Python" behavior (plan §3.3): an operation is routed to exactly one
-// implementation. Unknown non-empty views/actions go to the legacy dispatcher
-// for module-extension lookup and authorization, never to a shell RPC.
+// implementation. Native extensions resolve from the installed registry.
+// Python-only extensions retain explicit legacy routing, without retry after
+// native failure.
 //
 // The map value selects exactly one worker. The contract test asserts it stays
 // in sync with the OpenAPI ManagementViews and the Python dispatcher.
@@ -68,7 +71,7 @@ var queryViews = map[string]impl{
 // actionModules mirrors main.py's ACTIONS ownership: each mutation action is
 // owned by exactly one module, and every action routes to an implementation.
 // Module-contributed (extension) actions are not listed here; they are resolved
-// dynamically and always run legacy until GO-12/GO-14 move the module protocol.
+// dynamically from installed module registrations.
 var actionModules = map[string]impl{
 	"disk.eject":                  legacy,
 	"disk.prepare":                legacy,
@@ -237,8 +240,7 @@ func RouteInventory() Inventory {
 // routeQuery returns the implementation for a query view. Enumerated views come
 // from the table; other non-empty views may be served by an installed module's
 // query extension (main.py load_operations("queries", view), e.g. "files"), so
-// they route to the legacy dispatcher, which authorizes or rejects them. Only an
-// empty view is rejected outright here. Ordinary-user access is enforced
+// they select the native or Python-only dispatcher. Only an empty view is rejected outright here. Ordinary-user access is enforced
 // separately in serve.
 func routeQuery(view string) (impl, error) {
 	if dst, ok := queryViews[view]; ok {
@@ -247,7 +249,7 @@ func routeQuery(view string) (impl, error) {
 	if view == "" {
 		return legacy, ErrUnknownView
 	}
-	return legacy, nil
+	return moduleDestination("queries", view)
 }
 
 // runner is the dispatch seam the Manager calls. router wraps a legacy runner
@@ -290,9 +292,10 @@ func destination(mode string, body any) (impl, error) {
 		if dst, ok := actionModules[action]; ok {
 			return dst, nil
 		}
-		// Unlisted actions may be module extensions; the legacy dispatcher
-		// resolves and authorizes them (or rejects unknowns) exactly as before.
-		return legacy, nil
+		if mode == "recover" {
+			return goNative, nil
+		}
+		return moduleDestination("actions", action)
 
 	}
 	return legacy, errors.New("Unknown operation mode")
@@ -313,4 +316,27 @@ func bodyString(body any, field string) string {
 		return v[field]
 	}
 	return ""
+}
+
+func reservedModuleRoute(kind, name string) bool {
+	if kind == "actions" {
+		_, ok := actionModules[name]
+		return ok
+	}
+	_, ok := queryViews[name]
+	return ok || name == "personal-folders" || name == "job" || name == "jobs"
+}
+
+func moduleDestination(kind, name string) (impl, error) {
+	m, err := modules.Operation(kind, name, reservedModuleRoute)
+	if err != nil {
+		return legacy, err
+	}
+	if m != nil && m.ID != "files" && kind == "actions" && memberModuleActions[name] {
+		return legacy, errors.New("Module registration uses reserved Files actions")
+	}
+	if m != nil && m.Operations != "" {
+		return goNative, nil
+	}
+	return legacy, nil
 }

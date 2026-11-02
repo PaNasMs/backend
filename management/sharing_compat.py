@@ -128,6 +128,7 @@ HELPER = '/usr/lib/panasms/panasms-system-helper'
 ACTIVATION = Path('/var/lib/panasms-installer/sharing-activation-v1.json')
 NATIVE = Path('/var/lib/panasms-installer/sharing-native-v1.json')
 PACKAGE_STATE = Path('/var/lib/panasms-installer/sharing-package-state.json')
+UPDATE_ROOT = Path('/var/lib/panasms-updates')
 
 
 @contextmanager
@@ -260,19 +261,45 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
     return guard
 
 
+def rollback_timer_state(source_version, target_version):
+    guard = json.loads(secure_read(GUARD))
+    backup = json.loads(secure_read(UPDATE_ROOT / 'backup.json'))
+    state = json.loads(secure_read(UPDATE_ROOT / 'state.json'))
+    require(guard.get('schema') == SCHEMA and guard.get('phase') == 'prepared'
+            and guard.get('transaction') == os.environ.get('PANASMS_UPDATE_TRANSACTION') == state.get('id')
+            and state.get('phase') == 'rolling-back' and backup.get('complete') is True
+            and backup.get('version') == target_version and backup.get('toVersion') == source_version
+            and backup.get('sharingPairHash') == guard.get('sourceHash'),
+            'The reverse package transition is not bound to the active rollback')
+    require(guard.get('source') == load_pair(Path(backup['folder']), backup['sharingPairHash']),
+            'The reverse package transition has mismatched sharing evidence')
+    validate_entries(guard['witness'])
+    require(isinstance(guard.get('resumeUnits'), list) and all(isinstance(unit, str) for unit in guard['resumeUnits']),
+            'Invalid rollback service state')
+    with locked():
+        require(capture() in (guard['witness'], converted(guard['witness'])),
+                'Sharing changed before reverse package transition')
+    return 'panasms-sharing.timer' in guard['resumeUnits']
+
+
 def package_stop(target_version):
     source_version = package_version()
+    timer_active = None
     if PACKAGE_STATE.exists() or PACKAGE_STATE.is_symlink():
         previous = json.loads(secure_read(PACKAGE_STATE))
-        require(previous.get('schema') == SCHEMA and type(previous.get('timerActive')) is bool
-                and previous.get('sourceVersion') == source_version
-                and previous.get('targetVersion') == target_version,
+        require(previous.get('schema') == SCHEMA and type(previous.get('timerActive')) is bool,
+                'Invalid sharing package service state')
+        if previous.get('sourceVersion') == source_version and previous.get('targetVersion') == target_version:
+            return
+        require(previous.get('sourceVersion') == target_version and previous.get('targetVersion') == source_version,
                 'Another sharing package transition requires recovery')
-        return
-    result = subprocess.run(['systemctl', 'is-active', '--quiet', 'panasms-sharing.timer'])
-    require(result.returncode in (0, 3, 4), 'Cannot determine the sharing timer state before replacement')
+        timer_active = rollback_timer_state(source_version, target_version)
+    if timer_active is None:
+        result = subprocess.run(['systemctl', 'is-active', '--quiet', 'panasms-sharing.timer'])
+        require(result.returncode in (0, 3, 4), 'Cannot determine the sharing timer state before replacement')
+        timer_active = result.returncode == 0
     value = {'schema': SCHEMA, 'sourceVersion': source_version, 'targetVersion': target_version,
-             'timerActive': result.returncode == 0}
+             'timerActive': timer_active}
     atomic(PACKAGE_STATE, json.dumps(value, sort_keys=True).encode())
 
 

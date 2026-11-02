@@ -181,6 +181,7 @@ class PairedRollback(unittest.TestCase):
                             ('LOCKS', (self.root / 'lock', self.root / 'old-lock')),
                             ('GUARD', self.root / 'restore-guard'),
                             ('ACTIVATION', self.root / 'activation'), ('NATIVE', self.root / 'native'),
+                            ('PACKAGE_STATE', self.root / 'package-state'), ('UPDATE_ROOT', self.root / 'updates'),
                             ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal'))):
             guard = patch.object(compat, name, value)
             guard.start()
@@ -210,6 +211,49 @@ class PairedRollback(unittest.TestCase):
         reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
         with patch.object(compat.subprocess, 'run', return_value=reply):
             return compat.prepare_restore(self.source, self.source_hash, 'transaction')
+
+    def test_failed_target_configuration_allows_only_proven_reverse_transition(self):
+        self.candidate()
+        guard = self.prepare()
+        guard['resumeUnits'] = ['panasms-sharing.timer']
+        compat.atomic(compat.GUARD, json.dumps(guard).encode())
+        backup = {'complete': True, 'version': '1.0', 'toVersion': '2.0',
+                  'sharingPairHash': self.source_hash, 'folder': str(self.folder)}
+        compat.atomic(compat.UPDATE_ROOT / 'backup.json', json.dumps(backup).encode())
+        compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'id': 'transaction', 'phase': 'rolling-back'}).encode())
+        original = {'schema': 1, 'sourceVersion': '1.0', 'targetVersion': '2.0', 'timerActive': True}
+        compat.atomic(compat.PACKAGE_STATE, json.dumps(original).encode())
+        with patch.object(compat, 'package_version', return_value='2.0'):
+            with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'wrong'}):
+                with self.assertRaises(Rejected):
+                    compat.package_stop('1.0')
+            self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()), original)
+            with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'transaction'}):
+                for changes in ({'version': 'other'}, {'toVersion': 'other'}, {'sharingPairHash': 'wrong'}, {'complete': False}):
+                    with self.subTest(changes=changes):
+                        compat.atomic(compat.UPDATE_ROOT / 'backup.json', json.dumps({**backup, **changes}).encode())
+                        with self.assertRaises(Rejected):
+                            compat.package_stop('1.0')
+                        self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()), original)
+                compat.atomic(compat.UPDATE_ROOT / 'backup.json', json.dumps(backup).encode())
+                compat.GUARD.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    compat.package_stop('1.0')
+                self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()), original)
+                compat.atomic(compat.GUARD, json.dumps(guard).encode())
+                with patch.object(compat.subprocess, 'run') as run:
+                    compat.package_stop('1.0')
+                    run.assert_not_called()
+        self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()),
+                         {'schema': 1, 'sourceVersion': '2.0', 'targetVersion': '1.0', 'timerActive': True})
+        self.assertEqual(json.loads(compat.GUARD.read_text())['resumeUnits'], ['panasms-sharing.timer'])
+        compat.atomic(compat.PACKAGE_STATE, json.dumps(original).encode())
+        compat.FILES[3].write_bytes(b'foreign after failed configure')
+        with patch.object(compat, 'package_version', return_value='2.0'):
+            with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'transaction'}):
+                with self.assertRaises(Rejected):
+                    compat.package_stop('1.0')
+        self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()), original)
 
     def test_activation_ticket_attests_old_source_without_mutating_publications(self):
         before = compat.capture()

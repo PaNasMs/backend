@@ -1,0 +1,249 @@
+import json
+import os
+from pathlib import Path
+import sys
+import subprocess
+import tempfile
+import tarfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).parents[1] / 'management'))
+import sharing_compat as compat
+from common import Rejected
+
+
+class Preparation(unittest.TestCase):
+    def setUp(self):
+        self.package_version = compat.package_version
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.files = (self.root / 'updater', self.root / 'compat', self.root / 'prerm')
+        for path in self.files:
+            path.write_bytes(b'installed package source')
+            path.chmod(0o644)
+        for name, value in (('OWNER', os.getuid()), ('MARKER', self.root / 'marker'),
+                            ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal')),
+                            ('ATTESTED', self.files), ('package_version', lambda configuring=False: '1.0')):
+            guard = patch.object(compat, name, value)
+            guard.start()
+            self.addCleanup(guard.stop)
+
+    def test_capability_requires_configured_version_and_exact_installed_code(self):
+        with self.assertRaises(FileNotFoundError):
+            compat.capabilities()
+        compat.configure()
+        self.assertEqual(compat.capabilities(), {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1})
+        self.files[0].write_bytes(b'changed updater')
+        with self.assertRaises(Rejected):
+            compat.capabilities()
+        compat.configure()
+        with patch.object(compat, 'package_version', return_value='2.0'):
+            with self.assertRaises(Rejected):
+                compat.capabilities()
+
+    def test_protocol_guard_precedes_vendor_pre_start_export_reload(self):
+        dropin = (Path(__file__).parents[1] / 'packaging/panasms-sharing-restore.conf').read_text()
+        self.assertIn('ExecCondition=/usr/bin/python3 /usr/lib/panasms/management/sharing_compat.py resume-check', dropin)
+        self.assertNotIn('ExecStartPre=', dropin)
+
+    def test_failed_upgrade_target_never_overrides_installed_prerm_failure(self):
+        script = Path(__file__).parents[1] / 'packaging/prerm'
+        result = subprocess.run(['sh', str(script), 'failed-upgrade', '1.0', '2.0'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('preserving its failure', result.stderr)
+
+    def test_preparation_upgrade_does_not_republish_or_activate_sharing(self):
+        script = (Path(__file__).parents[1] / 'packaging/postinst').read_text()
+        begin = script.index('  if [ -z "${2:-}" ]; then\n')
+        end = script.index('  fi\n', begin) + len('  fi\n')
+        hook = script[begin:end].replace('python3 ', 'echo python3 ')
+        timer = next(line for line in script.splitlines() if 'enable --now panasms-sharing.timer' in line)
+        timer = timer.replace('systemctl ', 'echo systemctl ')
+        for previous in ('1.0', ''):
+            result = subprocess.run(['sh', '-c', hook + '\n' + timer, 'postinst', 'configure', previous],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(bool(result.stdout), not bool(previous))
+
+    def test_pre_unpack_capability_requires_maintenance_and_previously_configured_files(self):
+        for state, maintenance, allowed in (('installed', '', True), ('half-installed', '', False),
+                                            ('half-installed', '1', True), ('unpacked', '1', False)):
+            with self.subTest(state=state, maintenance=maintenance):
+                with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(stdout=state + ' 1.0')):
+                    with patch.dict(os.environ, {'PANASMS_MAINTENANCE': maintenance}):
+                        if allowed:
+                            self.assertEqual(self.package_version(), '1.0')
+                        else:
+                            with self.assertRaises(Rejected):
+                                self.package_version()
+
+    def test_pending_journals_are_neither_recovered_nor_deleted(self):
+        for path in compat.JOURNALS:
+            path.write_bytes(b'pending before upgrade')
+            with self.assertRaises(Rejected):
+                compat.configure()
+            self.assertEqual(path.read_bytes(), b'pending before upgrade')
+            self.assertFalse(compat.MARKER.exists())
+            path.unlink()
+
+    def test_untrusted_marker_and_attested_paths_rejected(self):
+        compat.configure()
+        compat.MARKER.chmod(0o666)
+        with self.assertRaises(Rejected):
+            compat.capabilities()
+        compat.MARKER.chmod(0o600)
+        alias = self.root / 'alias'
+        os.link(compat.MARKER, alias)
+        with self.assertRaises(Rejected):
+            compat.capabilities()
+        alias.unlink()
+        compat.MARKER.unlink()
+        compat.MARKER.symlink_to(self.files[0])
+        with self.assertRaises(OSError):
+            compat.capabilities()
+        with self.assertRaises(Rejected):
+            compat.configure()
+        self.assertEqual(self.files[0].read_bytes(), b'installed package source')
+
+
+class PairedRollback(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        paths = tuple(self.root / name for name in ('state', 'smb', 'managed-nfs', 'legacy-nfs'))
+        for name, value in (('OWNER', os.getuid()), ('FILES', paths),
+                            ('LOCKS', (self.root / 'lock', self.root / 'old-lock')),
+                            ('GUARD', self.root / 'restore-guard'),
+                            ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal'))):
+            guard = patch.object(compat, name, value)
+            guard.start()
+            self.addCleanup(guard.stop)
+        paths[0].write_bytes(b'{"shares":[],"accounts":{}}')
+        paths[0].chmod(0o600)
+        paths[1].write_bytes(b'original SMB policy')
+        paths[1].chmod(0o640)
+        paths[2].write_bytes(b'')
+        paths[2].chmod(0o644)
+        self.source = compat.capture()
+        self.folder = self.root / 'backup'
+        self.folder.mkdir()
+        with tarfile.open(self.folder / 'data.tar', 'w') as archive:
+            archive.add(paths[0], arcname=str(paths[0]).lstrip('/'))
+        (self.folder / 'data.tar').chmod(0o600)
+        self.source_hash = compat.save_pair(self.folder, self.source)
+
+    def candidate(self):
+        for path in compat.FILES:
+            path.write_bytes(b'new policy ' + path.name.encode())
+            path.chmod(0o600)
+        return compat.capture()
+
+    def prepare(self):
+        current = compat.capture()
+        reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
+        with patch.object(compat.subprocess, 'run', return_value=reply):
+            return compat.prepare_restore(self.source, self.source_hash, 'transaction')
+
+    def test_real_archive_binding_and_exact_absence_empty_file_mode_restore(self):
+        self.assertEqual(compat.load_pair(self.folder, self.source_hash), self.source)
+        self.candidate()
+        guard = self.prepare()
+        with self.assertRaises(Rejected):
+            compat.resume_check()
+        with compat.locked():
+            compat.begin_restore(guard)
+            compat.restore_pair(guard)
+            compat.finish_restore()
+        self.assertEqual(compat.capture(), self.source)
+        self.assertFalse(compat.FILES[3].exists())
+        self.assertTrue(compat.FILES[2].exists())
+        self.assertEqual(compat.FILES[2].read_bytes(), b'')
+        self.assertEqual(compat.FILES[1].stat().st_mode & 0o777, 0o640)
+        compat.resume_check()
+
+    def test_refuses_legacy_unverified_changes_and_pending_journal(self):
+        self.candidate()
+        with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
+            with self.assertRaises(Rejected):
+                compat.prepare_restore(self.source, self.source_hash, 'transaction')
+        self.assertFalse(compat.GUARD.exists())
+        compat.JOURNALS[0].write_bytes(b'native journal with legacy NFS snapshot')
+        with self.assertRaises(Rejected):
+            self.prepare()
+        self.assertEqual(compat.JOURNALS[0].read_bytes(), b'native journal with legacy NFS snapshot')
+
+    def test_foreign_edit_after_check_or_during_package_install_is_preserved(self):
+        self.candidate()
+        current = compat.capture()
+        def changed(*args, **kwargs):
+            compat.FILES[3].write_bytes(b'foreign edit')
+            return SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
+        with patch.object(compat.subprocess, 'run', side_effect=changed):
+            with self.assertRaises(Rejected):
+                compat.prepare_restore(self.source, self.source_hash, 'transaction')
+        self.assertFalse(compat.GUARD.exists())
+        guard = self.prepare()
+        compat.FILES[3].write_bytes(b'later foreign edit')
+        with self.assertRaises(Rejected):
+            compat.begin_restore(guard)
+        self.assertEqual(compat.FILES[3].read_bytes(), b'later foreign edit')
+        self.assertTrue(compat.GUARD.exists())
+
+    def test_interrupted_restore_retries_only_expected_or_restored_files(self):
+        self.candidate()
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        original = compat.atomic
+        def fail(path, data, **kwargs):
+            if path == compat.FILES[1]:
+                raise OSError('injected write failure')
+            return original(path, data, **kwargs)
+        with patch.object(compat, 'atomic', side_effect=fail):
+            with self.assertRaises(OSError):
+                compat.restore_pair(guard)
+        self.assertTrue(compat.GUARD.exists())
+        retry = compat.prepare_restore(self.source, self.source_hash, 'transaction')
+        compat.begin_restore(retry)
+        compat.restore_pair(retry)
+        self.assertEqual(compat.capture(), self.source)
+        compat.FILES[3].write_bytes(b'foreign after failure')
+        with self.assertRaises(Rejected):
+            compat.begin_restore(retry)
+        self.assertEqual(compat.FILES[3].read_bytes(), b'foreign after failure')
+
+    def test_foreign_edit_during_archive_restore_is_not_overwritten(self):
+        self.candidate()
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        compat.FILES[3].write_bytes(b'foreign while tar was restoring')
+        before = compat.capture()
+        with self.assertRaises(Rejected):
+            compat.restore_pair(guard)
+        self.assertEqual(compat.capture(), before)
+        self.assertTrue(compat.GUARD.exists())
+
+    def test_archive_tampering_and_snapshot_changed_are_rejected(self):
+        with (self.folder / 'data.tar').open('ab') as archive:
+            archive.write(b'changed')
+        with self.assertRaises(Rejected):
+            compat.load_pair(self.folder, self.source_hash)
+        snapshot = self.folder / 'sharing-pair.json'
+        snapshot.write_bytes(b'{}')
+        with self.assertRaises(Rejected):
+            compat.load_pair(self.folder, self.source_hash)
+
+    def test_only_known_native_hook_conversion_is_allowed(self):
+        compat.FILES[1].write_bytes(b'root preexec = /usr/lib/panasms/panasms-system-helper sharing check Media\n')
+        guard = self.prepare()
+        compat.FILES[1].write_bytes(b'root preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check Media\n')
+        compat.begin_restore(guard)
+        compat.restore_pair(guard)
+        self.assertEqual(compat.capture(), self.source)
+
+
+if __name__ == '__main__':
+    unittest.main()

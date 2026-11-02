@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parents[1]/'management'))
@@ -21,6 +22,10 @@ class Updates(unittest.TestCase):
         guard=patch.object(u,'MAINTENANCE',self.root/'maintenance.lock');guard.start();self.addCleanup(guard.stop)
         for obj,name,value in [(u,'ROOT',self.root),(u,'CONFIG',self.root/'config.json'),(u,'installed',lambda:{'panasms-prototype':'0.2.5'}),(u.time,'sleep',lambda _:None)]:
             p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
+        for name,value in [('OWNER',os.getuid()),('FILES',tuple(self.root/name for name in ('sharing','smb','managed-nfs','legacy-nfs'))),
+                           ('LOCKS',(self.root/'sharing.lock',self.root/'old-sharing.lock')),('GUARD',self.root/'sharing-restore'),
+                           ('JOURNALS',(self.root/'sharing-journal',self.root/'legacy-journal'))]:
+            guard=patch.object(u.sharing_compat,name,value);guard.start();self.addCleanup(guard.stop)
         u.save('state.json',{'id':'test','phase':'queued','operation':'install','version':'0.2.6'})
     def test_maintenance_excludes_active_operation_and_new_submissions(self):
         with u.MAINTENANCE.open() as operation:
@@ -172,6 +177,8 @@ class Updates(unittest.TestCase):
         current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}
         def run(args,cwd=None,**kw):
             if args[0]=='dpkg-repack':(Path(cwd)/f'{args[1]}_0.2.5_arm64.deb').write_bytes(b'deb')
+            if args[0]=='tar':
+                with tarfile.open(args[2],'w'):pass
             return ''
         with patch.object(u,'installed',return_value=current),patch.object(u,'run',side_effect=run):u.backup(['core','panasms-cooling.service'])
         backup=u.read('backup.json',{})
@@ -193,7 +200,7 @@ class Updates(unittest.TestCase):
         u.save('active-units.json',['core','agent'])
         for phase in ('queued','backing-up','installing','verifying','rolling-back'):
             u.save('state.json',{'id':'test','phase':phase})
-            with patch.object(u,'restore') as restore, patch.object(u,'start') as start:u.recover()
+            with patch.object(u,'restore',return_value=['core','agent']) as restore, patch.object(u,'start') as start:u.recover()
             self.assertEqual(restore.called,phase in ('installing','verifying','rolling-back'))
             start.assert_called_once_with(['core','agent'],boot=True)
 

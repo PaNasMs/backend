@@ -7,6 +7,7 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
+	"panasms.local/backend/internal/systemops/storagequery"
 	"strings"
 
 	"panasms.local/backend/internal/auth"
@@ -52,10 +53,10 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	}
 	if id.Role != "admin" {
 		if mode == systemops.ModeQuery {
-			if req.View != "account-sessions" && req.View != "account-details" && req.View != "personal-folders" {
+			if req.View != "account-sessions" && req.View != "account-details" && req.View != "storage-options" && req.View != "personal-folders" {
 				return nil, deny("Administrator permissions required")
 			}
-			if req.View != "personal-folders" {
+			if req.View != "storage-options" && req.View != "personal-folders" {
 				req.Target = user
 			}
 		} else if req.Action != "user.session.end" || req.Params["target"] != user {
@@ -63,7 +64,11 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		}
 	}
 	if mode == systemops.ModeQuery {
-		return d.Query(context.Background(), req.View, req.Target, user)
+		result, err := d.Query(context.Background(), req.View, req.Target, user)
+		if err == nil && id.Role != "admin" && req.View == "storage-options" {
+			return storagequery.Redact(result)
+		}
+		return result, err
 	}
 	if req.Params == nil {
 		return nil, deny("Parameters must be an object")
@@ -158,6 +163,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "storage-options", "raid-candidates":
+		return storagequery.Query(ctx, view, target)
 	case "home-folders", "data-folders", "mount-folders":
 		return folders.Query(ctx, view, target)
 	case "personal-folders":

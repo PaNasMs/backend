@@ -28,6 +28,24 @@ class Modules(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, 'Duplicate module handler'):
             m.manifest(item)
 
+    def test_legacy_reserved_module_remains_manageable(self):
+        item = {'id': 'power', 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}, 'actions': ['power.run', 'power.run'], 'enabled': False}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'power').mkdir()
+            with patch.object(m, 'ROOT', root), patch.object(m, 'REGISTRY', root / 'registry.json'), patch.object(m, 'UNITS', root), patch.object(m, 'require_idle'), patch.object(m, 'command') as command, patch.object(m, 'atomic', side_effect=lambda path, text, mode=0o600: Path(path).write_text(text)), patch.object(m, 'activate'):
+                m.save_registry({'power': item})
+                self.assertTrue(m.plan('module.enable', {'target': 'power'}, 'alice')['fingerprint'])
+                m.execute('module.enable', {'target': 'power'}, 'alice')
+                self.assertTrue(m.registry()['power']['enabled'])
+                m.execute('module.disable', {'target': 'power'}, 'alice')
+                self.assertFalse(m.registry()['power']['enabled'])
+                m.execute('module.remove', {'target': 'power'}, 'alice')
+                self.assertNotIn('power', m.registry())
+                with self.assertRaisesRegex(Rejected, 'belongs to the core'):
+                    m.manifest(item)
+                command.assert_called()
+
     def test_optional_detailed_descriptions(self):
         item={'id':'example','version':'1.0.0','api':1,'core':'>=0.2.0','architecture':'all','title':'Example','files':{'ui/index.js':'0'*64}}
         m.manifest(item)

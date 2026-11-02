@@ -64,9 +64,10 @@ def save_registry(data):
 CORE_MODULE_IDS = frozenset(['account-details', 'account-sessions', 'accounts', 'core', 'data-folders', 'disk', 'file', 'filesystem', 'folder', 'group', 'history', 'home-folders', 'homes', 'homes-check', 'hostname', 'job', 'jobs', 'journal', 'luks', 'module', 'module-catalog', 'module-sources', 'modules', 'mount', 'mount-folders', 'network', 'network-access', 'nfs', 'partition', 'personal-folders', 'power', 'raid', 'raid-candidates', 'service', 'services', 'settings', 'share', 'share-folders', 'sharing', 'smart', 'smb', 'storage', 'storage-luks', 'storage-options', 'storage-snapshots', 'system', 'system-updates', 'updates', 'user', 'users', 'web-access'])
 
 
-def manifest(m):
+def manifest(m, install=True):
     identifier(m.get("id"))
-    require(m["id"] not in CORE_MODULE_IDS, "The identifier belongs to the core")
+    if install:
+        require(m["id"] not in CORE_MODULE_IDS, "The identifier belongs to the core")
     version(m.get("version"))
     require(
         m.get("api") == 1 and satisfies(CORE, m.get("core")),
@@ -140,7 +141,8 @@ def manifest(m):
                 isinstance(value, str) and (value == prefix or value.startswith(prefix + ".")),
                 'Handlers must use the module prefix',
             )
-        require(len(m.get(kind, [])) == len(set(m.get(kind, []))), "Duplicate module handler")
+        if install:
+            require(len(m.get(kind, [])) == len(set(m.get(kind, []))), "Duplicate module handler")
     require("ui/index.js" in m["files"], 'Module UI is missing')
     require(
         not m.get("service") or m["service"] in m["files"], 'Service executable is missing'
@@ -408,9 +410,9 @@ def plan(action, p, user):
             require(not blockers, 'Dependent modules: ' + ", ".join(blockers))
             require_idle(target, installed)
         if action == "module.enable":
-            manifest(m)
+            manifest(m, install=False)
             order = resolve(target, {}, installed)
-            items = [manifest(installed[mid]) for mid in order]
+            items = [manifest(installed[mid], install=False) for mid in order]
             packages, changes = package_plan(items)
         details = [
             m["title"],
@@ -561,8 +563,8 @@ def execute(action, p, user):
                 requested = identifier(p["target"])
             order = resolve(requested, available, installed)
             manifests = [available.get(mid) or installed[mid] for mid in order]
-            for item in manifests:
-                manifest(item)
+            for mid, item in zip(order, manifests):
+                manifest(item, install=mid in available)
             packages, _ = package_plan(manifests)
             if packages:
                 command(["apt-get", "-y", "--no-remove", "install", *packages], timeout=1800)

@@ -3,10 +3,14 @@
 
 PANASMS_TEST_VM_UUID must name the operator-verified disposable QEMU/KVM guest.
 PANASMS_NATIVE_TEST_BIN supplies the candidate panasms-system-helper.
+PANASMS_TEST_PREPARATION_PACKAGE and PANASMS_TEST_PREPARATION_SHA256 bind
+the real compatibility metadata CLI. The private root has a synthetic dpkg
+inventory; this is protocol acceptance, separate from actual package lifecycle.
 Real owned loop storage, Linux credentials, Samba/NFS daemons and loopback
 clients run in a private root. The systemctl fixture manages only owned daemons;
 no guest system bus, APT or service manager is exposed.
 """
+import ast
 import hashlib
 import http.client
 import json
@@ -53,10 +57,19 @@ def outer():
     binary = Path(os.environ.get('PANASMS_NATIVE_TEST_BIN', '/tmp/panasms-native-test-bin')) / 'panasms-system-helper'
     if not binary.is_file():
         raise SystemExit('Build the candidate panasms-system-helper first')
+    preparation = Path(os.environ.get('PANASMS_TEST_PREPARATION_PACKAGE', ''))
+    expected = os.environ.get('PANASMS_TEST_PREPARATION_SHA256', '')
+    if not preparation.is_file() or preparation.is_symlink() or hashlib.sha256(preparation.read_bytes()).hexdigest() != expected:
+        raise SystemExit('Supply the hash-verified preparation package explicitly')
+    if command('dpkg-deb', '-f', str(preparation), 'Package') != 'panasms-prototype':
+        raise SystemExit('The preparation fixture must be the core package')
+    version = command('dpkg-deb', '-f', str(preparation), 'Version')
     with tempfile.TemporaryDirectory(prefix='panasms-sharing-', dir='/var/tmp') as temporary:
         scratch = Path(temporary)
         root = scratch / 'root'
         root.mkdir()
+        prepared = scratch / 'preparation'
+        command('dpkg-deb', '--raw-extract', str(preparation), str(prepared))
         image = scratch / 'owned.img'
         with image.open('wb') as stream:
             stream.truncate(160 * 1024 * 1024)
@@ -67,7 +80,7 @@ def outer():
             command('mkfs.ext4', '-q', '-F', loop)
             nonce = secrets.token_hex(16)
             result = subprocess.run(['unshare', '--mount', '--pid', '--fork', '--net', '--', sys.executable,
-                                     __file__, '--namespace', str(root), loop, str(binary.resolve()), nonce])
+                                     __file__, '--namespace', str(root), loop, str(binary.resolve()), str(prepared), version, nonce])
             if result.returncode:
                 journal = root / 'var/lib/panasms-agent/sharing-transaction.json'
                 if journal.exists():
@@ -80,7 +93,7 @@ def outer():
                 if errors.exists():
                     print('Fixture command failures:', errors.read_text(), file=sys.stderr)
                 raise SystemExit(result.returncode)
-            print(json.dumps({'helper_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'result': 'PASS'}))
+            print(json.dumps({'helper_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'preparation_sha256': expected, 'private_dpkg_inventory': version, 'result': 'PASS'}))
         finally:
             owned = json.loads(command('losetup', '--json', '--output', 'NAME,BACK-FILE', loop))['loopdevices']
             assert len(owned) == 1 and Path(owned[0]['back-file']).resolve() == image.resolve()
@@ -114,7 +127,7 @@ raise SystemExit('Unexpected fixture service operation: '+repr(args))
 '''
 
 
-def namespace(root, loop, binary, nonce):
+def namespace(root, loop, binary, prepared, version, nonce):
     if os.getpid() != 1:
         raise SystemExit('Namespace setup requires a fresh PID namespace')
     command('mount', '--make-rprivate', '/')
@@ -166,6 +179,25 @@ def namespace(root, loop, binary, nonce):
         source = Path(binary).parent / name
         if source.is_file():
             shutil.copy(source, root / 'usr/lib/panasms' / name)
+    prepared = Path(prepared)
+    source = prepared / 'usr/lib/panasms/management/sharing_compat.py'
+    tree = ast.parse(source.read_text())
+    attested = next(node.value.args[0].generators[0].iter for node in tree.body
+                    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'ATTESTED' for target in node.targets))
+    files = ast.literal_eval(attested)
+    assert isinstance(files, tuple) and all(isinstance(name, str) and name.startswith('/') for name in files)
+    for name in (*files, '/usr/lib/panasms/management/common.py'):
+        if name.startswith('/var/lib/dpkg/info/panasms-prototype.'):
+            source = prepared / 'DEBIAN' / name.rsplit('.', 1)[1]
+        else:
+            source = prepared / name.lstrip('/')
+        assert source.is_file() and not source.is_symlink()
+        target = root / name.lstrip('/')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(source, target)
+    database = root / 'var/lib/dpkg/status'
+    database.parent.mkdir(parents=True, exist_ok=True)
+    database.write_text('Package: panasms-prototype\nStatus: install ok installed\nPriority: optional\nSection: admin\nArchitecture: amd64\nVersion: ' + version + '\nMaintainer: Fixture\nDescription: Private sharing protocol fixture\n\n')
     shutil.copy(__file__, root / 'fixture/harness.py')
     os.chroot(root)
     os.chdir('/fixture')
@@ -227,7 +259,17 @@ def scenarios():
     passwords = {u: secrets.token_urlsafe(24) for u in ('alice', 'bob', 'eve')}
     subprocess.run(['chpasswd'], input=''.join(u + ':' + p + '\n' for u, p in passwords.items()), text=True, check=True, capture_output=True)
     Path('/etc/exports').write_text('')
+    version = command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype')
+    denied = subprocess.run([HELPER, 'sharing', 'install'], capture_output=True, text=True)
+    assert denied.returncode != 0 and not Path('/etc/panasms/sharing.json').exists()
+    ticket = {'schema': 1, 'targetVersion': version, 'nonce': secrets.token_hex(16), 'source': {'fresh': True},
+              'files': {name: {'exists': False} for name in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf',
+                        '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports')}}
+    Path('/var/lib/panasms-installer/sharing-activation-v1.json').write_text(json.dumps(ticket))
+    Path('/var/lib/panasms-installer/sharing-activation-v1.json').chmod(0o600)
+    cli('activate')
     cli('install')
+    print('PASS private fixture activation uses actual preparation capability CLI; no runtime authorization bypass', flush=True)
     main = Path('/etc/samba/smb.conf')
     main.write_text(main.read_text().replace('include = ', 'pid directory = /run\ninterfaces = lo\nbind interfaces only = yes\ninclude = '))
     processes = []
@@ -263,6 +305,37 @@ def scenarios():
         assert not (share / 'forbidden-by-unix').exists()
         operation('share.save', dict(params, target='Fixture'))
         print('PASS real SMB writer/read-only/deny and Unix ACL upper bound', flush=True)
+        sys.path.insert(0, '/usr/lib/panasms/management')
+        import sharing_compat
+        operation('share.account', {'target': 'alice', 'enabled': False})
+        folder = Path('/var/lib/panasms-updates/backups/account-rollback-fixture')
+        folder.mkdir(parents=True)
+        with sharing_compat.locked():
+            before_accounts = sharing_compat.capture()
+            before_activation = sharing_compat.capture_activation()
+            command('tar', '-cpf', str(folder / 'data.tar'), '-C', '/', 'etc/panasms/sharing.json')
+            (folder / 'data.tar').chmod(0o600)
+            pair_hash = sharing_compat.save_pair(folder, before_accounts, before_activation)
+        operation('share.account', {'target': 'alice', 'enabled': True})
+        cli('sync', {'user': 'alice', 'password': passwords['alice']})
+        smb('alice', passwords['alice'], 'ls')
+        current_accounts = sharing_compat.capture()
+        snapshot = sharing_compat.load_snapshot(folder, pair_hash)
+        try:
+            sharing_compat.prepare_restore(snapshot['files'], pair_hash, 'account-rollback-fixture', (), snapshot['activation'])
+        except sharing_compat.Rejected as error:
+            assert str(error) == 'Sharing changed after the backup; verified native rollback is required'
+        else:
+            raise AssertionError('Rollback restored disabled policy over an enabled Samba passdb record')
+        assert sharing_compat.capture() == current_accounts
+        assert sharing_compat.capture_activation() == before_activation
+        assert not sharing_compat.GUARD.exists() and not Path('/var/lib/panasms-agent/sharing-transaction.json').exists()
+        unchanged = subprocess.run([HELPER, 'sharing', 'rollback-check', '--source'],
+                                  input=json.dumps({'schema': 1, 'source': current_accounts}), capture_output=True, text=True)
+        assert unchanged.returncode == 0, unchanged.stderr
+        assert json.loads(unchanged.stdout)['files'] == current_accounts
+        smb('alice', passwords['alice'], 'ls')
+        print('PASS real SMB disabled-A/enabled-B rollback refuses before mutation; unchanged accounts witness succeeds', flush=True)
         denied = invoke('query', {'view': 'sharing'}, user='bob')
         assert denied.get('error') == 'Administrator permissions required', denied
         before = Path('/etc/panasms/sharing.json').read_text()

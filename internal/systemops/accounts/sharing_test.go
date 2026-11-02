@@ -21,11 +21,25 @@ func sharingFixture(t *testing.T) *sharingService {
 	t.Helper()
 	s := defaultSharing()
 	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.ownerUID = os.Geteuid()
+	s.secureRoot = root
+	s.activationTicket = filepath.Join(root, "activation-ticket")
+	s.activationReceipt = filepath.Join(root, "activation-receipt")
+	s.restoreGuard = filepath.Join(root, "restore-guard")
+	s.packageVersion = func(context.Context) (string, error) { return "fixture-native", nil }
+	s.authorizeNative = func(context.Context, string) error { return nil }
+	s.authorizeTarget = func(context.Context, string) error { return nil }
 	s.write = func(path, value string, mode os.FileMode) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return err
 		}
-		return os.WriteFile(path, []byte(value), mode)
+		if err := os.WriteFile(path, []byte(value), mode); err != nil {
+			return err
+		}
+		return os.Chmod(path, mode)
 	}
 	s.state = filepath.Join(root, "state")
 	s.smb = filepath.Join(root, "smb")
@@ -69,6 +83,26 @@ func sharingFixture(t *testing.T) *sharingService {
 	}
 	return s
 }
+func sealLegacySharingFixture(t *testing.T, s *sharingService) {
+	t.Helper()
+	if exists, _ := sharingExists(s.legacy); exists {
+		if err := os.Chmod(s.legacy, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := s.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.LegacyExportRevision, err = s.legacyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.save(st); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func sharingFolder() sharedFolder {
 	return sharedFolder{Name: "Media", Path: "/srv/data/media", SMB: true, NFS: true, Readers: []string{"alice"}, Writers: []string{"@family"}, Clients: []string{"192.168.1.0/24"}, Volume: "fixture-volume", Mountpoint: "/srv/data"}
 }
@@ -81,10 +115,10 @@ func saveSharingFixture(t *testing.T, s *sharingService, st sharingState) {
 		t.Fatal(err)
 	}
 	smb, nfs := sharingConfig(st.Shares, false, false)
-	if err := os.WriteFile(s.smb, []byte(smb), 0644); err != nil {
+	if err := s.write(s.smb, smb, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.exports, []byte(nfs), 0644); err != nil {
+	if err := s.write(s.exports, nfs, 0644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -576,6 +610,7 @@ func TestSharingLegacyNFSRollbackAndPlanIdentity(t *testing.T) {
 	s := sharingFixture(t)
 	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{}})
 	os.WriteFile(s.legacy, []byte("/srv/data/keep 192.0.2.1(ro,sync,no_subtree_check,root_squash)\n"), 0644)
+	sealLegacySharingFixture(t, s)
 	p := map[string]any{"target": "/srv/data/new", "clients": "127.0.0.1/32", "readOnly": false}
 	fp := sharingFingerprint(t, s, "nfs.export", p)
 	real := s.run
@@ -725,6 +760,7 @@ func TestSharingDowngradeRestoresReleasedHookAndUpgradeRemigrates(t *testing.T) 
 	s := sharingFixture(t)
 	st := sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}}
 	saveSharingFixture(t, s, st)
+	sealLegacySharingFixture(t, s)
 	if err := s.cli(context.Background(), []string{"prepare-downgrade"}, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -741,16 +777,26 @@ func TestSharingDowngradeRestoresReleasedHookAndUpgradeRemigrates(t *testing.T) 
 		t.Fatal(changed, err)
 	}
 }
-func TestSharingDowngradeRecoversNewNFSJournalAndPreservesForeignEdit(t *testing.T) {
+func TestSharingDowngradeRefusesJournalUntilExplicitRecoveryAndPreservesForeignEdit(t *testing.T) {
 	s := sharingFixture(t)
 	st := sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}}
 	saveSharingFixture(t, s, st)
 	previous := "/srv/data/legacy 127.0.0.1(ro,sync,no_subtree_check,root_squash)\n"
 	os.WriteFile(s.legacy, []byte(previous), 0644)
+	sealLegacySharingFixture(t, s)
 	if err := s.begin(true); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(s.legacy, []byte("changed"), 0644)
+	if err := s.prepareDowngrade(context.Background()); err == nil || !strings.Contains(err.Error(), "requires recovery") {
+		t.Fatal(err)
+	}
+	if exists, _ := sharingExists(s.journal); !exists {
+		t.Fatal("pending journal lost before compatible target veto")
+	}
+	if err := s.recover(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.prepareDowngrade(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -855,6 +901,7 @@ func TestSharingOfflineLegacyExportCanBeRemovedAndBlocksNoUnrelatedWork(t *testi
 	s := sharingFixture(t)
 	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{}})
 	os.WriteFile(s.legacy, []byte("/srv/offline/data 192.0.2.1(rw,sync,no_subtree_check,root_squash)\n"), 0644)
+	sealLegacySharingFixture(t, s)
 	old := s.locate
 	s.locate = func(ctx context.Context, path string) (sharingMount, error) {
 		if strings.HasPrefix(path, "/srv/offline") {

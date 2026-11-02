@@ -147,6 +147,9 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 	if err = s.validate(ctx, st.Shares, r); err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
+	if err = s.validateLegacyRevision(st); err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
 	if err = s.begin(true); err != nil {
 		return nil, err
 	}
@@ -157,6 +160,13 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 		return nil, s.rollback(ctx, r)
 	}
 	if _, err = s.command(ctx, []string{"exportfs", "-ra"}, true, r); err != nil {
+		return nil, s.rollback(ctx, r)
+	}
+	st.LegacyExportRevision, err = s.legacyRevision()
+	if err != nil {
+		return nil, s.rollback(ctx, r)
+	}
+	if err = s.save(st); err != nil {
 		return nil, s.rollback(ctx, r)
 	}
 	if err = removeSharingFile(s.journal); err != nil {

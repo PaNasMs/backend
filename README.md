@@ -451,17 +451,31 @@ target user's credentials. The parent process only removes the verified, empty h
 Bulk home relocation (`homes.*`) and SMB/NFS publication also use the native helper. Account
 callbacks invoke the same native sharing service, and login/password synchronization uses an
 isolated `sharing sync` helper with stdin-only credentials. The reconciliation timer, startup
-recovery, Samba preexec check and installation/removal hooks no longer invoke Python.
+recovery, Samba preexec check and publication installation/removal use Go. Package-transition
+capability verification still uses the compatibility metadata CLI; it is not a mutation fallback.
 
 Sharing operations use `/var/lib/panasms-agent/sharing.lock`, outside the agent's temporary runtime
 directory, so restarting the agent cannot create a second lock owner. Recovery accepts existing
 Python transaction journals and upgrades recognized generated Python preexec hooks while preserving
 external edits. The journal can also snapshot the legacy NFS exports file during native updates.
-A package downgrade first completes native journal recovery and converts only an unchanged managed
-Samba include to the released Python-hook format before replacing the helper. This keeps older
-packages usable; a subsequent upgrade recognizes that format and restores the native hook.
-Externally edited native includes block this conversion rather than being overwritten.
-If recovery is pending, use Shared folders → Restore, or run
+Native activation requires the preceding compatibility update, verified against the installed
+package and its configured files. A pristine fresh installation uses a separate installer ticket;
+skipping the compatibility update is refused. Activation commits a version- and nonce-bound receipt
+before ordinary sharing operations are enabled.
+
+Supported updater rollback uses a paired snapshot of sharing policy and generated SMB/NFS files.
+It refuses unresolved journals, foreign edits, or changed SMB account state that cannot be restored
+from a configuration-only backup. Samba's password database is not included or reverted. If the
+managed account records differ from the backup (including enabled state, UID, synchronization status,
+or password revision), rollback stops before restoring policy and preserves the current files.
+This requires administrator-assisted account recovery; Shared folders → Restore does not reconcile
+credentials. After recovery, retry the retained updater with
+`sudo python3 /var/lib/panasms-updates/worker/system_updates.py retry-rollback`.
+
+Package conversion changes only recognized native preexec hooks and never starts an inactive SMB/NFS
+server. Arbitrary manual downgrades to older packages without the preparation contract are not a
+verified rollback path.
+For an interrupted sharing publication journal, use Shared folders → Restore, or run
 `panasms-system-helper sharing recover` as root. Keep an invalid journal and the root-only
 configuration backups for diagnosis instead of deleting them to bypass recovery.
 

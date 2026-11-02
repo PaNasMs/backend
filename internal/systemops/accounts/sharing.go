@@ -41,8 +41,9 @@ type sharedAccount struct {
 	PasswordRevision string `json:"passwordRevision,omitempty"`
 }
 type sharingState struct {
-	Shares   []sharedFolder            `json:"shares"`
-	Accounts map[string]*sharedAccount `json:"accounts"`
+	Shares               []sharedFolder            `json:"shares"`
+	Accounts             map[string]*sharedAccount `json:"accounts"`
+	LegacyExportRevision string                    `json:"legacyExportRevision,omitempty"`
 }
 type sharingCredentials struct {
 	UID      int
@@ -51,6 +52,16 @@ type sharingCredentials struct {
 	Revision string
 }
 type sharingService struct {
+	activationTicket, activationReceipt, restoreGuard                                        string
+	packageVersion                                                                           func(context.Context) (string, error)
+	authorizeNative                                                                          func(context.Context, string) error
+	authorizeTarget                                                                          func(context.Context, string) error
+	guardMode                                                                                string
+	pendingRollback                                                                          bool
+	rollbackSource                                                                           map[string]sharingFileSnapshot
+	preserveServiceState                                                                     bool
+	ownerUID                                                                                 int
+	secureRoot                                                                               string
 	locate                                                                                   func(context.Context, string) (sharingMount, error)
 	identity                                                                                 func(string) ([]uint64, error)
 	state, smb, exports, legacy, journal, lock, mainConfig, installer, vendor, passwd, group string
@@ -84,6 +95,12 @@ func defaultSharing() *sharingService {
 	}
 	service.locate = service.readLocation
 	service.identity = homeIdentity
+	service.activationTicket = filepath.Join(service.installer, "sharing-activation-v1.json")
+	service.activationReceipt = filepath.Join(service.installer, "sharing-native-v1.json")
+	service.restoreGuard = filepath.Join(filepath.Dir(service.journal), "sharing-restore.json")
+	service.packageVersion = sharingVersion
+	service.authorizeNative = service.requireNativeSharing
+	service.authorizeTarget = service.requireSharingTarget
 	return service
 }
 func sharingText(path string) (string, error) {
@@ -185,16 +202,50 @@ func (s *sharingService) locked() (func(), error) {
 	return s.lockedContext(context.Background(), false)
 }
 func (s *sharingService) lockedContext(ctx context.Context, wait bool) (func(), error) {
+	return s.lockSharing(ctx, wait, true)
+}
+func (s *sharingService) lockSharing(ctx context.Context, wait, authorize bool) (func(), error) {
+	if authorize {
+		if err := s.authorizeNative(ctx, s.guardMode); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(s.lock), 0700); err != nil {
 		return nil, err
 	}
-	fd, err := unix.Open(s.lock, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
+	if err := s.secureParents(s.lock); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(s.lock, unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
+	if err == nil {
+		if err = unix.Fchmod(fd, 0600); err != nil {
+			unix.Close(fd)
+			return nil, err
+		}
+	} else if err == unix.EEXIST {
+		fd, err = unix.Open(s.lock, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	}
 	if err != nil {
 		return nil, err
+	}
+	var stat unix.Stat_t
+	if err = unix.Fstat(fd, &stat); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || int(stat.Uid) != s.ownerUID || stat.Mode&0022 != 0 {
+		unix.Close(fd)
+		return nil, reject(sharingConfigurationUntrusted)
 	}
 	for {
 		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
+			if authorize {
+				if err = s.authorizeNative(ctx, s.guardMode); err != nil {
+					unix.Close(fd)
+					return nil, err
+				}
+			}
 			return func() { unix.Close(fd) }, nil
 		}
 		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
@@ -406,6 +457,9 @@ func ExecuteSharing(ctx context.Context, action string, p map[string]any, expect
 	return defaultSharing().execute(ctx, action, p, expected, r)
 }
 func (s *sharingService) plan(ctx context.Context, action string, p map[string]any) (json.RawMessage, error) {
+	if err := s.authorizeNative(ctx, "plan"); err != nil {
+		return nil, err
+	}
 	st, err := s.read()
 	if err != nil {
 		return nil, err

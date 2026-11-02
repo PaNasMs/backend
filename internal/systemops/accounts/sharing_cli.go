@@ -13,6 +13,9 @@ func SharingCommand(ctx context.Context, args []string, input io.Reader, output 
 }
 func (s *sharingService) cli(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
 	if len(args) == 2 && args[0] == "check" {
+		if err := s.authorizeNative(ctx, "check"); err != nil {
+			return err
+		}
 		st, err := s.read()
 		if err != nil {
 			return err
@@ -24,11 +27,40 @@ func (s *sharingService) cli(ctx context.Context, args []string, input io.Reader
 		}
 		return reject("Shared volume unavailable")
 	}
+	if len(args) == 2 && args[0] == "rollback-check" && args[1] == "--source" {
+		raw, err := io.ReadAll(io.LimitReader(input, 1024*1024+1))
+		if err != nil || len(raw) > 1024*1024 {
+			return reject("Request too large")
+		}
+		var request struct {
+			Schema int                            `json:"schema"`
+			Source map[string]sharingFileSnapshot `json:"source"`
+		}
+		if err = sharingDecodeMetadata(raw, &request); err != nil || request.Schema != 1 || len(request.Source) != 4 {
+			return reject(sharingActivationPending)
+		}
+		s.rollbackSource = request.Source
+		args = args[:1]
+	}
 	if len(args) != 1 {
 		return reject("Unknown sharing operation")
 	}
 	var result any = map[string]any{}
 	switch args[0] {
+	case "activate":
+		if err := s.activateSharing(ctx); err != nil {
+			return err
+		}
+	case "abort-activation":
+		if err := s.abortSharingActivation(ctx); err != nil {
+			return err
+		}
+	case "rollback-check":
+		witness, err := s.rollbackWitness(ctx)
+		if err != nil {
+			return err
+		}
+		result = witness
 	case "sync":
 		raw, err := io.ReadAll(io.LimitReader(input, 1024*1024+1))
 		if err != nil || len(raw) > 1024*1024 {
@@ -82,6 +114,7 @@ func (s *sharingService) cli(ctx context.Context, args []string, input io.Reader
 			return err
 		}
 	case "recover", "reconcile", "republish", "remove", "prepare-downgrade":
+		s.guardMode = args[0]
 		unlock, err := s.lockedContext(ctx, args[0] == "recover" || args[0] == "prepare-downgrade")
 		if err != nil {
 			return err

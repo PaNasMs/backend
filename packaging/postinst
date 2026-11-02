@@ -2,9 +2,19 @@
 set -eu
 case "${1:-}" in
  abort-upgrade)
-  /usr/lib/panasms/panasms-system-helper sharing republish >/dev/null || echo 'Shared-folder configuration needs Restore after the interrupted package change.' >&2
+  if [ -e /var/lib/panasms-agent/sharing-restore.json ] || [ -L /var/lib/panasms-agent/sharing-restore.json ]; then
+   echo 'Sharing rollback is incomplete. Recover the system update before continuing.' >&2
+   exit 1
+  fi
+  /usr/lib/panasms/panasms-system-helper sharing abort-activation
+  /usr/lib/panasms/panasms-system-helper sharing republish >/dev/null
  ;;
  configure)
+  sharing_rollback=0
+  if [ -e /var/lib/panasms-agent/sharing-restore.json ] || [ -L /var/lib/panasms-agent/sharing-restore.json ]; then
+   python3 /usr/lib/panasms/management/sharing_compat.py rollback-install "$(dpkg-query -W '-f=${Version}' panasms-prototype)"
+   sharing_rollback=1
+  fi
   if ! getent passwd panasms >/dev/null; then
    adduser --system --group --home /nonexistent --no-create-home --gecos 'PaNasMs prototype service' panasms
    install -d -m 0750 /var/lib/panasms-installer
@@ -31,8 +41,11 @@ case "${1:-}" in
    rm -f "$report"
    echo 'Hardware inspection unavailable; the panel will detect capabilities at runtime.' >&2
   fi
-  /usr/lib/panasms/panasms-system-helper sharing install
-  /usr/lib/panasms/panasms-system-helper sharing republish >/dev/null || echo 'Shared folders kept from the previous installation were not republished; use Restore in Shared folders.' >&2
+  if [ "$sharing_rollback" = 0 ]; then
+   /usr/lib/panasms/panasms-system-helper sharing activate
+   /usr/lib/panasms/panasms-system-helper sharing install
+   /usr/lib/panasms/panasms-system-helper sharing republish >/dev/null
+  fi
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/panasms.conf
   getent group users >/dev/null || groupadd --system users
   systemctl daemon-reload
@@ -53,7 +66,11 @@ case "${1:-}" in
   systemctl enable panasms-raid-recovery.service
   systemctl enable panasms-update-recover.service
   systemctl enable --now panasms-update-check.timer
-  systemctl enable --now panasms-sharing.timer
+  if [ "$sharing_rollback" = 0 ] && { [ -z "${2:-}" ] || [ -f /var/lib/panasms-installer/sharing-package-install ]; }; then
+   systemctl enable --now panasms-sharing.timer
+  else
+   python3 /usr/lib/panasms/management/sharing_compat.py package-resume
+  fi
   if [ -f /etc/panasms/disk-sleep.json ]; then
    systemctl enable --now panasms-disk-sleep.timer
    systemctl start panasms-disk-sleep.service

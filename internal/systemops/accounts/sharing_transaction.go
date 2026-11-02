@@ -140,7 +140,7 @@ func (s *sharingService) reload(ctx context.Context, shares []sharedFolder, r *s
 		if _, err := s.run(ctx, []string{"testparm", "-s"}, systemops.CommandOptions{Timeout: 20 * time.Second}); err != nil {
 			return err
 		}
-		if slices.ContainsFunc(shares, func(v sharedFolder) bool { return v.SMB }) {
+		if !s.preserveServiceState && slices.ContainsFunc(shares, func(v sharedFolder) bool { return v.SMB }) {
 			if _, err := s.command(ctx, []string{"systemctl", "enable", "--now", "smbd"}, true, r); err != nil {
 				return err
 			}
@@ -156,9 +156,18 @@ func (s *sharingService) reload(ctx context.Context, shares []sharedFolder, r *s
 		}
 	}
 	if s.tool("exportfs") {
-		if slices.ContainsFunc(shares, func(v sharedFolder) bool { return v.NFS }) {
+		if !s.preserveServiceState && slices.ContainsFunc(shares, func(v sharedFolder) bool { return v.NFS }) {
 			if _, err := s.command(ctx, []string{"systemctl", "enable", "--now", "nfs-kernel-server"}, true, r); err != nil {
 				return err
+			}
+		}
+		if s.preserveServiceState {
+			raw, err := s.run(ctx, []string{"systemctl", "is-active", "nfs-kernel-server"}, systemops.CommandOptions{Accepted: []int{0, 3, 4}})
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(raw)) != "active" {
+				return nil
 			}
 		}
 		if _, err := s.command(ctx, []string{"exportfs", "-ra"}, true, r); err != nil {
@@ -309,6 +318,9 @@ func (s *sharingService) recover(ctx context.Context, r *systemops.Reporter) err
 	return s.apply(ctx, st, r)
 }
 func (s *sharingService) republish(ctx context.Context) error {
+	previous := s.preserveServiceState
+	s.preserveServiceState = true
+	defer func() { s.preserveServiceState = previous }()
 	st, err := s.read()
 	if err != nil {
 		return err
@@ -485,14 +497,11 @@ func (s *sharingService) removeInstallation() error {
 }
 
 func (s *sharingService) prepareDowngrade(ctx context.Context) error {
-	pending, err := sharingExists(s.journal)
-	if err != nil {
-		return err
+	if s.pendingRollback {
+		return nil
 	}
-	if pending {
-		if err = s.recover(ctx, nil); err != nil {
-			return err
-		}
+	if _, err := s.rollbackWitnessLocked(); err != nil {
+		return err
 	}
 	current, err := sharingText(s.smb)
 	if err != nil {
@@ -512,16 +521,23 @@ func (s *sharingService) prepareDowngrade(ctx context.Context) error {
 	if changed {
 		return reject(sharingDrift)
 	}
-	// Older packages cannot run the native hook; restore their exact managed form before replacing the helper.
-	if err = s.begin(false); err != nil {
+	entry, err := s.fileSnapshot(s.smb)
+	if err != nil {
 		return err
 	}
 	smb, _ := sharingConfig(st.Shares, true, false)
-	if err = s.write(s.smb, smb, 0644); err != nil {
-		return s.rollback(ctx, nil)
+	if err = s.writeHookConversion(entry, smb); err != nil {
+		return err
 	}
-	if err = s.reload(ctx, st.Shares, nil); err != nil {
-		return s.rollback(ctx, nil)
+	if s.tool("smbcontrol") {
+		raw, err := s.run(ctx, []string{"systemctl", "is-active", "smbd"}, systemops.CommandOptions{Accepted: []int{0, 3, 4}})
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(raw)) == "active" {
+			_, err = s.run(ctx, []string{"smbcontrol", "all", "reload-config"}, systemops.CommandOptions{})
+			return err
+		}
 	}
-	return removeSharingFile(s.journal)
+	return nil
 }

@@ -28,15 +28,24 @@ func openDirectory(path string) (*os.File, error) {
 	if _, err := systemops.CleanPath(path); err != nil {
 		return nil, err
 	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	flags := unix.O_PATH
+	if path == "/" {
+		flags = unix.O_RDONLY
+	}
+	fd, err := unix.Open("/", flags|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for index, part := range parts {
 		if part == "" {
 			continue
 		}
-		next, e := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		flags = unix.O_PATH
+		if index == len(parts)-1 {
+			flags = unix.O_RDONLY
+		}
+		next, e := unix.Openat(fd, part, flags|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		unix.Close(fd)
 		if e != nil {
 			return nil, e

@@ -83,3 +83,73 @@ try:
 finally:
     os.close(fd)
 MODE
+target='@PANASMS_PACKAGE_VERSION@'
+dpkg --validate-version "$target"
+case "${1:-}" in
+ upgrade)
+  if [ ! -f /usr/lib/panasms/management/sharing_compat.py ]; then
+   echo 'Install the compatibility update in System updates before continuing.' >&2
+   exit 1
+  fi
+  if [ -e /var/lib/panasms-agent/sharing-restore.json ] || [ -L /var/lib/panasms-agent/sharing-restore.json ]; then
+   python3 /usr/lib/panasms/management/sharing_compat.py rollback-install "$target"
+  else
+   python3 /usr/lib/panasms/management/sharing_compat.py prepare-activation "$target"
+  fi
+ ;;
+ install)
+  if [ -n "${2:-}" ]; then
+   python3 - "$target" "$2" <<'REINSTALL'
+@PANASMS_REINSTALL_PREFLIGHT@
+REINSTALL
+   exit 0
+  fi
+  python3 - "$target" <<'ACTIVATION'
+import json, os, secrets, stat, sys, tempfile
+from pathlib import Path
+root = Path('/var/lib/panasms-installer')
+for directory in reversed((root, *root.parents)):
+    if directory.is_symlink():
+        raise SystemExit('Sharing configuration cannot be trusted. Ask an administrator to check its ownership and permissions.')
+    if directory.exists():
+        info = directory.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise SystemExit('Sharing configuration cannot be trusted. Ask an administrator to check its ownership and permissions.')
+if root.exists() and any(path.name not in ('sharing-package-install', 'sharing-activation-v1.json') for path in root.iterdir()):
+    raise SystemExit('Previous setup records remain after package removal. Preserve them and ask an administrator to complete recovery before a fresh installation.')
+files = {path: {'exists': False} for path in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf', '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports')}
+for name in (*files, '/var/lib/panasms-agent/sharing-transaction.json', '/var/lib/panasms-agent/sharing-legacy-nfs-transaction.json', '/var/lib/panasms-agent/sharing-restore.json'):
+    path = Path(name)
+    if path.exists() or path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
+        raise SystemExit('Install the compatibility update in System updates before continuing.')
+root.mkdir(mode=0o750, exist_ok=True)
+existing = root / 'sharing-activation-v1.json'
+if existing.exists() or existing.is_symlink():
+    fd = os.open(existing, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600:
+            raise SystemExit('Sharing setup is incomplete. Finish the system update before continuing.')
+        value = json.load(stream)
+    nonce = value.get('nonce', '')
+    if set(value) != {'schema', 'targetVersion', 'nonce', 'source', 'files'} or value['schema'] != 1 or value['targetVersion'] != sys.argv[1] or value['source'] != {'fresh': True} or value['files'] != files or not isinstance(nonce, str) or len(nonce) != 32 or any(char not in '0123456789abcdef' for char in nonce):
+        raise SystemExit('Sharing setup is incomplete. Finish the system update before continuing.')
+    raise SystemExit(0)
+ticket = {'schema': 1, 'targetVersion': sys.argv[1], 'nonce': secrets.token_hex(16), 'source': {'fresh': True}, 'files': files}
+with tempfile.NamedTemporaryFile(dir=root, delete=False) as stream:
+    temporary = Path(stream.name)
+    try:
+        stream.write(json.dumps(ticket, sort_keys=True).encode())
+        stream.flush()
+        os.fsync(stream.fileno())
+        temporary.replace(root / 'sharing-activation-v1.json')
+    finally:
+        temporary.unlink(missing_ok=True)
+fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+ACTIVATION
+ ;;
+esac

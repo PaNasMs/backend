@@ -28,7 +28,6 @@ install -d "$stage/usr/lib/panasms/management" "$stage/etc/panasms/module-keys"
 install -m 0644 packaging/panasms-local.pem packaging/panasms-ci.pem "$stage/etc/panasms/module-keys/"
 install -m 0644 VERSION "$stage/usr/lib/panasms/VERSION"
 install -m 0644 management/*.py "$stage/usr/lib/panasms/management/"
-install -m 0644 packaging/sharing-install.py "$stage/usr/lib/panasms/sharing-install.py"
 install -m 0644 packaging/profile-keys.py "$stage/usr/lib/panasms/profile-keys.py"
 install -D -m 0644 packaging/panasms.tmpfiles "$stage/usr/lib/tmpfiles.d/panasms.conf"
 install -m 0755 packaging/start-core "$stage/usr/lib/panasms/start-core"
@@ -47,6 +46,20 @@ for unit in smbd nfs-server; do
 done
 install -D -m 0644 packaging/panasms-mdns.conf "$stage/usr/lib/systemd/system/avahi-daemon.service.d/panasms-mdns.conf"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
+sed -i "s/@PANASMS_PACKAGE_VERSION@/$version/g" "$stage/DEBIAN/preinst"
+python3 - "$stage/DEBIAN/preinst" <<'REINSTALL'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = Path('management/sharing_compat.py').read_text().split("if __name__ == '__main__':", 1)[0]
+import_line = 'from common import Rejected, require'
+assert source.count(import_line) == 1, 'Sharing compatibility import changed'
+source = source.replace(import_line, 'class Rejected(Exception): pass\ndef require(condition, message):\n    if not condition: raise Rejected(message)')
+source += '\nprepare_reinstall(sys.argv[1], sys.argv[2])\n'
+template = path.read_text()
+assert template.count('@PANASMS_REINSTALL_PREFLIGHT@') == 1, 'Reinstall preflight placeholder changed'
+path.write_text(template.replace('@PANASMS_REINSTALL_PREFLIGHT@', source))
+REINSTALL
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"
 printf 'Source: panasms-prototype\nSection: admin\nPriority: optional\nMaintainer: PaNasMs\n\nPackage: panasms-prototype\nArchitecture: any\nDescription: PaNasMs\n' > "$stage/debian/control"

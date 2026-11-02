@@ -227,7 +227,7 @@ controller through a small Python bridge.
 
 ## Shared folders
 
-`management/sharing.py` manages local SMB and NFS publications as part of core. External SMB/NFS
+The native `panasms-system-helper` manages local SMB and NFS publications as part of core. External SMB/NFS
 mounts are a separate storage feature. The `/sharing` page has folder and connection tabs, and each
 user's SMB access and password sync status is on their Security tab in Users. A folder can be
 published over SMB, NFS, both or neither. Removing a publication never removes files. Legacy NFS
@@ -463,10 +463,62 @@ to Python.
 `panasms-keys` edits SSH keys and removes home contents in a separate process running with the
 target user's credentials. The parent process only removes the verified, empty home directory.
 
-Bulk home relocation (`homes.*`), storage, networking and Samba/NFS still use the Python
-dispatcher. `management/account_dependencies.py` keeps Samba account status, disconnect, disable,
-remove and password sync working until Samba moves to Go. It is not a fallback for account
-operations.
+Bulk home relocation (`homes.*`) and SMB/NFS publication also use the native helper. Account
+callbacks invoke the same native sharing service, and login/password synchronization uses an
+isolated `sharing sync` helper with stdin-only credentials. The reconciliation timer, startup
+recovery, Samba preexec check and publication installation/removal use Go. Package-transition
+capability verification still uses the compatibility metadata CLI; it is not a mutation fallback.
+
+Sharing operations use `/var/lib/panasms-agent/sharing.lock`, outside the agent's temporary runtime
+directory, so restarting the agent cannot create a second lock owner. Recovery accepts existing
+Python transaction journals and upgrades recognized generated Python preexec hooks while preserving
+external edits. The journal can also snapshot the legacy NFS exports file during native updates.
+Native activation requires the preceding compatibility update, verified against the installed
+package and its configured files. A pristine fresh installation uses a separate installer ticket;
+skipping the compatibility update is refused. Activation commits a version- and nonce-bound receipt
+before ordinary sharing operations are enabled.
+
+After a non-purge removal, reinstalling retained sharing configuration requires a completed
+compatibility configuration and exclusive maintenance. Because removal also removes
+`panasms-maintenance`, use the system lock directly for this case:
+
+```sh
+sudo flock -n /run/lock/panasms-maintenance.lock env PANASMS_MAINTENANCE=1 apt-get install ./panasms-prototype.deb
+```
+
+Pending updates, incomplete activation and changed retained files require recovery before
+reinstallation. Removal can unpublish a verified interrupted activation without committing it;
+the installer preserves its activation evidence. A package purge is not proof of a pristine
+installation: installer ownership records, the locked service account and compatibility/activation
+recovery evidence can remain. A fresh installation refuses those records instead of guessing that
+an earlier setup completed. Preserve retained evidence and complete administrator-assisted recovery
+before attempting a fresh installation; neither a direct package purge nor removal of three
+bookkeeping files certifies that sharing recovery state is safe to discard.
+
+
+Supported updater rollback uses a paired snapshot of sharing policy and generated SMB/NFS files.
+It refuses unresolved journals, foreign edits, or changed SMB account state that cannot be restored
+from a configuration-only backup. Samba's password database is not included or reverted. If the
+managed account records differ from the backup (including enabled state, UID, synchronization status,
+or password revision), rollback stops before restoring policy and preserves the current files.
+This requires administrator-assisted account recovery; Shared folders → Restore does not reconcile
+credentials. After recovery, retry the retained updater with
+`sudo python3 /var/lib/panasms-updates/worker/system_updates.py retry-rollback`.
+
+Package conversion changes only recognized native preexec hooks and never starts an inactive SMB/NFS
+server. Arbitrary manual downgrades to older packages without the preparation contract are not a
+verified rollback path.
+An interrupted activation from a native source can convert only its verified SMB hooks under the
+paired rollback guard. Retrying that conversion preserves state, NFS files and activation metadata;
+an interrupted activation from the Python preparation source needs no hook conversion.
+For an interrupted sharing publication journal, use Shared folders → Restore, or run
+`panasms-system-helper sharing recover` as root. Keep an invalid journal and the root-only
+configuration backups for diagnosis instead of deleting them to bypass recovery.
+
+Remaining legacy storage planners still inspect `management/sharing.py` definitions and recognize
+native generated hooks; stopping their managed publications delegates to the native helper.
+Unmigrated routes remain explicitly listed as legacy in the routing inventory. Reference Python
+files are retained for those readers and compatibility tests, not as a mutation fallback.
 
 ## API contract and migrations
 

@@ -369,6 +369,10 @@ def share_label(share):
     return f'{share["name"]} ({share["path"]})'
 
 
+def release_managed_shares(names):
+    command(['/usr/lib/panasms/panasms-system-helper', 'sharing', 'remove-shares'], data=json.dumps(names), timeout=None)
+
+
 def release_shares(target, inv):
     """Stop publishing the panel-managed shares on target before it is unmounted.
 
@@ -377,8 +381,7 @@ def release_shares(target, inv):
     """
     shares = array_shares(target, inv)
     if shares:
-        import sharing
-        sharing.remove_shares([s["name"] for s in shares])
+        release_managed_shares([s["name"] for s in shares])
     mount_blockers(target, inv)
 
 

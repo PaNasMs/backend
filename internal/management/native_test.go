@@ -42,12 +42,12 @@ func TestMigratedAndLegacyDomainsDispatchExactlyOnce(t *testing.T) {
 			check(mode, Request{Action: action}, dst)
 		}
 	}
-	for _, action := range []string{"user.create", "user.home", "user.security", "group.edit", "homes.move", "homes.recover", "system.web-port", "updates.repair", "system.reboot"} {
+	for _, action := range []string{"user.create", "user.home", "user.security", "group.edit", "homes.move", "homes.recover", "share.save", "share.remove", "share.recover", "share.account", "share.disconnect", "nfs.export", "nfs.export-remove", "system.web-port", "updates.repair", "system.reboot"} {
 		if actionModules[action] != goNative {
 			t.Fatal("migrated route missing", action)
 		}
 	}
-	for _, action := range []string{"share.save", "raid.create", "system.update.install"} {
+	for _, action := range []string{"smb.mount", "nfs.mount", "raid.create", "system.update.install"} {
 		if actionModules[action] != legacy {
 			t.Fatal("unmigrated route activated", action)
 		}

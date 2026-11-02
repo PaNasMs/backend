@@ -154,6 +154,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "sharing", "share-folders", "nfs":
+		return accounts.SharingQuery(ctx, view, target, user)
 	case "network":
 		return network.Query(ctx)
 	case "network-access":
@@ -176,6 +178,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if accounts.IsSharing(action) {
+		return accounts.PlanSharing(ctx, action, p)
+	}
 	if action == "homes.move" || action == "homes.recover" {
 		return accounts.PlanHomes(ctx, action, p)
 	}
@@ -197,6 +202,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if accounts.IsSharing(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return accounts.ExecuteSharing(ctx, action, p, expected, r)
+	}
 	if action == "homes.move" || action == "homes.recover" {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return accounts.ExecuteHomes(ctx, action, p, expected, r)

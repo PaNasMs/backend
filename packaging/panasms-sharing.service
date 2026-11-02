@@ -5,6 +5,6 @@ After=local-fs.target
 [Service]
 ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing_compat.py resume-check
 Type=oneshot
-ExecStart=/usr/bin/python3 /usr/lib/panasms/management/sharing.py --reconcile
+ExecStart=/usr/lib/panasms/panasms-system-helper sharing reconcile
 TimeoutStartSec=60
 UMask=0077

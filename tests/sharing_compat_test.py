@@ -56,6 +56,23 @@ class Preparation(unittest.TestCase):
             with self.assertRaises(Rejected):
                 compat.capabilities()
 
+    def test_reinstall_requires_real_maintenance_ancestor_not_environment_flag(self):
+        lock = self.root / 'maintenance-lock'
+        lock.touch(mode=0o600)
+        with patch.object(compat, 'MAINTENANCE_LOCK', lock), patch.dict(os.environ, {'PANASMS_MAINTENANCE': '1'}):
+            with self.assertRaises(Rejected):
+                compat.require_maintenance_ancestor()
+        import fcntl
+        with lock.open() as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code = ('import os,sys;from pathlib import Path;'
+                    'sys.path.insert(0,sys.argv[1]);import sharing_compat as c;'
+                    'c.OWNER=os.getuid();c.MAINTENANCE_LOCK=Path(sys.argv[2]);c.require_maintenance_ancestor()')
+            result = subprocess.run([sys.executable, '-c', code, str(Path(__file__).parents[1] / 'management'), str(lock)],
+                                    env={'PATH': '/usr/bin:/bin', 'PANASMS_MAINTENANCE': '1', 'PYTHONDONTWRITEBYTECODE': '1'},
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_legacy_reupgrade_consumes_only_proven_completed_package_record(self):
         template = (Path(__file__).parents[1] / 'packaging/preinst').read_text().split("<<'MODE'\n", 1)[1].split('\nMODE', 1)[0]
         template = template.replace('/var/lib/panasms-installer', str(self.root / 'installer'))
@@ -111,29 +128,32 @@ class Preparation(unittest.TestCase):
         self.assertIn('preserving its failure', result.stderr)
         self.assertEqual(fixture.calls(), [])
 
-    def test_preparation_upgrade_and_nonpurge_reinstall_remain_distinct(self):
+    def test_native_activation_and_timer_hooks_preserve_rollback_guard(self):
         fixture = MaintenanceFixture(self.root)
         script = (Path(__file__).parents[1] / 'packaging/postinst').read_text()
-        begin = script.index('  if [ -z "${2:-}" ]')
+        begin = script.index('  if [ "$sharing_rollback" = 0 ]; then')
         end = script.index('  fi\n', begin) + len('  fi\n')
         hook = script[begin:end]
-        begin = script.index('  if [ -z "${2:-}" ]', end)
+        begin = script.index('  if [ "$sharing_rollback" = 0 ] &&', end)
         end = script.index('  fi\n', begin) + len('  fi\n')
         timer = script[begin:end]
         marker = self.root / 'install-marker'
-        command = (hook + '\n' + timer).replace('python3 ', 'echo python3 ').replace('systemctl ', 'echo systemctl ')
+        command = (hook + '\n' + timer).replace('/usr/lib/panasms/panasms-system-helper', 'echo helper')
+        command = command.replace('python3 ', 'echo python3 ').replace('systemctl ', 'echo systemctl ').replace(' >/dev/null', '')
         command = fixture.rebase(command.replace('/var/lib/panasms-installer/sharing-package-install', str(marker)))
-        for previous, reinstall in (('1.0', False), ('', False), ('1.0', True)):
-            with self.subTest(previous=previous, reinstall=reinstall):
+        for previous, reinstall, rollback in (('1.0', False, False), ('', False, False), ('1.0', True, False), ('1.0', False, True), ('', True, True)):
+            with self.subTest(previous=previous, reinstall=reinstall, rollback=rollback):
                 marker.unlink(missing_ok=True)
                 if reinstall:
                     marker.touch()
-                result = subprocess.run(['sh', '-c', command, 'postinst', 'configure', previous],
-                                        env=fixture.env, capture_output=True, text=True, check=True)
-                initializes = not previous or reinstall
-                self.assertEqual('sharing-install.py' in result.stdout, initializes)
-                self.assertEqual('systemctl enable --now panasms-sharing.timer' in result.stdout, initializes)
-                self.assertEqual('package-resume' in result.stdout, not initializes)
+                result = subprocess.run([str(fixture.bin / 'sh'), '-c', command, 'postinst', 'configure', previous],
+                                        env={**fixture.env, 'sharing_rollback': str(int(rollback))}, capture_output=True, text=True, check=True)
+                for operation in ('activate', 'install', 'republish'):
+                    self.assertEqual('helper sharing ' + operation in result.stdout, not rollback)
+                initializes_timer = not rollback and (not previous or reinstall)
+                self.assertEqual('systemctl enable --now panasms-sharing.timer' in result.stdout, initializes_timer)
+                self.assertEqual('package-resume' in result.stdout, not initializes_timer)
+                self.assertNotIn('sharing-install.py', result.stdout)
         self.assertEqual(fixture.calls(), [])
 
     def test_direct_package_upgrade_resumes_only_previously_active_timer(self):
@@ -259,10 +279,12 @@ class PairedRollback(unittest.TestCase):
                             ('GUARD', self.root / 'restore-guard'),
                             ('ACTIVATION', self.root / 'activation'), ('NATIVE', self.root / 'native'),
                             ('PACKAGE_STATE', self.root / 'package-state'), ('UPDATE_ROOT', self.root / 'updates'),
+                            ('MARKER', self.root / 'compat-marker'),
                             ('JOURNALS', (self.root / 'journal', self.root / 'legacy-journal'))):
             guard = patch.object(compat, name, value)
             guard.start()
             self.addCleanup(guard.stop)
+        compat.atomic(compat.MARKER, b'{"schema":1}')
         paths[0].write_bytes(b'{"shares":[],"accounts":{}}')
         paths[0].chmod(0o600)
         paths[1].write_bytes(b'original SMB policy')
@@ -464,6 +486,89 @@ class PairedRollback(unittest.TestCase):
         self.assertEqual(second['files'], before)
         self.assertEqual(compat.capture(), before)
         self.assertFalse(compat.NATIVE.exists())
+
+    def reinstall_fixture(self, native=False):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(compat, 'ATTESTED', (self.root / 'installed-source',)))
+        stack.enter_context(patch.object(compat, 'trusted_marker_parents'))
+        stack.enter_context(patch.object(compat, 'require_maintenance_ancestor'))
+        stack.enter_context(patch.object(compat.subprocess, 'check_output', return_value='half-installed 1.0 1.0'))
+        stack.enter_context(patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)))
+        marker = {'schema': 1, 'packageVersion': '1.0', 'files': {str(compat.ATTESTED[0]): 'a' * 64}}
+        if native:
+            marker['native'] = True
+            compat.atomic(compat.NATIVE, json.dumps({'schema': 1, 'packageVersion': '1.0', 'nonce': 'a' * 32,
+                                                    'source': {'fresh': True}}).encode())
+        compat.atomic(compat.MARKER, json.dumps(marker).encode())
+        return marker
+
+    def test_retained_reinstall_captures_policy_and_metadata_without_publication(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                compat.ACTIVATION.unlink(missing_ok=True)
+                self.reinstall_fixture(native)
+                before, metadata = compat.capture(), compat.capture_activation()
+                ticket = compat.prepare_reinstall('2.0', '1.0')
+                self.assertEqual(ticket['files'], before)
+                self.assertEqual(ticket['sourceActivation'], metadata)
+                self.assertEqual(ticket['source']['native'], native)
+                self.assertTrue(ticket['source']['reinstall'])
+                self.assertEqual(compat.capture(), before)
+                with self.assertRaises(Rejected):
+                    compat.prepare_reinstall('2.0', '1.0')
+                self.assertEqual(json.loads(compat.ACTIVATION.read_bytes()), ticket)
+
+    def test_retained_reinstall_refuses_unknown_or_incomplete_source(self):
+        for changed in ('missing-marker', 'mode', 'version', 'digest', 'symlink', 'native-missing-receipt',
+                        'native-stale-receipt', 'native-malformed-receipt', 'guard', 'journal', 'active-updater', 'missing-json'):
+            with self.subTest(changed=changed):
+                self.reinstall_fixture(native=True)
+                compat.GUARD.unlink(missing_ok=True)
+                compat.JOURNALS[0].unlink(missing_ok=True)
+                compat.UPDATE_ROOT.mkdir(exist_ok=True)
+                state = compat.UPDATE_ROOT / 'state.json'
+                state.unlink(missing_ok=True)
+                compat.FILES[0].write_bytes(b'{"shares":[],"accounts":{}}')
+                marker = json.loads(compat.MARKER.read_bytes())
+                if changed == 'missing-marker': compat.MARKER.unlink()
+                elif changed == 'mode': compat.MARKER.chmod(0o644)
+                elif changed == 'version': marker['packageVersion'] = 'other'
+                elif changed == 'digest': marker['files'][str(compat.ATTESTED[0])] = 'invalid'
+                elif changed == 'symlink':
+                    compat.MARKER.unlink(); compat.MARKER.symlink_to(compat.FILES[0])
+                elif changed == 'native-missing-receipt': compat.NATIVE.unlink()
+                elif changed == 'native-stale-receipt':
+                    receipt = json.loads(compat.NATIVE.read_bytes()); receipt['packageVersion'] = 'old'
+                    compat.atomic(compat.NATIVE, json.dumps(receipt).encode())
+                elif changed == 'native-malformed-receipt': compat.atomic(compat.NATIVE, b'{}')
+                elif changed == 'guard': compat.atomic(compat.GUARD, b'{}')
+                elif changed == 'journal': compat.atomic(compat.JOURNALS[0], b'{}')
+                elif changed == 'active-updater': compat.atomic(state, b'{"phase":"installing"}')
+                elif changed == 'missing-json': compat.FILES[0].unlink()
+                if changed in ('version', 'digest'): compat.atomic(compat.MARKER, json.dumps(marker).encode())
+                with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'matching-is-not-a-bypass'}):
+                    with self.assertRaises((Rejected, OSError)):
+                        compat.prepare_reinstall('2.0', '1.0')
+                self.assertFalse(compat.ACTIVATION.exists())
+                compat.MARKER.unlink(missing_ok=True)
+
+    def test_retained_reinstall_accepts_only_terminal_updater_phases(self):
+        self.reinstall_fixture()
+        compat.UPDATE_ROOT.mkdir()
+        for phase in ('', 'checked', 'downloaded', 'complete', 'failed', 'rolled-back'):
+            with self.subTest(phase=phase):
+                compat.ACTIVATION.unlink(missing_ok=True)
+                compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'phase': phase}).encode())
+                compat.prepare_reinstall('2.0', '1.0')
+        compat.ACTIVATION.unlink()
+        for phase in ('queued', 'checking', 'downloading', 'preparing', 'backing-up', 'installing', 'verifying', 'rolling-back', 'recovery-required', 'unknown'):
+            with self.subTest(phase=phase):
+                compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'phase': phase}).encode())
+                with self.assertRaises(Rejected):
+                    compat.prepare_reinstall('2.0', '1.0')
+                self.assertFalse(compat.ACTIVATION.exists())
 
     def test_native_upgrade_keeps_optional_previous_ticket_and_checks_witness(self):
         source = {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1}

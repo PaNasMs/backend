@@ -51,6 +51,17 @@ class SharingTest(unittest.TestCase):
         with patch.object(sharing,'reload_services') as reload:self.assertFalse(sharing.republish())
         reload.assert_not_called()
 
+    def test_legacy_storage_inspection_accepts_native_generated_hooks_only(self):
+        state = {'shares': [self.share], 'accounts': {}}
+        smb, nfs = sharing.config(state['shares'])
+        native = smb.replace('root preexec = /usr/bin/python3 /usr/lib/panasms/management/sharing.py --check ',
+                             'root preexec = /usr/lib/panasms/panasms-system-helper sharing check ')
+        sharing.SMB.write_text(native)
+        sharing.EXPORTS.write_text(nfs)
+        self.assertFalse(sharing.drift(state))
+        sharing.SMB.write_text(native + '# external edit\n')
+        self.assertTrue(sharing.drift(state))
+
     def test_disable_protocols(self):
         s={**self.share,'smb':False,'nfs':False}
         self.assertEqual(sharing.config([s]),(sharing.HEADER,sharing.HEADER))

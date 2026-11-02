@@ -173,7 +173,7 @@ class PackagingTest(unittest.TestCase):
             ]
             for p in owned:
                 p.write_text("owned")
-            for name in ["jobs.db", "jobs.db-wal", "jobs.db-shm"]:
+            for name in ["jobs.db", "jobs.db-wal", "jobs.db-shm", "sharing.lock"]:
                 p = root / "var/lib/panasms-agent" / name
                 p.write_text("owned")
                 owned.append(p)

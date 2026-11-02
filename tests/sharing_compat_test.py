@@ -92,6 +92,22 @@ class Preparation(unittest.TestCase):
                 self.assertEqual(run.call_args_list, [unittest.mock.call(['systemctl', 'start', 'panasms-sharing.timer'], check=True)] if active else [])
                 self.assertFalse(compat.PACKAGE_STATE.exists())
 
+    def test_interrupted_prerm_retry_preserves_original_timer_state(self):
+        with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+            compat.package_stop('2.0')
+        original = compat.PACKAGE_STATE.read_bytes()
+        with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=3)) as run:
+            compat.package_stop('2.0')
+            run.assert_not_called()
+            with self.assertRaises(Rejected):
+                compat.package_stop('3.0')
+        self.assertEqual(compat.PACKAGE_STATE.read_bytes(), original)
+        with patch.object(compat, 'package_version', return_value='2.0'):
+            with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': ''}):
+                with patch.object(compat.subprocess, 'run') as run:
+                    compat.package_resume()
+        run.assert_called_once_with(['systemctl', 'start', 'panasms-sharing.timer'], check=True)
+
     def test_package_abort_resumes_source_timer_but_restore_guard_defers_to_updater(self):
         with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
             compat.package_stop('2.0')
@@ -100,8 +116,10 @@ class Preparation(unittest.TestCase):
             with patch.object(compat.subprocess, 'run') as run:
                 compat.package_resume(abort=True)
                 run.assert_not_called()
-            self.assertTrue(compat.PACKAGE_STATE.exists())
+            self.assertFalse(compat.PACKAGE_STATE.exists())
             compat.GUARD.unlink()
+            with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                compat.package_stop('2.0')
             with patch.object(compat.subprocess, 'run') as run:
                 compat.package_resume(abort=True)
                 run.assert_called_once_with(['systemctl', 'start', 'panasms-sharing.timer'], check=True)

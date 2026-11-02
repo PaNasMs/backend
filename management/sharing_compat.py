@@ -261,9 +261,17 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
 
 
 def package_stop(target_version):
+    source_version = package_version()
+    if PACKAGE_STATE.exists() or PACKAGE_STATE.is_symlink():
+        previous = json.loads(secure_read(PACKAGE_STATE))
+        require(previous.get('schema') == SCHEMA and type(previous.get('timerActive')) is bool
+                and previous.get('sourceVersion') == source_version
+                and previous.get('targetVersion') == target_version,
+                'Another sharing package transition requires recovery')
+        return
     result = subprocess.run(['systemctl', 'is-active', '--quiet', 'panasms-sharing.timer'])
     require(result.returncode in (0, 3, 4), 'Cannot determine the sharing timer state before replacement')
-    value = {'schema': SCHEMA, 'sourceVersion': package_version(), 'targetVersion': target_version,
+    value = {'schema': SCHEMA, 'sourceVersion': source_version, 'targetVersion': target_version,
              'timerActive': result.returncode == 0}
     atomic(PACKAGE_STATE, json.dumps(value, sort_keys=True).encode())
 
@@ -278,6 +286,7 @@ def package_resume(abort=False):
     if expected != package_version(configuring=True):
         return
     if GUARD.exists() or GUARD.is_symlink() or os.environ.get('PANASMS_UPDATE_TRANSACTION'):
+        unlink_sync(PACKAGE_STATE)
         return
     if value['timerActive']:
         subprocess.run(['systemctl', 'start', 'panasms-sharing.timer'], check=True)

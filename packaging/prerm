@@ -13,10 +13,6 @@ if update.exists():
     s=json.loads(update.read_text())
     if s.get('phase') in ('queued','checking','downloading','preparing','backing-up','installing','verifying','rolling-back','recovery-required') and os.environ.get('PANASMS_UPDATE_TRANSACTION') != s.get('id'):
         raise SystemExit('A PaNasMs update transaction is active.')
-for path in ('/run/panasms-network/change.json', '/var/lib/panasms-agent/network-wifi/pending.json', '/var/lib/panasms-agent/network-sharing/pending.json'):
-    state=Path(path)
-    if state.exists() and json.loads(state.read_text()).get('status') in ('applying','pending'):
-        raise SystemExit('Confirm or roll back pending network changes before package changes.')
 web=Path('/var/lib/panasms-agent/web-access.json')
 if web.exists() and json.loads(web.read_text()).get('phase') in ('scheduled','applying'):
     raise SystemExit('Wait for the HTTP port change to finish before package changes.')
@@ -26,6 +22,7 @@ if p.exists():
         if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]:
             raise SystemExit('PaNasMs has active operations. Wait for completion or cancel queued tasks before package changes.')
 CHECK
+ /usr/lib/panasms/panasms-system-helper network-services check-removal
  if [ "$1" = remove ]; then
   python3 /usr/lib/panasms/management/storage_reshape.py --check-removal
   systemctl disable --now panasms-network-access.service
@@ -48,12 +45,11 @@ CHECK
   python3 /usr/lib/panasms/management/sharing.py --remove
   python3 /usr/lib/panasms/sharing-install.py --remove
   systemctl stop panasms-network-sharing.service || true
-  if [ -f /var/lib/panasms-agent/network-sharing/groups.json ]; then
-   python3 /usr/lib/panasms/management/network_sharing.py --remove
+  if systemctl is-active --quiet NetworkManager; then
+   /usr/lib/panasms/panasms-system-helper network-services remove
   fi
-  python3 /usr/lib/panasms/management/wifi.py --remove
   systemctl disable panasms-network-sharing.service || true
-  systemctl stop 'panasms-wifi-rollback-*.timer' panasms-network-recovery.service || true
+  systemctl stop 'panasms-wifi-rollback-*.timer' 'panasms-share-rollback-*.timer' panasms-network-recovery.service || true
   systemctl stop panasms-networkd-recovery.service || true
   systemctl disable panasms-networkd-recovery.service panasms-network-recovery.service panasms-raid-recovery.service || true
   # disable accepts no globs: enumerate the module services and SMART timers.

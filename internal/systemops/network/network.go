@@ -76,9 +76,16 @@ func active(s *state) bool {
 	return s != nil && (s.Status == "pending" || s.Status == "applying" || s.Status == "rollback-failed")
 }
 func current(a *adapter) (*state, error) {
-	s, e := readState()
-	if e != nil || s == nil {
-		return s, e
+	full, e := currentNMChange(true)
+	if e != nil || full == nil {
+		return nil, e
+	}
+	s := &full.state
+	if a != nil && supplementalKind(s.Kind) {
+		if err := a.currentNM(full); err != nil {
+			return nil, err
+		}
+		return &full.state, nil
 	}
 	if a != nil && s.Kind == "network.nm" && active(s) {
 		paths, e := a.checkpoints()
@@ -93,6 +100,7 @@ func current(a *adapter) (*state, error) {
 	}
 	return s, nil
 }
+
 func public(s *state) any {
 	if s == nil {
 		return nil
@@ -100,11 +108,11 @@ func public(s *state) any {
 	return map[string]any{"id": s.ID, "interface": s.Interface, "user": s.User, "status": s.Status, "error": s.Error, "deadline": s.Deadline, "addresses": s.Addresses}
 }
 func systemInterface(name string) bool {
-	p, e := filepath.EvalSymlinks("/sys/class/net/" + name)
+	p, e := filepath.EvalSymlinks(filepath.Join(netClassRoot, name))
 	if e != nil {
 		return true
 	}
-	_, wireless := os.Stat("/sys/class/net/" + name + "/phy80211")
+	_, wireless := os.Stat(filepath.Join(netClassRoot, name, "phy80211"))
 	return networkaccess.IsGadgetPath(p) || name == "lo" || name == "docker0" || strings.HasPrefix(name, "veth") || (strings.HasPrefix(p, "/sys/devices/virtual/net/") && wireless != nil)
 }
 func accessInterface(name string) bool {
@@ -113,7 +121,7 @@ func accessInterface(name string) bool {
 		Interface string `json:"interface"`
 	}
 	_ = json.Unmarshal(b, &s)
-	p, _ := filepath.EvalSymlinks("/sys/class/net/" + name)
+	p, _ := filepath.EvalSymlinks(filepath.Join(netClassRoot, name))
 	_, usb := os.Stat("/etc/modules-load.d/panasms-usb.conf")
 	return name != "" && (name == s.Interface || (networkaccess.IsGadgetPath(p) && usb == nil))
 }
@@ -144,27 +152,14 @@ func guard(name string) error {
 	}
 	return nil
 }
-func legacy(ctx context.Context, mode, action, user string, p map[string]any) (json.RawMessage, error) {
-	body, _ := json.Marshal(map[string]any{"mode": mode, "action": action, "user": user, "params": p})
-	raw, e := systemops.Command(ctx, []string{"/usr/bin/python3", "-B", "/usr/lib/panasms/management/network_dependencies.py"}, systemops.CommandOptions{Input: body, Operation: mode == "execute"})
-	if e != nil {
-		return nil, e
-	}
-	var result struct {
-		Error string `json:"error"`
-	}
-	if e = systemops.Decode(raw, &result); e != nil {
-		return nil, e
-	}
-	if result.Error != "" {
-		return nil, &systemops.Rejected{Message: result.Error}
-	}
-	return raw, nil
-}
 func Operation(ctx context.Context, mode, action, user string, p map[string]any) (json.RawMessage, error) {
-	s, e := readState()
+	full, e := currentNMChange(false)
 	if e != nil {
 		return nil, e
+	}
+	var s *state
+	if full != nil {
+		s = &full.state
 	}
 	if s != nil && s.Kind == "network.native" && (action == "network.confirm" || action == "network.rollback") {
 		return networknative.Operation(mode, action, user, p)
@@ -173,7 +168,14 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 		a, err := connect()
 		if err == nil {
 			a.bus.Close()
-			return legacy(ctx, mode, action, user, p)
+			return supplementalOperation(mode, action, user, p)
+		}
+		if active(s) {
+			message := "Confirm or roll back the pending network change first"
+			if supplementalKind(s.Kind) {
+				message = "Start NetworkManager to recover the pending network change"
+			}
+			return nil, &systemops.Rejected{Message: message}
 		}
 		if !networknative.Active() {
 			return nil, fmt.Errorf("No supported network manager is active")
@@ -193,7 +195,7 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 		return networknative.Operation(mode, action, user, p)
 	}
 	if action != "network.configure" && s != nil && s.Kind != "network.nm" && s.Kind != "network.networkd" {
-		return legacy(ctx, mode, action, user, p)
+		return supplementalOperation(mode, action, user, p)
 	}
 	unlock, e := networkd.Lock()
 	if e != nil {

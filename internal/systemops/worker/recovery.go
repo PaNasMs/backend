@@ -35,7 +35,7 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 			return nil, err
 		}
 		add("Direct access", state.State)
-	case req.Action == "network.configure" || req.Action == "network.confirm" || req.Action == "network.rollback":
+	case req.Action == "network.configure" || req.Action == "network.confirm" || req.Action == "network.rollback" || strings.HasPrefix(req.Action, "network.wifi.") || strings.HasPrefix(req.Action, "network.share."):
 		route = "/network/interfaces"
 		raw, err := network.Query(ctx)
 		if err != nil {

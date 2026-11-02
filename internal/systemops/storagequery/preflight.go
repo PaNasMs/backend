@@ -2,6 +2,7 @@ package storagequery
 
 import (
 	"fmt"
+	"panasms.local/backend/internal/systemops"
 	"sort"
 	"strings"
 )
@@ -15,10 +16,10 @@ type Preflight struct {
 func (p *Preflight) Protected(path string, layout bool) error {
 	row, exists := p.Inventory.Rows[path]
 	if !exists {
-		return fmt.Errorf("The device no longer exists")
+		return rejectf("The device no longer exists")
 	}
 	if p.System[path] {
-		return fmt.Errorf("The system partition is protected")
+		return rejectf("The system partition is protected")
 	}
 	if p.Carriers[path] {
 		allowed := false
@@ -29,11 +30,11 @@ func (p *Preflight) Protected(path string, layout bool) error {
 			}
 		}
 		if !allowed {
-			return fmt.Errorf("The system drive or one of its members is protected")
+			return rejectf("The system drive or one of its members is protected")
 		}
 	}
 	if readOnly(row["ro"]) {
-		return fmt.Errorf("The device is read-only")
+		return rejectf("The device is read-only")
 	}
 	return nil
 }
@@ -62,29 +63,29 @@ func mounted(row map[string]any) bool {
 
 func (p *Preflight) Unused(path string, allowChildren bool) error {
 	if p.Inventory.Rows[path] == nil {
-		return fmt.Errorf("The device no longer exists")
+		return rejectf("The device no longer exists")
 	}
 	paths := p.Inventory.Descendants(path)
 	if !allowChildren && len(paths) != 1 {
-		return fmt.Errorf("Detach dependent devices or delete partitions first")
+		return rejectf("Detach dependent devices or delete partitions first")
 	}
 	for _, child := range paths {
 		if mounted(p.Inventory.Rows[child]) {
-			return fmt.Errorf("Unmount file systems first")
+			return rejectf("Unmount file systems first")
 		}
 	}
 	for _, child := range paths {
 		row := p.Inventory.Rows[child]
 		if child != path && row["type"] != "disk" && row["type"] != "part" {
-			return fmt.Errorf("The drive is used by an array or another storage layer")
+			return rejectf("The drive is used by an array or another storage layer")
 		}
 		holders, err := p.Holders(row["kname"].(string))
 		if err != nil {
-			return fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+			return rejectf("Could not verify storage dependencies. No changes were made.")
 		}
 		if len(holders) > 0 {
 			sort.Strings(holders)
-			return fmt.Errorf("Device %s is used by: %s", child, strings.Join(holders, ", "))
+			return rejectf("Device %s is used by: %s", child, strings.Join(holders, ", "))
 		}
 	}
 	return nil
@@ -96,17 +97,21 @@ func (p *Preflight) Layout(path string) error {
 	}
 	row := p.Inventory.Rows[path]
 	if fs, _ := row["fstype"].(string); fs != "" {
-		return fmt.Errorf("The device contains a file system")
+		return rejectf("The device contains a file system")
 	}
 	if mounted(row) {
-		return fmt.Errorf("Unmount file systems first")
+		return rejectf("Unmount file systems first")
 	}
 	holders, err := p.Holders(row["kname"].(string))
 	if err != nil {
-		return fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+		return rejectf("Could not verify storage dependencies. No changes were made.")
 	}
 	if len(holders) > 0 {
-		return fmt.Errorf("The drive is used by an array or another storage layer")
+		return rejectf("The drive is used by an array or another storage layer")
 	}
 	return nil
+}
+
+func rejectf(format string, args ...any) error {
+	return &systemops.Rejected{Message: fmt.Sprintf(format, args...)}
 }

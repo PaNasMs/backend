@@ -2,7 +2,7 @@ package storagequery
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +44,7 @@ func (s *service) preflight(ctx context.Context) (*Preflight, error) {
 	}
 	inv, err := NewInventory(rows, s.resolve)
 	if err != nil {
-		return nil, fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+		return nil, rejectf("Could not verify storage dependencies. No changes were made.")
 	}
 	for _, row := range inv.Rows {
 		if err := validateObservation(row); err != nil {
@@ -53,21 +53,21 @@ func (s *service) preflight(ctx context.Context) (*Preflight, error) {
 	}
 	fstab, err := os.ReadFile(s.fstab)
 	if err != nil {
-		return nil, fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+		return nil, rejectf("Could not verify storage dependencies. No changes were made.")
 	}
 	sources := SystemSources(string(fstab))
 	for source := range sources {
 		if strings.HasPrefix(source, "/dev/") {
 			resolved, err := s.resolve(source)
 			if err != nil {
-				return nil, fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+				return nil, rejectf("Could not verify storage dependencies. No changes were made.")
 			}
 			sources[resolved] = true
 		}
 	}
 	system, carriers, err := inv.Protection(sources, func(name string) ([]string, error) { return s.dependencies(name, "slaves") })
 	if err != nil {
-		return nil, fmt.Errorf("Could not verify storage dependencies. No changes were made.")
+		return nil, rejectf("Could not verify storage dependencies. No changes were made.")
 	}
 	return &Preflight{inv, system, carriers, func(name string) ([]string, error) { return s.dependencies(name, "holders") }}, nil
 }
@@ -78,27 +78,27 @@ func (s *service) raidCandidates(ctx context.Context, target string) (any, error
 		return nil, err
 	}
 	if !strings.HasPrefix(target, "/dev/") {
-		return nil, fmt.Errorf("Select a block device")
+		return nil, rejectf("Select a block device")
 	}
 	target, err = s.resolve(target)
 	if err != nil || p.Inventory.Rows[target] == nil {
-		return nil, fmt.Errorf("The device no longer exists")
+		return nil, rejectf("The device no longer exists")
 	}
 	row := p.Inventory.Rows[target]
 	name := row["kname"].(string)
 	md, err := os.Stat(filepath.Join(s.sys, name, "md"))
 	if err != nil || !md.IsDir() {
-		return nil, fmt.Errorf("Array no longer available. Refresh the device list.")
+		return nil, rejectf("Array no longer available. Refresh the device list.")
 	}
 	members, err := s.dependencies(name, "slaves")
 	if err != nil || len(members) == 0 {
-		return nil, fmt.Errorf("Could not determine array member sizes")
+		return nil, rejectf("Could not determine array member sizes")
 	}
 	var minimum float64
 	for index, member := range members {
 		size, ok := p.Inventory.Rows["/dev/"+member]["size"].(float64)
 		if !ok || size <= 0 {
-			return nil, fmt.Errorf("Could not determine array member sizes")
+			return nil, rejectf("Could not determine array member sizes")
 		}
 		if index == 0 || size < minimum {
 			minimum = size
@@ -126,7 +126,7 @@ func RaidCandidates(ctx context.Context, target string) (any, error) {
 }
 
 func validateObservation(row map[string]any) error {
-	bad := func() error { return fmt.Errorf("Could not verify storage dependencies. No changes were made.") }
+	bad := func() error { return rejectf("Could not verify storage dependencies. No changes were made.") }
 	if kind, ok := row["type"].(string); !ok || kind == "" {
 		return bad()
 	}
@@ -154,4 +154,21 @@ func validateObservation(row map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func Query(ctx context.Context, view, target string) (json.RawMessage, error) {
+	var value any
+	var err error
+	switch view {
+	case "storage-options":
+		value, err = Options(ctx)
+	case "raid-candidates":
+		value, err = RaidCandidates(ctx, target)
+	default:
+		return nil, rejectf("Unknown management view")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }

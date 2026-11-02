@@ -54,10 +54,10 @@ var queryViews = map[string]impl{
 	"modules":           legacy,
 	"module-sources":    legacy,
 	"module-catalog":    legacy,
-	"storage-options":   legacy,
+	"storage-options":   goNative,
 	"storage-snapshots": legacy,
 	"storage-luks":      legacy,
-	"raid-candidates":   legacy,
+	"raid-candidates":   goNative,
 	"smart":             legacy,
 	// host.py views: services/journal/power/updates ported to Go in GO-03.
 	"services": goNative,

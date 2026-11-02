@@ -21,7 +21,8 @@ def identifier(value):
     )
     require(
         value
-        not in ("core", "users", "storage", "settings", "system", "history", "sharing", "modules", "network"),
+        not in ("core", "users", "storage", "settings", "system", "history", "sharing", "modules", "network",
+            'disk', 'filesystem', 'folder', 'group', 'homes', 'luks', 'module', 'mount', 'nfs', 'partition', 'raid', 'service', 'share', 'smart', 'smb', 'updates', 'user', 'accounts', 'account-details', 'account-sessions', 'sharing', 'share-folders', 'home-folders', 'data-folders', 'mount-folders', 'personal-folders', 'network-access', 'homes-check', 'module-sources', 'module-catalog', 'storage-options', 'storage-snapshots', 'storage-luks', 'raid-candidates', 'services', 'journal', 'power', 'hostname', 'web-access', 'system-updates', 'job', 'jobs'),
         'The identifier belongs to the core',
     )
     return value
@@ -534,6 +535,7 @@ def remember_widgets(installed):
 def execute(action, p, user):
     ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
     with (ROOT / ".lock").open("w") as lock:
+        os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         recover()
         if action == 'module.recover':
@@ -689,6 +691,7 @@ if __name__ == "__main__":
     ROOT.mkdir(parents=True, exist_ok=True)
     ROOT.chmod(0o755)
     with (ROOT / ".lock").open("w") as lock:
+        os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         if sys.argv[1] == "--resume":
             failed = resume()

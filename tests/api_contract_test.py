@@ -63,6 +63,13 @@ class ManagementContractTest(unittest.TestCase):
                 for child in value: visit(child)
         visit(DOCUMENT)
 
+    def test_core_route_names_cannot_be_module_identifiers(self):
+        inventory = go_route_inventory()
+        names = set(inventory['views']) | {action.split('.')[0] for action in inventory['actions']}
+        for name in names:
+            with self.subTest(name=name), self.assertRaises(module_manager.Rejected):
+                module_manager.identifier(name)
+
     def test_core_query_dispatch_has_contracts(self):
         inventory = go_route_inventory()
         declared = DOCUMENT['components']['schemas']['ManagementViews']['properties']

@@ -14,6 +14,11 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_core_handler_identifiers_are_rejected_before_install(self):
+        for identifier in ('user', 'service', 'disk', 'updates', 'hostname', 'account-details', 'personal-folders', 'job'):
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(Rejected, 'belongs to the core'):
+                m.identifier(identifier)
+
     def test_optional_detailed_descriptions(self):
         item={'id':'example','version':'1.0.0','api':1,'core':'>=0.2.0','architecture':'all','title':'Example','files':{'ui/index.js':'0'*64}}
         m.manifest(item)

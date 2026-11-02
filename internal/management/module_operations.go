@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -57,9 +59,13 @@ func moduleHandler(core systemops.Handler, authorize func(string) (auth.Identity
 			if req.Params == nil {
 				return nil, deny("Parameters must be an object")
 			}
-			return moduleRecovery(req, user, id.Role == "admin")
+			return moduleRecovery(req, user, id.UID, id.Role == "admin")
 		}
-		lock, err := modules.Lock()
+		if mode == systemops.ModeExecute {
+			r.Cancellable(true)
+			defer r.Cancellable(false)
+		}
+		lock, err := moduleLock(r, trustedUID)
 		if err != nil {
 			return nil, err
 		}
@@ -68,13 +74,14 @@ func moduleHandler(core systemops.Handler, authorize func(string) (auth.Identity
 		if err != nil {
 			return nil, err
 		}
-		if m == nil || m.Operations == "" {
+		if m == nil || !m.Enabled || m.Operations == "" {
 			return nil, deny("Module is not installed or is disabled")
 		}
 		executable, err := modules.VerifyOperation(m, trustedUID)
 		if err != nil {
 			return nil, err
 		}
+		defer executable.Close()
 		if mode == systemops.ModeQuery {
 			return invokeModule(executable, "query", user, map[string]any{"target": req.Target})
 		}
@@ -142,24 +149,26 @@ func moduleHandler(core systemops.Handler, authorize func(string) (auth.Identity
 		if err = checkChanging(); err != nil {
 			return nil, err
 		}
-		if _, err = modules.VerifyOperation(m, trustedUID); err != nil {
-			return nil, err
+		freshExecutable, e := modules.VerifyOperation(m, trustedUID)
+		if e != nil {
+			return nil, e
 		}
+		defer freshExecutable.Close()
 		r.Cancellable(false)
 		if err = r.Checkpoint(); err != nil {
 			return nil, err
 		}
 		mutated = true
-		return invokeModule(executable, "execute", user, body)
+		return invokeModule(freshExecutable, "execute", user, body)
 	}
 }
 
-func invokeModule(path, mode, user string, body any) (json.RawMessage, error) {
+func invokeModule(executable *os.File, mode, user string, body any) (json.RawMessage, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(path, "operations", mode, user)
+	cmd := exec.Command("/proc/self/fd/3", "operations", mode, user)
 	cmd.Stdin = bytes.NewReader(raw)
 	cmd.Env = os.Environ()
 	if mode == "execute" {
@@ -171,7 +180,7 @@ func invokeModule(path, mode, user string, body any) (json.RawMessage, error) {
 		if e != nil || fd < 3 {
 			return nil, fmt.Errorf("invalid cancellation descriptor")
 		}
-		copyFD, e := unix.Dup(fd)
+		copyFD, e := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 3)
 		if e != nil {
 			return nil, e
 		}
@@ -180,6 +189,9 @@ func invokeModule(path, mode, user string, body any) (json.RawMessage, error) {
 		cmd.ExtraFiles = []*os.File{control}
 		cmd.Env = append(cmd.Env, systemops.ControlFDEnv+"=3")
 	}
+	cmd.Path = fmt.Sprintf("/proc/self/fd/%d", 3+len(cmd.ExtraFiles))
+	cmd.Args[0] = cmd.Path
+	cmd.ExtraFiles = append(cmd.ExtraFiles, executable)
 	output := limitedOutput{limit: systemops.MaxOutput}
 	cmd.Stdout = &output
 	cmd.Stderr = &moduleProgress{out: os.Stderr}
@@ -235,4 +247,21 @@ func (p *moduleProgress) Write(raw []byte) (int, error) {
 		}
 	}
 	return size, nil
+}
+
+func moduleLock(r *systemops.Reporter, trustedUID uint32) (*os.File, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := r.Checkpoint(); err != nil {
+			return nil, err
+		}
+		lock, err := modules.Lock(trustedUID)
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			return lock, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, &systemops.Rejected{Message: "Module maintenance in progress; retry shortly"}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }

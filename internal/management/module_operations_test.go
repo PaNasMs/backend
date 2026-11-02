@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/auth"
@@ -191,7 +192,7 @@ func TestNativeModuleOutputAndCancellation(t *testing.T) {
 				script += "printf '{\"error\":\"Destination changed\"}'\n"
 			}
 			_, _, path := moduleFixture(t, script)
-			_, e := invokeModule(path, "execute", "alice", map[string]any{})
+			_, e := invokeModule(moduleExecutable(t, path), "execute", "alice", map[string]any{})
 			if e == nil {
 				t.Fatal("invalid output accepted")
 			}
@@ -203,7 +204,7 @@ func TestNativeModuleOutputAndCancellation(t *testing.T) {
 }
 func TestNativeModuleLifecycleSharedLock(t *testing.T) {
 	moduleFixture(t, moduleScript)
-	lock, e := modules.Lock()
+	lock, e := modules.Lock(uint32(os.Geteuid()))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -276,7 +277,7 @@ printf '{"cancelled":true}'
 	defer write.Close()
 	t.Setenv(systemops.ControlFDEnv, strconv.Itoa(int(read.Fd())))
 	write.WriteString("cancel\n")
-	if _, e = invokeModule(path, "execute", "alice", map[string]any{}); !errors.Is(e, systemops.ErrCancelled) {
+	if _, e = invokeModule(moduleExecutable(t, path), "execute", "alice", map[string]any{}); !errors.Is(e, systemops.ErrCancelled) {
 		t.Fatal(e)
 	}
 	if _, e = read.Stat(); e != nil {
@@ -294,7 +295,7 @@ func TestNativeModuleCancellationBeforeExecute(t *testing.T) {
 	defer read.Close()
 	defer write.Close()
 	write.Write([]byte{1})
-	reporter := systemops.NewReporter(&bytes.Buffer{}, func(string) string { return strconv.Itoa(int(read.Fd())) })
+	reporter := moduleTestReporter(t, read)
 	if _, e = h(systemops.ModeExecute, "alice", req, reporter); !errors.Is(e, systemops.ErrCancelled) || !systemops.Unchanged(e) {
 		t.Fatalf("%v", e)
 	}
@@ -325,9 +326,11 @@ func TestReleasedFilesNativeDispatch(t *testing.T) {
 	released.Enabled = true
 	released.Installation = "fixture"
 	save(released)
-	if _, e = modules.VerifyOperation(&released, uint32(os.Geteuid())); e != nil {
+	verified, e := modules.VerifyOperation(&released, uint32(os.Geteuid()))
+	if e != nil {
 		t.Fatal(e)
 	}
+	verified.Close()
 	actor, e := user.Current()
 	if e != nil {
 		t.Fatal(e)
@@ -380,4 +383,175 @@ func TestNativeModuleExecuteFailureRemainsUncertain(t *testing.T) {
 	if _, e := h(systemops.ModeExecute, "alice", req, quietReporter()); e == nil || systemops.Unchanged(e) {
 		t.Fatalf("mutation failure was marked unchanged: %v", e)
 	}
+}
+
+func TestDisabledNativeModuleDoesNotSelectPython(t *testing.T) {
+	m, save, _ := moduleFixture(t, moduleScript)
+	m.Enabled = false
+	save(m)
+	dst, e := destination("execute", Request{Action: "file.copy"})
+	if e != nil || dst != goNative {
+		t.Fatalf("disabled native handler selected legacy: %v %v", dst, e)
+	}
+}
+func TestModuleRecoveryMissingDestinationParent(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "missing", "destination")
+	req, _ := json.Marshal(systemops.Request{Action: "file.copy", Params: map[string]any{"destination": destination}})
+	var out bytes.Buffer
+	if e := InspectModuleRecovery(bytes.NewReader(req), &out); e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(out.String(), ": absent") {
+		t.Fatal(out.String())
+	}
+}
+
+func TestModuleRecoveryUnreadableDestination(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged actor")
+	}
+	dir := filepath.Join(t.TempDir(), "private")
+	if e := os.Mkdir(dir, 0000); e != nil {
+		t.Fatal(e)
+	}
+	defer os.Chmod(dir, 0700)
+	req, _ := json.Marshal(systemops.Request{Action: "file.copy", Params: map[string]any{"target": filepath.Join(dir, "source"), "destination": filepath.Join(dir, "destination")}})
+	var out bytes.Buffer
+	if e := InspectModuleRecovery(bytes.NewReader(req), &out); e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(out.String(), "not inspectable") || !strings.Contains(out.String(), "Compare source") {
+		t.Fatal(out.String())
+	}
+}
+
+func moduleExecutable(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, e := os.Open(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+func TestRecoverySubprocessHasNoPrivilegedEnvironment(t *testing.T) {
+	t.Setenv("PANASMS_TEST_PRIVATE_TOKEN", "must-not-leak")
+	t.Setenv("OTHER_PRIVATE_TOKEN", "also-private")
+	cmd := moduleRecoveryCommand("/usr/bin/env", nil)
+	cmd.Args = []string{"/usr/bin/env"}
+	raw, e := cmd.Output()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if bytes.Contains(raw, []byte("PRIVATE_TOKEN")) || bytes.Contains(raw, []byte("PANASMS_")) || bytes.Contains(raw, []byte("must-not-leak")) {
+		t.Fatal("privileged environment reached child")
+	}
+	if !bytes.Contains(raw, []byte("LANG=C.UTF-8")) {
+		t.Fatal("expected controlled environment")
+	}
+}
+func TestNativeModuleReservedCoreActionHasValidModulePrefix(t *testing.T) {
+	moduleFixture(t, moduleScript)
+	m := modules.Manifest{ID: "user", API: 1, Enabled: true, Operations: "bin/server", Actions: []string{"user.create"}}
+	raw, _ := json.Marshal(map[string]modules.Manifest{"user": m})
+	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	if _, e := modules.Operation("actions", "user.create", reservedModuleRoute); e == nil {
+		t.Fatal("core override accepted")
+	}
+}
+func TestNativeModuleOwnerAndDirectoryPermissions(t *testing.T) {
+	m, _, _ := moduleFixture(t, moduleScript)
+	if f, e := modules.VerifyOperation(&m, uint32(os.Geteuid()+1)); e == nil {
+		f.Close()
+		t.Fatal("unexpected owner accepted")
+	}
+	os.Chmod(filepath.Join(modules.Root, "files"), 0775)
+	if f, e := modules.VerifyOperation(&m, uint32(os.Geteuid())); e == nil {
+		f.Close()
+		t.Fatal("group-writable directory accepted")
+	}
+}
+func TestNativeModuleExecPinsVerifiedInode(t *testing.T) {
+	m, _, path := moduleFixture(t, moduleScript)
+	f, e := modules.VerifyOperation(&m, uint32(os.Geteuid()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer f.Close()
+	if e = os.Rename(path, path+".old"); e != nil {
+		t.Fatal(e)
+	}
+	os.WriteFile(path, []byte("#!/bin/sh\nprintf '{\"error\":\"replacement ran\"}'\n"), 0755)
+	if raw, e := invokeModule(f, "query", "alice", map[string]any{}); e != nil || !bytes.Contains(raw, []byte("entries")) {
+		t.Fatalf("verified inode replaced: %s %v", raw, e)
+	}
+}
+func TestNativeModuleMaintenanceWaitIsBoundedAndCancellable(t *testing.T) {
+	moduleFixture(t, moduleScript)
+	lock, e := os.OpenFile(filepath.Join(modules.Root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer lock.Close()
+	if e = unix.Flock(int(lock.Fd()), unix.LOCK_EX); e != nil {
+		t.Fatal(e)
+	}
+	start := time.Now()
+	if f, e := moduleLock(quietReporter(), uint32(os.Geteuid())); e == nil {
+		f.Close()
+		t.Fatal("exclusive lifecycle lock bypassed")
+	} else if !strings.Contains(e.Error(), "maintenance") {
+		t.Fatal(e)
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Fatal("unbounded lock wait")
+	}
+	read, write, e := os.Pipe()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer read.Close()
+	defer write.Close()
+	write.Write([]byte{1})
+	r := moduleTestReporter(t, read)
+	if _, e = moduleLock(r, uint32(os.Geteuid())); !errors.Is(e, systemops.ErrCancelled) {
+		t.Fatal(e)
+	}
+	lock.Close()
+	os.Chmod(filepath.Join(modules.Root, ".lock"), 0660)
+	if f, e := modules.Lock(uint32(os.Geteuid())); e == nil {
+		f.Close()
+		t.Fatal("group-writable lifecycle lock accepted")
+	}
+}
+func TestRecoveryIgnoresSymlinkJournal(t *testing.T) {
+	dir := t.TempDir()
+	holder := filepath.Join(dir, ".panasms-copy-one")
+	os.Mkdir(holder, 0700)
+	destination := filepath.Join(dir, "destination")
+	target := filepath.Join(dir, "source")
+	secret := filepath.Join(dir, "unrelated")
+	raw, _ := json.Marshal(map[string]string{"source": target, "destination": destination, "phase": "private-value"})
+	os.WriteFile(secret, raw, 0600)
+	os.Symlink(secret, filepath.Join(holder, "transfer.json"))
+	req, _ := json.Marshal(systemops.Request{Action: "file.copy", Params: map[string]any{"target": target, "destination": destination}})
+	var out bytes.Buffer
+	if e := InspectModuleRecovery(bytes.NewReader(req), &out); e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(out.String(), "private-value") {
+		t.Fatal("symlink journal inspected")
+	}
+}
+
+func moduleTestReporter(t *testing.T, read *os.File) *systemops.Reporter {
+	t.Helper()
+	fd, e := unix.FcntlInt(read.Fd(), unix.F_DUPFD_CLOEXEC, 3)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := systemops.NewReporter(&bytes.Buffer{}, func(string) string { return strconv.Itoa(fd) })
+	t.Cleanup(func() { r.Close() })
+	return r
 }

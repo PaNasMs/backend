@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/exec"
@@ -16,7 +17,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 )
 
-func moduleRecovery(req *systemops.Request, username string, admin bool) (json.RawMessage, error) {
+func moduleRecovery(req *systemops.Request, username string, expectedUID int, admin bool) (json.RawMessage, error) {
 	path, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -25,15 +26,14 @@ func moduleRecovery(req *systemops.Request, username string, admin bool) (json.R
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(path, "module-recovery-inspect")
-	cmd.Stdin = bytes.NewReader(raw)
+	cmd := moduleRecoveryCommand(path, raw)
 	if !admin {
 		account, err := user.Lookup(username)
 		if err != nil {
 			return nil, err
 		}
 		uid, err := strconv.ParseUint(account.Uid, 10, 32)
-		if err != nil || uid == 0 {
+		if err != nil || uid == 0 || uid != uint64(expectedUID) {
 			return nil, fmt.Errorf("invalid user")
 		}
 		gid, err := strconv.ParseUint(account.Gid, 10, 32)
@@ -86,7 +86,7 @@ func InspectModuleRecovery(in io.Reader, out io.Writer) error {
 			if os.IsNotExist(e) {
 				checks = append(checks, map[string]string{"label": key, "value": value + ": absent"})
 			} else if e != nil {
-				return e
+				checks = append(checks, map[string]string{"label": key, "value": value + ": not inspectable"})
 			} else {
 				checks = append(checks, map[string]string{"label": key, "value": fmt.Sprintf("%s: present, %d bytes", value, info.Size())})
 			}
@@ -95,56 +95,65 @@ func InspectModuleRecovery(in io.Reader, out io.Writer) error {
 		target, _ := req.Params["target"].(string)
 		if filepath.IsAbs(destination) {
 			directory, e := os.Open(filepath.Dir(destination))
-			if e != nil {
-				return e
+			if e != nil && !os.IsNotExist(e) {
+				checks = append(checks, map[string]string{"label": "destination folder", "value": filepath.Dir(destination) + ": not inspectable"})
 			}
-			defer directory.Close()
-			found := 0
-			for found < 50 {
-				entries, e := directory.ReadDir(64)
-				if e != nil && e != io.EOF {
-					return e
-				}
-				for _, entry := range entries {
-					if found >= 50 {
+			if directory != nil {
+				defer directory.Close()
+				found := 0
+				for found < 50 {
+					entries, e := directory.ReadDir(64)
+					if e != nil && e != io.EOF {
+						checks = append(checks, map[string]string{"label": "destination folder", "value": directory.Name() + ": not inspectable"})
 						break
 					}
-					if !strings.HasPrefix(entry.Name(), ".panasms-copy-") {
-						continue
-					}
-					found++
-					if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-						continue
-					}
-					holder := filepath.Join(directory.Name(), entry.Name())
-					journal := filepath.Join(holder, "transfer.json")
-					info, e := os.Lstat(journal)
-					if e != nil || !info.Mode().IsRegular() || info.Size() > 16384 {
-						continue
-					}
-					f, e := os.Open(journal)
-					if e != nil {
-						continue
-					}
-					raw, e := io.ReadAll(io.LimitReader(f, 16385))
-					f.Close()
-					if e != nil || len(raw) > 16384 {
-						continue
-					}
-					var state map[string]any
-					if json.Unmarshal(raw, &state) != nil {
-						continue
-					}
-					if state["destination"] == destination && state["source"] == target {
-						phase, _ := state["phase"].(string)
-						if phase == "" {
-							phase = "unknown"
+					for _, entry := range entries {
+						if found >= 50 {
+							break
 						}
-						checks = append(checks, map[string]string{"label": "Retained transfer journal", "value": holder + ": " + phase})
+						if !strings.HasPrefix(entry.Name(), ".panasms-copy-") {
+							continue
+						}
+						found++
+						if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+							continue
+						}
+						holder := filepath.Join(directory.Name(), entry.Name())
+						journal := filepath.Join(holder, "transfer.json")
+						info, e := os.Lstat(journal)
+						if e != nil || !info.Mode().IsRegular() || info.Size() > 16384 {
+							continue
+						}
+						fd, e := unix.Open(journal, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+						if e != nil {
+							continue
+						}
+						f := os.NewFile(uintptr(fd), "transfer journal")
+						opened, e := f.Stat()
+						if e != nil || !opened.Mode().IsRegular() {
+							f.Close()
+							continue
+						}
+						raw, e := io.ReadAll(io.LimitReader(f, 16385))
+						f.Close()
+						if e != nil || len(raw) > 16384 {
+							continue
+						}
+						var state map[string]any
+						if json.Unmarshal(raw, &state) != nil {
+							continue
+						}
+						if state["destination"] == destination && state["source"] == target {
+							phase, _ := state["phase"].(string)
+							if phase == "" {
+								phase = "unknown"
+							}
+							checks = append(checks, map[string]string{"label": "Retained transfer journal", "value": holder + ": " + phase})
+						}
 					}
-				}
-				if e == io.EOF {
-					break
+					if e == io.EOF {
+						break
+					}
 				}
 			}
 		}
@@ -159,4 +168,11 @@ func InspectModuleRecovery(in io.Reader, out io.Writer) error {
 		}
 	}
 	return systemops.WriteResult(out, map[string]any{"message": message, "checks": checks, "route": route, "recoveryAction": nil})
+}
+
+func moduleRecoveryCommand(path string, raw []byte) *exec.Cmd {
+	cmd := exec.Command(path, "module-recovery-inspect")
+	cmd.Stdin = bytes.NewReader(raw)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	return cmd
 }

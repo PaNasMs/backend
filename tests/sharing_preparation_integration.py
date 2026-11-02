@@ -100,7 +100,9 @@ def main():
             assert package_state.exists(), 'Inject failure before target package-resume for this reverse-transition test'
             record = json.loads(package_state.read_text())
             assert record['sourceVersion'] == args.old_version and record['targetVersion'] == target
-        assert hashlib.sha256(source.read_bytes()).hexdigest() != args.old_updater_sha256
+        assert command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype') == target
+        if not prepared:
+            assert hashlib.sha256(source.read_bytes()).hexdigest() != args.old_updater_sha256
         old.restore()
         assert command('dpkg-query', '-W', '-f=${db:Status-Status} ${Version}', 'panasms-prototype') == 'installed ' + args.old_version
         assert capture() == baseline, 'Old in-memory rollback changed the original sharing policy'

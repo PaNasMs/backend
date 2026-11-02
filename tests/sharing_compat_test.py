@@ -45,6 +45,45 @@ class Preparation(unittest.TestCase):
             with self.assertRaises(Rejected):
                 compat.capabilities()
 
+    def test_legacy_reupgrade_consumes_only_proven_completed_package_record(self):
+        template = (Path(__file__).parents[1] / 'packaging/preinst').read_text().split("<<'MODE'\n", 1)[1].split('\nMODE', 1)[0]
+        template = template.replace('/var/lib/panasms-installer', str(self.root / 'installer'))
+        template = template.replace('/var/lib/panasms-agent', str(self.root / 'agent'))
+        template = template.replace('/usr/lib/panasms', str(self.root / 'usr'))
+        template = template.replace('.st_uid != 0', '.st_uid != os.getuid()')
+        binary = self.root / 'bin'
+        binary.mkdir()
+        query = binary / 'dpkg-query'
+        query.write_text('#!/bin/sh\nif [ "$1" = -L ]; then printf "%s\\n" "$TEST_DECLARED"; else printf "%s" "$TEST_VERSION"; fi\n')
+        query.chmod(0o755)
+        installer = self.root / 'installer'
+        installer.mkdir(mode=0o750)
+        record = installer / 'sharing-package-state.json'
+        value = {'schema': 1, 'sourceVersion': '1.0', 'targetVersion': '0.9', 'timerActive': True}
+        compat.atomic(record, json.dumps(value).encode())
+        environment = {**os.environ, 'PATH': str(binary) + ':' + os.environ['PATH'], 'TEST_VERSION': '0.9', 'TEST_DECLARED': ''}
+        declared = str(self.root / 'usr/management/sharing_compat.py')
+        for changes in ({'TEST_VERSION': 'other'}, {'TEST_DECLARED': declared}):
+            result = subprocess.run([sys.executable, '-c', template, 'upgrade', '0.9'],
+                                    env={**environment, **changes}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(json.loads(record.read_text()), value)
+        (self.root / 'agent').mkdir()
+        guard = self.root / 'agent/sharing-restore.json'
+        guard.write_bytes(b'pending')
+        result = subprocess.run([sys.executable, '-c', template, 'upgrade', '0.9'], env=environment, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(record.exists())
+        guard.unlink()
+        # A lost directory fsync may leave the authorized removal visible; retry is idempotent.
+        fault = 'import os\ndef fail(fd): raise OSError("injected fsync failure")\nos.fsync=fail\n' + template
+        result = subprocess.run([sys.executable, '-c', fault, 'upgrade', '0.9'], env=environment, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(record.exists())
+        subprocess.run([sys.executable, '-c', template, 'upgrade', '0.9'], env=environment, check=True)
+        self.assertFalse(record.exists())
+        self.assertFalse((installer / 'sharing-package-install').exists())
+
     def test_protocol_guard_precedes_vendor_pre_start_export_reload(self):
         dropin = (Path(__file__).parents[1] / 'packaging/panasms-sharing-restore.conf').read_text()
         self.assertIn('ExecCondition=/usr/bin/python3 /usr/lib/panasms/management/sharing_compat.py resume-check', dropin)

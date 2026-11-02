@@ -37,6 +37,12 @@ func TestUnavailableUdevMetadataIsNotBlankFilesystem(t *testing.T) {
 			t.Fatalf("uninitialized cache %q accepted", data)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(root, "b8:1"), []byte("I:123\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(); err != nil {
+		t.Fatal(err)
+	}
 	rows[0]["maj:min"] = "../../etc/passwd"
 	if err := check(); err == nil {
 		t.Fatal("invalid device number accepted")

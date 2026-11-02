@@ -65,7 +65,7 @@ func TestMemberStorageQueryHidesSleepStateSerialKeys(t *testing.T) {
 			}
 			return auth.Identity{Role: role}, nil
 		}
-		original := json.RawMessage(`{"sleepStatus":{"private-disk-serial:42":{"device":"/dev/sda","minutes":0,"status":"applied"}}}`)
+		original := json.RawMessage(`{"sleepStatus":{"private-disk-serial:42":{"device":"/dev/sda","minutes":0,"status":"error","error":"sleep command failed"}}}`)
 		d.Query = func(context.Context, string, string, string) (json.RawMessage, error) { return original, nil }
 		result, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: "storage-options"}, reporter())
 		if err != nil {
@@ -79,8 +79,11 @@ func TestMemberStorageQueryHidesSleepStateSerialKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		states, ok := output["sleepStatus"].(map[string]any)
-		if !ok || (!admin && len(states) != 0) || (admin && len(states) != 1) {
+		if !ok || len(states) != 1 {
 			t.Fatalf("%v", output)
+		}
+		if !strings.Contains(string(result), "sleep command failed") || !strings.Contains(string(result), "/dev/sda") {
+			t.Fatal("member observation lost", string(result))
 		}
 		if !strings.Contains(string(original), "private-disk-serial") {
 			t.Fatal("admin input mutated")

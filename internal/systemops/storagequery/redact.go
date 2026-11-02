@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 )
 
 func Redact(raw json.RawMessage) (json.RawMessage, error) {
@@ -18,10 +20,19 @@ func Redact(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("invalid storage result")
 	}
 	if object, ok := value.(map[string]any); ok {
-		// Disk-sleep state keys contain hardware serials, even after removing
-		// serial fields. Members cannot correlate those admin-only identities.
-		if _, exists := object["sleepStatus"]; exists {
-			object["sleepStatus"] = map[string]any{}
+		// State keys contain serials. These per-response handles preserve all
+		// observations, including stale entries sharing a device path.
+		if states, ok := object["sleepStatus"].(map[string]any); ok {
+			keys := make([]string, 0, len(states))
+			for key := range states {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			redacted := make(map[string]any, len(states))
+			for index, key := range keys {
+				redacted["state-"+strconv.Itoa(index)] = states[key]
+			}
+			object["sleepStatus"] = redacted
 		}
 	}
 	var visit func(any)

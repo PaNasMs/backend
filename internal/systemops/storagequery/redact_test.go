@@ -38,7 +38,24 @@ func TestRedactionPreservesExactByteSizes(t *testing.T) {
 func TestSleepStatusSerialKeysAreNotReturnedToMembers(t *testing.T) {
 	raw := json.RawMessage(`{"sleepStatus":{"private-disk:42":{"device":"/dev/sda"}},"sleepRuntime":{"total":1}}`)
 	result, err := Redact(raw)
-	if err != nil || strings.Contains(string(result), "private-disk") || !strings.Contains(string(result), `"sleepStatus":{}`) || !strings.Contains(string(result), `"total":1`) {
+	if err != nil || strings.Contains(string(result), "private-disk") || !strings.Contains(string(result), `"state-0":{"device":"/dev/sda"}`) || !strings.Contains(string(result), `"total":1`) {
 		t.Fatalf("%s %v", result, err)
+	}
+}
+
+func TestSleepStatusRetainsRepeatedDeviceObservations(t *testing.T) {
+	raw := json.RawMessage(`{"sleepStatus":{"private-old:1":{"device":"/dev/sda","status":"error","error":"command failed","serial":"private-old"},"private-new:2":{"device":"/dev/sda","status":"busy"}}}`)
+	result, err := Redact(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value struct {
+		States map[string]map[string]any `json:"sleepStatus"`
+	}
+	if err := json.Unmarshal(result, &value); err != nil {
+		t.Fatal(err)
+	}
+	if len(value.States) != 2 || strings.Contains(string(result), "private-") || !strings.Contains(string(result), "command failed") || !strings.Contains(string(result), `"status":"busy"`) {
+		t.Fatalf("%s", result)
 	}
 }

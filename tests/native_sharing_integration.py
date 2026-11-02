@@ -8,12 +8,14 @@ clients run in a private root. The systemctl fixture manages only owned daemons;
 no guest system bus, APT or service manager is exposed.
 """
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -155,9 +157,14 @@ def namespace(root, loop, binary, nonce):
         if Path('/etc', name).is_file():
             shutil.copy(Path('/etc', name), root / 'etc' / name)
     (root / 'etc/hosts').write_text('127.0.0.1 localhost\n')
+    (root / 'etc/pam.d/panasms').write_text('auth required pam_unix.so\naccount required pam_unix.so\npassword required pam_unix.so\n')
+    (root / 'etc/pam.d/passwd').write_text('password required pam_unix.so\n')
     (root / 'etc/pam.d/samba').write_text('account required pam_unix.so\nsession required pam_permit.so\n')
     (root / 'etc/pam.d/other').write_text('auth required pam_unix.so\naccount required pam_unix.so\npassword required pam_unix.so\nsession required pam_permit.so\n')
-    shutil.copy(binary, root / 'usr/lib/panasms/panasms-system-helper')
+    for name in ('panasms-system-helper', 'panasms-agent', 'panasms-password'):
+        source = Path(binary).parent / name
+        if source.is_file():
+            shutil.copy(source, root / 'usr/lib/panasms' / name)
     shutil.copy(__file__, root / 'fixture/harness.py')
     os.chroot(root)
     os.chdir('/fixture')
@@ -283,6 +290,10 @@ def scenarios():
         assert json.loads(Path('/etc/panasms/sharing.json').read_text())['accounts']['alice']['status'] == 'error'
         print('PASS real failed SMB sync revokes stale credentials', flush=True)
         cli('sync', {'user': 'alice', 'password': passwords['alice']})
+        if Path('/usr/lib/panasms/panasms-agent').is_file() and Path('/usr/lib/panasms/panasms-password').is_file():
+            pam_scenarios(passwords, processes)
+        else:
+            print('SKIP real PAM endpoint: supply PAM-enabled agent and password binaries', flush=True)
         account_scenarios(passwords)
         failure_scenarios(params, share, passwords['alice'])
         nfs_scenarios(params, share, processes)
@@ -291,6 +302,57 @@ def scenarios():
             p.terminate()
         for p in processes:
             p.wait(timeout=10)
+
+
+def pam_scenarios(passwords, processes):
+    policy = Path('/etc/panasms/accounts.json')
+    previous = policy.read_text()
+    policy.write_text(json.dumps({'bob': {'uid': 15002, 'panel': True}, 'alice': {'uid': 15001, 'panel': True}}))
+    log = open('/fixture/agent.log', 'w')
+    agent = subprocess.Popen(['/usr/lib/panasms/panasms-agent', '-socket', '/run/fixture-agent.sock', '-peer-uid', '0', '-peer-gid', '0'], env={**os.environ, 'PANASMS_AUTH_MODE': 'sudo'}, stdout=log, stderr=log, start_new_session=True)
+    processes.append(agent)
+    class Connection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(25)
+            self.sock.connect('/run/fixture-agent.sock')
+    def authenticate(**extra):
+        client = Connection('localhost')
+        try:
+            client.request('POST', '/authenticate', body=json.dumps({'username': 'alice', 'password': passwords['alice'], **extra}), headers={'Content-Type': 'application/json'})
+            response = client.getresponse()
+            body = response.read()
+            assert response.status == 200, (response.status, body.decode())
+            return json.loads(body)
+        finally:
+            client.close()
+    try:
+        for _ in range(100):
+            if Path('/run/fixture-agent.sock').exists():
+                break
+            assert agent.poll() is None, Path('/fixture/agent.log').read_text()
+            time.sleep(.05)
+        operation('share.account', {'target': 'alice', 'enabled': True})
+        authenticate(proofOnly=True)
+        assert json.loads(Path('/etc/panasms/sharing.json').read_text())['accounts']['alice']['status'] == 'pending'
+        assert not authenticate().get('smbSyncWarning')
+        assert json.loads(Path('/etc/panasms/sharing.json').read_text())['accounts']['alice']['status'] == 'ready'
+        smb('alice', passwords['alice'], 'ls')
+        next_password = secrets.token_urlsafe(24)
+        assert not authenticate(proofOnly=True, newPassword=next_password).get('smbSyncWarning')
+        passwords['alice'] = next_password
+        smb('alice', next_password, 'ls')
+        Path('/fixture/fail-sync').touch()
+        assert authenticate().get('smbSyncWarning') is True
+        smb('alice', next_password, 'ls', success=False)
+        Path('/fixture/fail-sync').unlink()
+        assert not authenticate().get('smbSyncWarning')
+        smb('alice', next_password, 'ls')
+        assert all(p not in Path('/fixture/agent.log').read_text() for p in passwords.values())
+        print('PASS actual PAM login/proof-only/password-renewal and nonblocking SMB warning/retry', flush=True)
+    finally:
+        policy.write_text(previous)
+        Path('/fixture/fail-sync').unlink(missing_ok=True)
 
 
 def account_scenarios(passwords):

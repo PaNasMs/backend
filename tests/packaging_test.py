@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
+from maintenance_fixture import MaintenanceFixture
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -24,16 +26,15 @@ class PackagingTest(unittest.TestCase):
         ]:
             with self.subTest(gecos=gecos, home=home, shell=shell), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
+                fixture = MaintenanceFixture(root)
                 for name, body in {
                     "getent": '#!/bin/sh\nprintf "%s\\n" "$TEST_ACCOUNT"\n',
                     "usermod": '#!/bin/sh\nprintf "%s\\n" "$*" > "$TEST_NORMALIZED"\n',
                 }.items():
-                    command = root / name
-                    command.write_text(body)
-                    command.chmod(0o755)
+                    fixture.mock(name, body.removeprefix("#!/bin/sh\n"))
                 normalized = root / "normalized"
-                result = subprocess.run(["sh", "-c", check, "postinst", "configure"],
-                    env=dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"],
+                result = subprocess.run([str(fixture.bin / "sh"), "-c", fixture.rebase(check), "postinst", "configure"],
+                    env=dict(fixture.env,
                         TEST_ACCOUNT=f"panasms:x:111:112:{gecos}:{home}:{shell}", TEST_NORMALIZED=str(normalized)), capture_output=True)
                 self.assertEqual(result.returncode, expected, result.stderr)
                 if expected == 0:
@@ -109,15 +110,16 @@ class PackagingTest(unittest.TestCase):
                 state.mkdir(parents=True)
                 sentinel = state / "pinas.env"
                 sentinel.write_text("existing configuration")
-                script = (ROOT / component / "preinst").read_text()
-                for prefix in ("/etc/", "/var/lib/", "/usr/lib/"):
-                    script = script.replace(prefix, str(root) + prefix)
+                fixture = MaintenanceFixture(root)
+                script = fixture.rebase((ROOT / component / "preinst").read_text())
                 path = root / "preinst"
                 path.write_text(script)
-                result = subprocess.run(["sh", str(path), "install"], capture_output=True)
+                result = subprocess.run([str(fixture.bin / "sh"), str(path), "install"],
+                                        env=fixture.env, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b"Existing legacy NAS installation", result.stderr)
                 self.assertEqual(sentinel.read_text(), "existing configuration")
+                self.assertEqual(fixture.calls(), [])
 
     def test_hardware_detection_without_control_writes(self):
         inspect = runpy.run_path(str(ROOT / "packaging/panasms-inspect-hardware"))["inspect"]
@@ -189,27 +191,18 @@ class PackagingTest(unittest.TestCase):
             sentinel.write_text("user data")
             data = root / "data/important"
             data.write_text("storage")
-            (root / "bin/systemctl").write_text("#!/bin/sh\nexit 0\n")
-            (root / "bin/systemctl").chmod(0o755)
-            (root / "bin/udevadm").write_text("#!/bin/sh\nexit 0\n")
-            (root / "bin/udevadm").chmod(0o755)
+            fixture = MaintenanceFixture(root)
             runtime = root / "run/panasms-filesystems/sde1.json"
             runtime.write_text("cache")
             preserved_runtime = root / "run/panasms-filesystems/user-note"
             preserved_runtime.write_text("keep")
-            script = (ROOT / "packaging/postrm").read_text()
-            for prefix in [
-                "/etc/panasms",
-                "/var/lib/panasms",
-                "/usr/lib/panasms",
-                "/etc/systemd/system",
-                "/run/panasms-filesystems",
-            ]:
-                script = script.replace(prefix, str(root) + prefix)
+            script = fixture.rebase((ROOT / "packaging/postrm").read_text())
             path = root / "postrm"
             path.write_text(script)
-            env = dict(os.environ, PATH=str(root / "bin") + ":" + os.environ["PATH"])
-            subprocess.run(["sh", str(path), "purge"], env=env, check=True, capture_output=True)
+            env = fixture.env
+            subprocess.run([str(fixture.bin / "sh"), str(path), "purge"], env=env, check=True, capture_output=True)
+            self.assertIn("systemctl try-restart avahi-daemon.service", fixture.calls())
+            self.assertIn("udevadm control --reload-rules", fixture.calls())
             self.assertTrue(all(not p.exists() for p in owned))
             self.assertEqual(sentinel.read_text(), "user data")
             self.assertEqual(data.read_text(), "storage")
@@ -218,32 +211,31 @@ class PackagingTest(unittest.TestCase):
             self.assertEqual(pycache.exists(), os.geteuid() != 0)
             self.assertEqual(runtime.exists(), os.geteuid() != 0)
             self.assertEqual(preserved_runtime.read_text(), "keep")
-            subprocess.run(["sh", str(path), "purge"], env=env, check=True, capture_output=True)
+            subprocess.run([str(fixture.bin / "sh"), str(path), "purge"], env=env, check=True, capture_output=True)
 
     def test_active_job_blocks_package_change(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             dbpath = root / "jobs.db"
-            log = root / "systemctl.log"
+            fixture = MaintenanceFixture(root)
+            log = fixture.log
             with sqlite3.connect(dbpath) as db:
                 db.execute("create table jobs(status text)")
                 db.execute("insert into jobs values ('running')")
             db.close()
-            tool = root / "systemctl"
-            tool.write_text('#!/bin/sh\necho "$@" >> "' + str(log) + '"\n')
-            tool.chmod(0o755)
-            script = (
-                (ROOT / "packaging/prerm").read_text().replace("/var/lib/panasms-agent/jobs.db", str(dbpath))
-            )
-            wifi = root / "wifi.py"
-            wifi.write_text("")
-            helper = root / "panasms-system-helper"
-            helper.write_text('#!/bin/sh\necho "helper $@" >> "' + str(log) + '"\n')
+            script = fixture.rebase((ROOT / "packaging/prerm").read_text())
+            db_in_script = root / "var/lib/panasms-agent/jobs.db"
+            db_in_script.parent.mkdir(parents=True)
+            dbpath.rename(db_in_script)
+            dbpath = db_in_script
+            helper = root / "usr/lib/panasms/panasms-system-helper"
+            helper.parent.mkdir(parents=True)
+            helper.write_text('#!/bin/sh\nprintf "%s\\n" "helper $*" >> "$FIXTURE_SERVICE_LOG"\n')
             helper.chmod(0o755)
-            script = script.replace("/usr/lib/panasms/panasms-system-helper", str(helper))
-            script = script.replace("/usr/lib/panasms/management/storage_reshape.py", str(wifi)).replace("/usr/lib/panasms/management/wifi.py", str(wifi)).replace("/usr/lib/panasms/management/sharing.py", str(wifi)).replace("/usr/lib/panasms/sharing-install.py", str(wifi))
-            for prefix in ("/etc/NetworkManager/conf.d", "/run/panasms-disk-sleep", "/var/lib/panasms-updates", "/var/lib/panasms-agent"):
-                script = script.replace(prefix, str(root) + prefix)
+            for name in ("management/storage_reshape.py", "management/wifi.py", "management/sharing.py", "sharing-install.py"):
+                stub = helper.parent / name
+                stub.parent.mkdir(parents=True, exist_ok=True)
+                stub.write_text("")
             policies = root / "etc/NetworkManager/conf.d"
             policies.mkdir(parents=True)
             owned = policies / "90-panasms-wifi-001122334455.conf"
@@ -252,19 +244,19 @@ class PackagingTest(unittest.TestCase):
             unowned.write_text("keep")
             path = root / "prerm"
             path.write_text(script)
-            env = dict(os.environ, PATH=str(root) + ":" + os.environ["PATH"])
-            result = subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True)
+            env = fixture.env
+            result = subprocess.run([str(fixture.bin / "sh"), str(path), "remove"], env=env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(log.exists())
             with sqlite3.connect(dbpath) as db:
                 db.execute("update jobs set status='succeeded'")
             db.close()
-            subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
+            subprocess.run([str(fixture.bin / "sh"), str(path), "remove"], env=env, capture_output=True, check=True)
             self.assertIn("stop panasms-core.service panasms-agent.service", log.read_text())
             self.assertIn("helper network-access remove", log.read_text())
             self.assertTrue(owned.exists())
-            tool.write_text('#!/bin/sh\nif [ "$1" = is-active ]; then exit 3; fi\n')
-            subprocess.run(["sh", str(path), "remove"], env=env, capture_output=True, check=True)
+            env["FIXTURE_INACTIVE"] = "1"
+            subprocess.run([str(fixture.bin / "sh"), str(path), "remove"], env=env, capture_output=True, check=True)
             self.assertFalse(owned.exists())
             self.assertEqual(unowned.read_text(), "keep")
 
@@ -275,16 +267,15 @@ class PackagingTest(unittest.TestCase):
             (root / "outside").mkdir()
             (root / "outside/tls.key").write_text("preserve")
             (root / "etc/panasms").symlink_to(root / "outside", target_is_directory=True)
-            script = (
-                (ROOT / "packaging/postrm")
-                .read_text()
-                .replace("/etc/panasms", str(root / "etc/panasms"))
-                .replace("systemctl daemon-reload || true", ":")
-            )
+            fixture = MaintenanceFixture(root)
             p = root / "script"
-            p.write_text(script)
-            result = subprocess.run(["sh", str(p), "purge"], capture_output=True)
+            p.write_text(fixture.rebase((ROOT / "packaging/postrm").read_text()))
+            result = subprocess.run([str(fixture.bin / "sh"), str(p), "purge"],
+                                    env=fixture.env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"Refusing purge through symlink:", result.stderr)
+            self.assertEqual(fixture.calls(), ["systemctl daemon-reload",
+                             "systemctl try-restart avahi-daemon.service", "udevadm control --reload-rules"])
             self.assertEqual((root / "outside/tls.key").read_text(), "preserve")
 
 

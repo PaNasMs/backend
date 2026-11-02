@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from maintenance_fixture import MaintenanceFixture
+
 spec = importlib.util.spec_from_file_location(
     "namespace_migration", Path(__file__).resolve().parents[1] / "scripts/migrate-ostojaos.py"
 )
@@ -24,7 +26,9 @@ class NamespaceMigrationTest(unittest.TestCase):
             self.assertEqual((backup / hook.name).read_bytes(), original)
             self.assertEqual((backup / hook.name).stat().st_mode & 0o777, 0o755)
             import subprocess
-            subprocess.run(['sh', str(hook), 'remove'], check=True)
+            fixture = MaintenanceFixture(root)
+            subprocess.run([str(fixture.bin / 'sh'), str(hook), 'remove'], env=fixture.env, check=True)
+            self.assertEqual(fixture.calls(), [])
 
     def test_state_move_preserves_owner_permissions_and_payload(self):
         with tempfile.TemporaryDirectory() as folder:

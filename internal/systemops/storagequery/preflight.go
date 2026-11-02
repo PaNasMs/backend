@@ -1,6 +1,7 @@
 package storagequery
 
 import (
+	"encoding/json"
 	"fmt"
 	"panasms.local/backend/internal/systemops"
 	"sort"
@@ -43,6 +44,8 @@ func readOnly(value any) bool {
 	switch v := value.(type) {
 	case bool:
 		return v
+	case json.Number:
+		return v != "0"
 	case float64:
 		return v != 0
 	case string:

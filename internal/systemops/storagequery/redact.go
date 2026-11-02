@@ -1,11 +1,21 @@
 package storagequery
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+)
 
 func Redact(raw json.RawMessage) (json.RawMessage, error) {
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("invalid storage result")
 	}
 	var visit func(any)
 	visit = func(value any) {

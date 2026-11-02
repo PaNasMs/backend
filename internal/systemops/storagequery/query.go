@@ -3,8 +3,10 @@ package storagequery
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"panasms.local/backend/internal/system"
@@ -94,9 +96,9 @@ func (s *service) raidCandidates(ctx context.Context, target string) (any, error
 	if err != nil || len(members) == 0 {
 		return nil, rejectf("Could not determine array member sizes")
 	}
-	var minimum float64
+	var minimum uint64
 	for index, member := range members {
-		size, ok := p.Inventory.Rows["/dev/"+member]["size"].(float64)
+		size, ok := deviceSize(p.Inventory.Rows["/dev/"+member]["size"])
 		if !ok || size <= 0 {
 			return nil, rejectf("Could not determine array member sizes")
 		}
@@ -108,7 +110,7 @@ func (s *service) raidCandidates(ctx context.Context, target string) (any, error
 	for _, path := range p.Inventory.Order {
 		row := p.Inventory.Rows[path]
 		kind, _ := row["type"].(string)
-		size, ok := row["size"].(float64)
+		size, ok := deviceSize(row["size"])
 		fs, _ := row["fstype"].(string)
 		if (kind != "disk" && kind != "part") || fs != "" || !ok || size < minimum {
 			continue
@@ -130,11 +132,15 @@ func validateObservation(row map[string]any) error {
 	if kind, ok := row["type"].(string); !ok || kind == "" {
 		return bad()
 	}
-	if size, ok := row["size"].(float64); !ok || size < 0 {
+	if _, ok := deviceSize(row["size"]); !ok {
 		return bad()
 	}
 	switch value := row["ro"].(type) {
 	case bool:
+	case json.Number:
+		if value != "0" && value != "1" {
+			return bad()
+		}
 	case float64:
 		if value != 0 && value != 1 {
 			return bad()
@@ -171,4 +177,19 @@ func Query(ctx context.Context, view, target string) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.Marshal(value)
+}
+
+func deviceSize(value any) (uint64, bool) {
+	switch n := value.(type) {
+	case json.Number:
+		size, err := strconv.ParseUint(string(n), 10, 64)
+		return size, err == nil
+	case float64:
+		if n < 0 || n >= 18446744073709551616.0 || math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n {
+			return 0, false
+		}
+		return uint64(n), true
+	default:
+		return 0, false
+	}
 }

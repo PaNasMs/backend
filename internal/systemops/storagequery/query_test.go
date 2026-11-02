@@ -102,3 +102,45 @@ func TestPartialInventoryCannotBecomeSafeCandidate(t *testing.T) {
 		}
 	}
 }
+
+func TestDeviceSizeUsesExactUnsignedBytes(t *testing.T) {
+	a, ok := deviceSize(json.Number("9007199254740992"))
+	if !ok {
+		t.Fatal("valid bytes rejected")
+	}
+	b, ok := deviceSize(json.Number("9007199254740993"))
+	if !ok || b != a+1 {
+		t.Fatal("byte precision lost")
+	}
+	for _, value := range []any{json.Number("-1"), json.Number("18446744073709551616"), float64(1.5), "100"} {
+		if _, ok := deviceSize(value); ok {
+			t.Fatalf("invalid size %v accepted", value)
+		}
+	}
+}
+
+func TestConfiguredSystemAliasProtectsCanonicalDevice(t *testing.T) {
+	root := t.TempDir()
+	sys := filepath.Join(root, "sys")
+	if err := os.MkdirAll(filepath.Join(sys, "sda/slaves"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fstab"), []byte("/dev/disk/by-id/system / ext4 defaults 0 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := &service{sys, filepath.Join(root, "fstab"), func(context.Context) ([]map[string]any, error) {
+		return []map[string]any{{"path": "/dev/sda", "kname": "sda", "type": "disk", "ro": false, "size": float64(100), "mountpoints": []any{nil}}}, nil
+	}, func(path string) (string, error) {
+		if path == "/dev/disk/by-id/system" {
+			return "/dev/sda", nil
+		}
+		return path, nil
+	}}
+	p, err := s.preflight(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Protected("/dev/sda", false); err == nil {
+		t.Fatal("system alias bypassed protection")
+	}
+}

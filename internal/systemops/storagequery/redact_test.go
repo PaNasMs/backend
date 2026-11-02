@@ -23,3 +23,14 @@ func TestMemberRedactionRecursesWithoutChangingAdminInput(t *testing.T) {
 		t.Fatal("malformed result accepted")
 	}
 }
+
+func TestRedactionPreservesExactByteSizes(t *testing.T) {
+	raw := json.RawMessage(`{"serial":"private","size":9007199254740993}`)
+	result, err := Redact(raw)
+	if err != nil || string(result) != `{"size":9007199254740993}` {
+		t.Fatalf("%s %v", result, err)
+	}
+	if _, err := Redact(json.RawMessage(`{} {}`)); err == nil {
+		t.Fatal("trailing result accepted")
+	}
+}

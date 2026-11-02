@@ -1,9 +1,11 @@
 package system
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
 // BlockDevicesRead only obtains lsblk metadata. It does not run SMART, fsck or
@@ -20,8 +22,13 @@ func decodeBlockDevices(raw []byte) ([]map[string]any, error) {
 	var result struct {
 		Devices []map[string]any `json:"blockdevices"`
 	}
-	if err := json.Unmarshal(raw, &result); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("invalid block device inventory")
 	}
 	if result.Devices == nil {
 		return nil, fmt.Errorf("missing block device inventory")

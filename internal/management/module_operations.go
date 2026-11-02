@@ -77,6 +77,12 @@ func moduleHandler(core systemops.Handler, authorize func(string) (auth.Identity
 		if m == nil || !m.Enabled || m.Operations == "" {
 			return nil, deny("Module is not installed or is disabled")
 		}
+		if m.ID == "file" {
+			return nil, deny("Module registration uses the reserved Files namespace")
+		}
+		if id.Role != "admin" && m.ID != "files" {
+			return nil, deny("Administrator permissions required")
+		}
 		executable, err := modules.VerifyOperation(m, trustedUID)
 		if err != nil {
 			return nil, err

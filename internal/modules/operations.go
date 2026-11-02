@@ -37,7 +37,7 @@ func Operation(kind, name string, reserved func(string, string) bool) (*Manifest
 		return nil, err
 	}
 	var selected, disabled *Manifest
-	registrations := map[string]bool{}
+	registrations := map[string]string{}
 	for key, m := range entries {
 		if !m.Enabled {
 			names := m.Actions
@@ -66,7 +66,7 @@ func Operation(kind, name string, reserved func(string, string) bool) (*Manifest
 		if selected != nil {
 			return nil, errors.New("conflicting module registration")
 		}
-		if !ID.MatchString(key) || m.ID != key || key == "file" {
+		if !ID.MatchString(key) || m.ID != key {
 			return nil, errors.New("invalid module registration")
 		}
 		for k, names := range map[string][]string{"actions": m.Actions, "queries": m.Queries} {
@@ -75,10 +75,14 @@ func Operation(kind, name string, reserved func(string, string) bool) (*Manifest
 				prefix = "file"
 			}
 			for _, n := range names {
-				if n != prefix && !strings.HasPrefix(n, prefix+".") || reserved(k, n) || registrations[k+":"+n] {
+				owner, seen := registrations[k+":"+n]
+				if n != prefix && !strings.HasPrefix(n, prefix+".") || reserved(k, n) || (seen && owner != key) {
 					return nil, errors.New("conflicting module registration")
 				}
-				registrations[k+":"+n] = true
+				if seen {
+					continue
+				}
+				registrations[k+":"+n] = key
 				if k == kind && n == name {
 					copy := m
 					selected = &copy

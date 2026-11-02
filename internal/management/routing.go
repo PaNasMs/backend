@@ -332,6 +332,9 @@ func moduleDestination(kind, name string) (impl, error) {
 	if err != nil {
 		return legacy, err
 	}
+	if m != nil && m.ID == "file" && (m.Operations != "" || kind == "actions" && memberModuleActions[name]) {
+		return legacy, errors.New("Module registration uses reserved Files actions")
+	}
 	if m != nil && m.Operations != "" {
 		return goNative, nil
 	}

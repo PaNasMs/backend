@@ -343,12 +343,13 @@ class NativeOperations(unittest.TestCase):
             self.assertEqual(m.load_operations('actions', 'file.copy'), [])
 
     def test_python_only_module_remains_loadable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            payload = root / 'example' / 'backend' / 'operations.py'
-            payload.parent.mkdir(parents=True)
-            payload.write_text('ACTIONS = ["example.run"]\ndef plan(action, params, user): return {"actor": user}\n')
-            module = {'enabled': True, 'actions': ['example.run'], 'files': {'backend/operations.py': 'a' * 64}}
-            with patch.object(m, 'ROOT', root), patch.object(m, 'registry', return_value={'example': module}):
-                handlers = m.load_operations('actions', 'example.run')
-                self.assertEqual(handlers[0].plan('example.run', {}, 'alice'), {'actor': 'alice'})
+        for mid, action in (('example', 'example.run'), ('file', 'file.custom')):
+            with self.subTest(module=mid), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                payload = root / mid / 'backend' / 'operations.py'
+                payload.parent.mkdir(parents=True)
+                payload.write_text(f'ACTIONS = [{action!r}]\ndef plan(action, params, user): return {{"actor": user}}\n')
+                module = {'enabled': True, 'actions': [action], 'files': {'backend/operations.py': 'a' * 64}}
+                with patch.object(m, 'ROOT', root), patch.object(m, 'registry', return_value={mid: module}):
+                    handlers = m.load_operations('actions', action)
+                    self.assertEqual(handlers[0].plan(action, {}, 'alice'), {'actor': 'alice'})

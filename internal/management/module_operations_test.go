@@ -152,12 +152,10 @@ func TestNativeModuleStalePlanDisabledAndChangedPayload(t *testing.T) {
 	}
 }
 func TestNativeModuleRegistrationAndFilesystemRejections(t *testing.T) {
-	for _, scenario := range []string{"duplicate", "core", "protocol", "symlink", "writable"} {
+	for _, scenario := range []string{"core", "protocol", "symlink", "writable"} {
 		t.Run(scenario, func(t *testing.T) {
 			m, save, path := moduleFixture(t, moduleScript)
 			switch scenario {
-			case "duplicate":
-				m.Actions = append(m.Actions, "file.copy")
 			case "core":
 				m.Actions = append(m.Actions, "user.create")
 			case "protocol":
@@ -571,10 +569,73 @@ func TestInvalidUnrelatedInstalledModuleDoesNotBlockFiles(t *testing.T) {
 
 func TestFilesMemberActionAliasCannotSelectAnotherModule(t *testing.T) {
 	moduleFixture(t, moduleScript)
-	alias := modules.Manifest{ID: "file", API: 1, Enabled: true, Operations: "bin/server", Actions: []string{"file.copy"}}
+	alias := modules.Manifest{ID: "file", API: 1, Enabled: true, Operations: "bin/server", Files: map[string]string{"bin/server": strings.Repeat("a", 64)}, Actions: []string{"file.copy"}}
 	raw, _ := json.Marshal(map[string]modules.Manifest{"file": alias})
 	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
-	if _, e := modules.Operation("actions", "file.copy", reservedModuleRoute); e == nil {
+	if _, e := moduleDestination("actions", "file.copy"); e == nil {
 		t.Fatal("file alias can claim Files member actions")
+	}
+}
+
+func TestLegacyDuplicateRegistrationHasOneOwner(t *testing.T) {
+	m, save, _ := moduleFixture(t, moduleScript)
+	m.Actions = append(m.Actions, "file.copy")
+	m.Queries = append(m.Queries, "files")
+	save(m)
+	selected, e := modules.Operation("actions", "file.copy", reservedModuleRoute)
+	if e != nil || selected == nil || selected.ID != "files" {
+		t.Fatalf("duplicate same-owner legacy entry: %v", e)
+	}
+	h := fixtureHandler("user", false)
+	req := plannedRequest(t, h)
+	if _, e = h(systemops.ModeExecute, "alice", req, quietReporter()); e != nil {
+		t.Fatal(e)
+	}
+	calls := 0
+	legacyCalls := 0
+	r := route(func(context.Context, string, string, any) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(`{}`), nil
+	}, func(context.Context, string, string, any) (json.RawMessage, error) { legacyCalls++; return nil, nil })
+	if _, e = r(context.Background(), "execute", "alice", Request{Action: "file.copy"}); e != nil {
+		t.Fatal(e)
+	}
+	if calls != 1 || legacyCalls != 0 {
+		t.Fatalf("native=%d legacy=%d", calls, legacyCalls)
+	}
+}
+func TestLegacyFileModuleCustomActionsWithoutMemberAlias(t *testing.T) {
+	moduleFixture(t, moduleScript)
+	m := modules.Manifest{ID: "file", Enabled: true, Files: map[string]string{"backend/operations.py": strings.Repeat("a", 64)}, Actions: []string{"file.custom"}}
+	save := func() {
+		raw, _ := json.Marshal(map[string]modules.Manifest{"file": m})
+		os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	}
+	save()
+	if dst, e := moduleDestination("actions", "file.custom"); e != nil || dst != legacy {
+		t.Fatalf("legacy custom route lost: %v", e)
+	}
+	m.Actions = []string{"file.copy"}
+	save()
+	if _, e := moduleDestination("actions", "file.copy"); e == nil {
+		t.Fatal("legacy alias claimed a Files member action")
+	}
+	m.Actions = []string{"file.custom"}
+	m.API = 1
+	m.Operations = "bin/server"
+	m.Files["bin/server"] = strings.Repeat("a", 64)
+	save()
+	if _, e := moduleDestination("actions", "file.custom"); e == nil {
+		t.Fatal("native file alias accepted")
+	}
+}
+func TestCrossModuleRegistrationStillConflicts(t *testing.T) {
+	m, _, _ := moduleFixture(t, moduleScript)
+	m.Actions = append(m.Actions, "file.custom")
+	other := modules.Manifest{ID: "file", Enabled: true, Actions: []string{"file.custom"}, Files: map[string]string{"backend/operations.py": strings.Repeat("a", 64)}}
+	raw, _ := json.Marshal(map[string]modules.Manifest{"files": m, "file": other})
+	os.WriteFile(filepath.Join(modules.Root, "registry.json"), raw, 0644)
+	if _, e := moduleDestination("actions", "file.custom"); e == nil {
+		t.Fatal("multiple handler owners accepted")
 	}
 }

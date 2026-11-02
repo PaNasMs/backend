@@ -123,6 +123,10 @@ if name!='systemctl':
 if args==['is-active','smbd']:
  if Path('/run/smbd.pid').exists():print('active');sys.exit(0)
  print('inactive');sys.exit(3)
+if args==['is-active','nfs-kernel-server']:
+ threads=Path('/proc/fs/nfsd/threads')
+ active=threads.exists() and int(threads.read_text().strip())>0
+ print('active' if active else 'inactive');sys.exit(0 if active else 3)
 if args==['show','--property=MainPID','--value','smbd']:
  print(Path('/run/smbd.pid').read_text().strip());sys.exit(0)
 if args[:2]==['enable','--now'] and args[-1] in ('smbd','nfs-kernel-server'):sys.exit(0)

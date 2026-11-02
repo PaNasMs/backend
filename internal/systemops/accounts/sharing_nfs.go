@@ -119,6 +119,17 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 			return nil, err
 		}
 	}
+	reload := true
+	if action == "nfs.export-remove" {
+		raw, err := s.run(ctx, []string{"systemctl", "is-active", "nfs-kernel-server"}, systemops.CommandOptions{Accepted: []int{0, 3, 4}})
+		if err != nil {
+			return nil, systemops.BeforeMutation(err)
+		}
+		reload = strings.TrimSpace(string(raw)) == "active"
+		previous := s.preserveServiceState
+		s.preserveServiceState = true
+		defer func() { s.preserveServiceState = previous }()
+	}
 	text, err := sharingText(s.legacy)
 	if err != nil {
 		return nil, err
@@ -157,11 +168,15 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 	if err = s.write(s.legacy, strings.Join(rows, "\n")+"\n", os.FileMode(0644)); err != nil {
 		return nil, s.rollback(ctx, r)
 	}
-	if _, err = s.command(ctx, []string{"systemctl", "enable", "--now", "nfs-kernel-server"}, true, r); err != nil {
-		return nil, s.rollback(ctx, r)
+	if action == "nfs.export" {
+		if _, err = s.command(ctx, []string{"systemctl", "enable", "--now", "nfs-kernel-server"}, true, r); err != nil {
+			return nil, s.rollback(ctx, r)
+		}
 	}
-	if _, err = s.command(ctx, []string{"exportfs", "-ra"}, true, r); err != nil {
-		return nil, s.rollback(ctx, r)
+	if reload {
+		if _, err = s.command(ctx, []string{"exportfs", "-ra"}, true, r); err != nil {
+			return nil, s.rollback(ctx, r)
+		}
 	}
 	st.LegacyExportRevision, err = s.legacyRevision()
 	if err != nil {

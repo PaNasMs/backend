@@ -1113,3 +1113,67 @@ func TestSharingLegacyNFSMatchesPathFieldForRemoveAndReplace(t *testing.T) {
 		}
 	}
 }
+
+func TestSharingLegacyNFSRemovalPreservesStoppedServer(t *testing.T) {
+	for _, state := range []string{"active", "inactive", "failed", "query-error", "reload-error"} {
+		t.Run(state, func(t *testing.T) {
+			s := sharingFixture(t)
+			saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{}})
+			if err := os.WriteFile(s.legacy, []byte("/srv/data/legacy 127.0.0.1(ro,sync,no_subtree_check,root_squash)\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			sealLegacySharingFixture(t, s)
+			before, _ := sharingText(s.legacy)
+			enables, reloads := 0, 0
+			original := s.run
+			s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
+				if slices.Equal(args, []string{"systemctl", "is-active", "nfs-kernel-server"}) {
+					if state == "query-error" {
+						return nil, errors.New("fixture service query failure")
+					}
+					if state == "reload-error" {
+						return []byte("active"), nil
+					}
+					return []byte(state), nil
+				}
+				if args[0] == "systemctl" && slices.Contains(args, "enable") {
+					enables++
+				}
+				if slices.Equal(args, []string{"exportfs", "-ra"}) {
+					reloads++
+					if state == "reload-error" && reloads == 1 {
+						return nil, errors.New("fixture reload failure")
+					}
+				}
+				return original(ctx, args, opt)
+			}
+			p := map[string]any{"target": "/srv/data/legacy"}
+			fp := sharingFingerprint(t, s, "nfs.export-remove", p)
+			_, err := s.execute(context.Background(), "nfs.export-remove", p, fp, nil)
+			if state == "query-error" || state == "reload-error" {
+				after, _ := sharingText(s.legacy)
+				if err == nil || before != after || enables != 0 {
+					t.Fatal(err, before, after, enables)
+				}
+				if exists, _ := sharingExists(s.journal); exists {
+					t.Fatal("failure left an unexpected journal")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := 0
+			if state == "active" {
+				expected = 1
+			}
+			if enables != 0 || reloads != expected {
+				t.Fatal(enables, reloads)
+			}
+			rows, err := s.nfsEntries()
+			if err != nil || len(rows) != 0 {
+				t.Fatal(rows, err)
+			}
+		})
+	}
+}

@@ -482,6 +482,37 @@ func TestSharingReconcileLockExpiryInactiveAndPasswordChange(t *testing.T) {
 		})
 	}
 }
+func TestSharingReconcileContinuesAfterDisableFailure(t *testing.T) {
+	s := sharingFixture(t)
+	uid := 1000
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{
+		"alice": {UID: &uid, Enabled: true, Status: "ready"},
+		"bob":   {UID: &uid, Enabled: true, Status: "ready"},
+	}})
+	creds, _ := s.credentials("alice")
+	creds.Shadow.PasswordStatus = "locked"
+	s.credentials = func(string) (sharingCredentials, error) { return creds, nil }
+	seen := map[string]bool{}
+	real := s.run
+	s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
+		if args[0] == "smbpasswd" && slices.Contains(args, "-d") {
+			user := args[len(args)-1]
+			seen[user] = true
+			if user == "alice" {
+				return nil, errors.New("fixture disable failure")
+			}
+		}
+		return real(ctx, args, opt)
+	}
+	if err := s.reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "fixture disable failure") {
+		t.Fatal(err)
+	}
+	st, err := s.read()
+	if err != nil || !seen["alice"] || !seen["bob"] || st.Accounts["alice"].Status != "ready" || st.Accounts["bob"].Status != "disabled" {
+		t.Fatal(st, seen, err)
+	}
+}
+
 func TestSharingDisconnectOnlySelectedUserAndNotMainProcess(t *testing.T) {
 	s := sharingFixture(t)
 	pids := []string{}

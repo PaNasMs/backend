@@ -370,7 +370,7 @@ def share_label(share):
 
 
 def release_managed_shares(names):
-    command(['/usr/lib/panasms/panasms-system-helper', 'sharing', 'remove-shares'], data=json.dumps(names))
+    command(['/usr/lib/panasms/panasms-system-helper', 'sharing', 'remove-shares'], data=json.dumps(names), timeout=None)
 
 
 def release_shares(target, inv):

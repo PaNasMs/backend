@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -179,6 +180,7 @@ func (s *sharingService) reconcile(ctx context.Context) error {
 		return err
 	}
 	changed := false
+	var failures error
 	for username, record := range st.Accounts {
 		if !record.Enabled {
 			continue
@@ -194,16 +196,17 @@ func (s *sharingService) reconcile(ctx context.Context) error {
 		}
 		if status != record.Status {
 			if err = s.disable(ctx, username, nil); err != nil {
-				return err
+				failures = errors.Join(failures, err)
+				continue
 			}
 			record.Status = status
 			changed = true
 		}
 	}
 	if changed {
-		return s.save(st)
+		failures = errors.Join(failures, s.save(st))
 	}
-	return nil
+	return failures
 }
 func (s *sharingService) dependency(ctx context.Context, operation, username, password string) (json.RawMessage, error) {
 	if !homeAccountName(username) {

@@ -266,7 +266,7 @@ func (a *adapter) reviewNMSharing(p map[string]any, old *nmGroup) (nmGroup, []an
 				if r.Dst == "" || r.Dst == "default" || r.Dev == old.Bridge {
 					continue
 				}
-				prefix, e := netip.ParsePrefix(r.Dst)
+				prefix, e := nmRoutePrefix(r.Dst)
 				if e != nil {
 					return conf, nil, e
 				}

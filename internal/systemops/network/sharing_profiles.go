@@ -44,7 +44,7 @@ func chooseNMSubnet(groups []nmGroup) (string, error) {
 		if r.Dst == "" || r.Dst == "default" {
 			continue
 		}
-		p, e := netip.ParsePrefix(r.Dst)
+		p, e := nmRoutePrefix(r.Dst)
 		if e != nil {
 			return "", e
 		}
@@ -252,4 +252,15 @@ func (a *adapter) buildNMGroup(conf nmGroup, p map[string]any, old *nmGroup, s *
 		g.Profiles[role] = id
 	}
 	return g, nil
+}
+
+func nmRoutePrefix(destination string) (netip.Prefix, error) {
+	if !strings.Contains(destination, "/") {
+		address, e := netip.ParseAddr(destination)
+		if e != nil {
+			return netip.Prefix{}, e
+		}
+		return netip.PrefixFrom(address, address.BitLen()), nil
+	}
+	return netip.ParsePrefix(destination)
 }

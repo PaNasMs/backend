@@ -161,3 +161,15 @@ func TestForeignSharingProviderRemainsVisibleButCannotBeMutated(t *testing.T) {
 		t.Fatal("foreign provider must block mutations")
 	}
 }
+
+func TestNMSubnetSelectionIncludesHostRoutes(t *testing.T) {
+	old := nmCommand
+	t.Cleanup(func() { nmCommand = old })
+	nmCommand = func(args ...string) ([]byte, error) {
+		return []byte(`[{"dst":"default"},{"dst":"127.0.0.1"},{"dst":"10.42.0.8"},{"dst":"10.43.0.0/24"}]`), nil
+	}
+	subnet, e := chooseNMSubnet(nil)
+	if e != nil || subnet != "10.44.0.0/24" {
+		t.Fatalf("host routes must block overlap without rejecting inventory: %s %v", subnet, e)
+	}
+}

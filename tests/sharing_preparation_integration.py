@@ -83,7 +83,7 @@ def main():
     parser.add_argument('--reupgrade-after-rollback', action='store_true')
     parser.add_argument('--root-retry-after-interruption', action='store_true')
     parser.add_argument('--native-activation', action='store_true')
-    parser.add_argument('--native-failure-stage', choices=('pending', 'committed'))
+    parser.add_argument('--native-failure-stage', choices=('pending', 'committed', 'committed-pending-ticket'))
     parser.add_argument('--failure-package-resumed', action='store_true')
     args = parser.parse_args()
     prove_guest(args.vm_uuid)
@@ -164,7 +164,12 @@ def run(args, folder):
                     assert capture()[str(FILES[4])] == baseline[str(FILES[4])], 'The failure passed receipt commit'
                 else:
                     receipt = json.loads(FILES[4].read_bytes())
-                    assert receipt['packageVersion'] == target and not FILES[5].exists()
+                    assert receipt['packageVersion'] == target
+                    if args.native_failure_stage == 'committed-pending-ticket':
+                        ticket = json.loads(FILES[5].read_bytes())
+                        assert ticket['targetVersion'] == target and ticket['nonce'] == receipt['nonce'] and ticket['source'] == receipt['source']
+                    else:
+                        assert not FILES[5].exists()
                     witness = json.loads(command('/usr/lib/panasms/panasms-system-helper', 'sharing', 'rollback-check'))
                     assert witness['schema'] == 1 and witness['journalsAbsent'] is True
         else:

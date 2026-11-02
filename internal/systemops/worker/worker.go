@@ -6,11 +6,13 @@ import (
 	"os"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
+	"panasms.local/backend/internal/systemops/networkmounts"
 	"strings"
 
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
+	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/webaccess"
@@ -50,10 +52,12 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	}
 	if id.Role != "admin" {
 		if mode == systemops.ModeQuery {
-			if req.View != "account-sessions" && req.View != "account-details" {
+			if req.View != "account-sessions" && req.View != "account-details" && req.View != "personal-folders" {
 				return nil, deny("Administrator permissions required")
 			}
-			req.Target = user
+			if req.View != "personal-folders" {
+				req.Target = user
+			}
 		} else if req.Action != "user.session.end" || req.Params["target"] != user {
 			return nil, deny("Administrator permissions required")
 		}
@@ -154,6 +158,10 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "home-folders", "data-folders", "mount-folders":
+		return folders.Query(ctx, view, target)
+	case "personal-folders":
+		return folders.PersonalQuery(ctx, user, target)
 	case "sharing", "share-folders", "nfs":
 		return accounts.SharingQuery(ctx, view, target, user)
 	case "network":
@@ -178,6 +186,12 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if networkmounts.IsAction(action) {
+		return networkmounts.Plan(ctx, action, p, user)
+	}
+	if action == "folder.permissions" {
+		return folders.PlanPermissions(p)
+	}
 	if accounts.IsSharing(action) {
 		return accounts.PlanSharing(ctx, action, p)
 	}
@@ -202,6 +216,15 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if networkmounts.IsAction(action) {
+		user, _ := ctx.Value(networkUserKey{}).(string)
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return networkmounts.Execute(ctx, action, p, user, expected, r)
+	}
+	if action == "folder.permissions" {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return folders.ExecutePermissions(p, expected)
+	}
 	if accounts.IsSharing(action) {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return accounts.ExecuteSharing(ctx, action, p, expected, r)

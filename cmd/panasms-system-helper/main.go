@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/disksleep"
+	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
@@ -31,6 +32,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "personal-folder-browser" {
+		if err := folders.PersonalCommand(os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "module-recovery-inspect" {
 		if err := management.InspectModuleRecovery(os.Stdin, os.Stdout); err != nil {
 			os.Exit(1)

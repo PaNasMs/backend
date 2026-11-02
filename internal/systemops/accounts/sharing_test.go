@@ -988,3 +988,81 @@ func TestSharingRetainedMountedShareStillValidatesIdentityAndLinks(t *testing.T)
 		})
 	}
 }
+
+func TestSharingAccountCallbacksWaitAndReauthorize(t *testing.T) {
+	for _, scenario := range []string{"released", "cancelled", "guard-changed"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := sharingFixture(t)
+			uid := 1000
+			saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{"alice": {UID: &uid, Enabled: true, Status: "pending"}}})
+			s.authorizeNative = func(context.Context, string) error {
+				if _, err := os.Stat(s.restoreGuard); err == nil {
+					return errors.New("fixture restore guard")
+				}
+				return nil
+			}
+			unlock, err := s.locked()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if unlock != nil {
+					unlock()
+				}
+			}()
+			called := make(chan struct{}, 20)
+			original := s.run
+			s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
+				called <- struct{}{}
+				return original(ctx, args, opt)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := s.dependency(ctx, "sync-password", "alice", "fixture-password"); done <- err }()
+			select {
+			case err := <-done:
+				t.Fatal("callback did not wait", err)
+			case <-time.After(40 * time.Millisecond):
+			}
+			select {
+			case <-called:
+				t.Fatal("commands before lock acquisition")
+			default:
+			}
+			if scenario == "cancelled" {
+				cancel()
+			}
+			if scenario == "guard-changed" {
+				if err := os.WriteFile(s.restoreGuard, []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "cancelled" {
+				unlock()
+				unlock = nil
+			}
+			select {
+			case err := <-done:
+				if scenario == "released" && err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "cancelled" && !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+				if scenario == "guard-changed" && (err == nil || !strings.Contains(err.Error(), "fixture restore guard")) {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("callback did not finish")
+			}
+			if scenario != "released" {
+				select {
+				case <-called:
+					t.Fatal("denied callback ran commands")
+				default:
+				}
+			}
+		})
+	}
+}

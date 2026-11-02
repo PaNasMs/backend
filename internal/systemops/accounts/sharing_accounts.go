@@ -217,7 +217,7 @@ func (s *sharingService) dependency(ctx context.Context, operation, username, pa
 	if operation == "status" {
 		return s.accountStatus(username)
 	}
-	unlock, err := s.locked()
+	unlock, err := s.lockedContext(ctx, true)
 	if err != nil {
 		return nil, err
 	}

@@ -166,3 +166,30 @@ func TestSharingMutationsRemainAdministratorOnly(t *testing.T) {
 		t.Fatal("unauthorized sharing mutation executed")
 	}
 }
+
+func TestSharingAccountRecoveryReportsUnknownEffectiveAccess(t *testing.T) {
+	raw, err := recoverOperation(context.Background(), &systemops.Request{Action: "share.account", Params: map[string]any{"target": "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Checks []struct {
+			Label string
+			Value string
+		}
+		RecoveryAction any
+		Route          string
+		Message        string
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Checks) != 2 || result.Checks[0].Label != "Account" || result.Checks[0].Value != "alice" || result.Checks[1].Label != "SMB access" || result.Checks[1].Value != "Unknown" || result.RecoveryAction != nil || result.Route != "/sharing" {
+		t.Fatal(string(raw))
+	}
+	for _, target := range []any{nil, "bad/name"} {
+		if _, err := recoverOperation(context.Background(), &systemops.Request{Action: "share.account", Params: map[string]any{"target": target}}); err == nil {
+			t.Fatal("invalid target accepted", target)
+		}
+	}
+}

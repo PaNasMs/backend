@@ -834,3 +834,19 @@ func TestSharingAbortValidatesPreviousTicketSourceBeforeRestoring(t *testing.T) 
 		})
 	}
 }
+
+func TestSharingPreexecRemainsClosedDuringUncommittedActivation(t *testing.T) {
+	s, _ := pendingSharingHooksFixture(t, true)
+	if err := os.Remove(s.restoreGuard); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cli(context.Background(), []string{"check", "Media"}, nil, io.Discard); err == nil {
+		t.Fatal("pending activation admitted SMB access")
+	}
+	if err := s.activateSharing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cli(context.Background(), []string{"check", "Media"}, nil, io.Discard); err != nil {
+		t.Fatal("committed activation denied volume check", err)
+	}
+}

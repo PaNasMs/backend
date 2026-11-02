@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
+	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/network"
@@ -22,6 +23,13 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case req.Action == "folder.permissions":
+		route = "/storage"
+		state, err := folders.PermissionState(target)
+		if err != nil {
+			return nil, err
+		}
+		add("Folder", state)
 	case req.Action == "share.account":
 		route = "/sharing"
 		if _, err := systemops.Name(target); err != nil {

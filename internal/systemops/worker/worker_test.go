@@ -193,3 +193,29 @@ func TestSharingAccountRecoveryReportsUnknownEffectiveAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestPersonalFolderQueryKeepsAuthenticatedUserAndRequestedPath(t *testing.T) {
+	d, _ := setup()
+	d.Authorize = func(string) (auth.Identity, error) {
+		return auth.Identity{Role: "user", UID: 1000, Username: "member"}, nil
+	}
+	calls := 0
+	d.Query = func(_ context.Context, view, target, user string) (json.RawMessage, error) {
+		calls++
+		if view != "personal-folders" || target != "/home/member/subdir" || user != "member" {
+			t.Fatal(view, target, user)
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	if _, err := d.Handle(systemops.ModeQuery, "member", &systemops.Request{View: "personal-folders", Target: "/home/member/subdir"}, reporter()); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{"home-folders", "data-folders", "mount-folders"} {
+		if _, err := d.Handle(systemops.ModeQuery, "member", &systemops.Request{View: view}, reporter()); err == nil {
+			t.Fatal(view)
+		}
+	}
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}

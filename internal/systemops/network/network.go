@@ -170,12 +170,8 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 			a.bus.Close()
 			return supplementalOperation(mode, action, user, p)
 		}
-		if active(s) {
-			message := "Confirm or roll back the pending network change first"
-			if supplementalKind(s.Kind) {
-				message = "Start NetworkManager to recover the pending network change"
-			}
-			return nil, &systemops.Rejected{Message: message}
+		if active(s) && supplementalKind(s.Kind) {
+			return nil, &systemops.Rejected{Message: "Start NetworkManager to recover the pending network change"}
 		}
 		if !networknative.Active() {
 			return nil, fmt.Errorf("No supported network manager is active")
@@ -192,7 +188,19 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 				return nil, fmt.Errorf("Manage this connection in Network access settings")
 			}
 		}
-		return networknative.Operation(mode, action, user, p)
+		unlock, e := networkd.Lock()
+		if e != nil {
+			return nil, e
+		}
+		defer unlock()
+		current, e := currentNMChange(true)
+		if e != nil {
+			return nil, e
+		}
+		if current != nil && supplementalKind(current.Kind) && active(&current.state) {
+			return nil, &systemops.Rejected{Message: "Start NetworkManager to recover the pending network change"}
+		}
+		return networknative.OperationLocked(mode, action, user, p)
 	}
 	if action != "network.configure" && s != nil && s.Kind != "network.nm" && s.Kind != "network.networkd" {
 		return supplementalOperation(mode, action, user, p)

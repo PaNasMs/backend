@@ -703,3 +703,17 @@ func TestNMImmediateConfirmationWriteFailureDoesNotClaimCommit(t *testing.T) {
 		t.Fatalf("uncommitted removal not restored: %+v %v", restored, e)
 	}
 }
+
+func TestNMInventoryToleratesAnAdapterRemovedAfterLinkRead(t *testing.T) {
+	a, f := newNMFixture(t)
+	f.mu.Lock()
+	f.missing = true
+	f.mu.Unlock()
+	rows := []map[string]any{{"name": "pnwifi0", "kind": "wifi"}}
+	if _, e := a.wifiInventory(rows); e != nil {
+		t.Fatal("stale interface hid the complete network inventory", e)
+	}
+	if _, ok := rows[0]["wifi"]; ok {
+		t.Fatal("controls exposed for removed adapter")
+	}
+}

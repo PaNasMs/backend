@@ -152,7 +152,7 @@ func (a *adapter) wifiInventory(rows []map[string]any) (map[string]any, error) {
 			}
 		}
 		radio, e := a.adapterRadio(name)
-		if errors.Is(e, errWifiPolicyUnavailable) {
+		if errors.Is(e, errWifiPolicyUnavailable) || missingDevice(e) {
 			continue
 		}
 		if e != nil {

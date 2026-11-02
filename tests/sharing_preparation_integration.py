@@ -21,7 +21,9 @@ import sys
 import uuid
 
 FILES = tuple(Path(path) for path in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf',
-                                     '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports'))
+                                     '/etc/exports.d/panasms-shares.exports', '/etc/exports.d/panasms.exports',
+                                     '/var/lib/panasms-installer/sharing-native-v1.json',
+                                     '/var/lib/panasms-installer/sharing-activation-v1.json'))
 
 
 def command(*args):
@@ -186,7 +188,8 @@ def main():
                       'finalInstalledVersion': command('dpkg-query', '-W', '-f=${Version}', 'panasms-prototype'),
                       'protocolServiceStatePreserved': True,
                       'packageSHA256': args.package_sha256, 'updaterSHA256': args.old_updater_sha256,
-                      'sharingPairUnchanged': True, 'realDpkgTarAndServiceHealth': True}, sort_keys=True))
+                      'sharingPairUnchanged': True, 'activationMetadataUnchanged': True,
+                      'realDpkgTarAndServiceHealth': True}, sort_keys=True))
 
 
 if __name__ == '__main__':

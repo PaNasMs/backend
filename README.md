@@ -566,3 +566,25 @@ poll SMART or wake disks for additional health reads. A snapshot older than 30
 seconds is unavailable, never presented as current. Before the core is ready,
 the display can show service startup (after the OLED daemon itself has started).
 Early firmware/bootloader output is not covered.
+
+
+### Interrupted home relocation
+
+Home-folder settings offer recovery for `/var/lib/panasms-agent/home-move.json`.
+Recovery retains destination copies before commit. After commit it verifies the
+saved account identities, home paths, default home base and destination folders
+before deleting the old tree. If an account or default path was changed separately,
+recovery deliberately stops and retains its journal and copies.
+
+An administrator should preserve the journal and both trees, compare `getent passwd`
+and `/etc/default/useradd` with the journal, and inspect the saved destination and
+account UID/GID. If the committed destination is healthy and the account identities
+still match, restore only the journaled `new` home paths and `target` default base,
+then retry recovery from settings or run `panasms-system-helper homes recover` as
+root. If these conditions cannot be established, retain the evidence for manual
+account/data recovery. Do not delete the journal or maintenance marker to bypass
+failed checks; `/run/nologin` may be owned by a different maintenance operation.
+
+Cooperative cancellation stops and reaps the copy worker. Killing only the helper
+with SIGKILL can leave an orphan copy worker; inspect and stop that specific worker
+before manual recovery. This does not authorize deleting the retained destination.

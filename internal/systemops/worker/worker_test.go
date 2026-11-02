@@ -119,8 +119,26 @@ func TestOrdinaryQueriesAreOwnerScoped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: "accounts"}, reporter()); err == nil {
-		t.Fatal("ordinary list allowed")
+	for _, view := range []string{"accounts", "homes", "homes-check"} {
+		if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: view}, reporter()); err == nil {
+			t.Fatal("ordinary query allowed", view)
+		}
+	}
+}
+
+func TestHomesMutationRetainsValidatedPlanUnderDomainLock(t *testing.T) {
+	d, calls := setup()
+	req := request()
+	req.Action = "homes.move"
+	d.Execute = func(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+		*calls++
+		if got, _ := ctx.Value(validatedPlanKey{}).(string); got != "fresh" {
+			t.Fatal("validated fingerprint lost", got)
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	if _, err := d.Handle(systemops.ModeExecute, "admin", req, reporter()); err != nil || *calls != 1 {
+		t.Fatal(err, *calls)
 	}
 }
 func TestRecoveryNeverExecutes(t *testing.T) {

@@ -52,9 +52,13 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 source = Path('management/sharing_compat.py').read_text().split("if __name__ == '__main__':", 1)[0]
-source = source.replace('from common import Rejected, require', 'class Rejected(Exception): pass\ndef require(condition, message):\n    if not condition: raise Rejected(message)')
+import_line = 'from common import Rejected, require'
+assert source.count(import_line) == 1, 'Sharing compatibility import changed'
+source = source.replace(import_line, 'class Rejected(Exception): pass\ndef require(condition, message):\n    if not condition: raise Rejected(message)')
 source += '\nprepare_reinstall(sys.argv[1], sys.argv[2])\n'
-path.write_text(path.read_text().replace('@PANASMS_REINSTALL_PREFLIGHT@', source))
+template = path.read_text()
+assert template.count('@PANASMS_REINSTALL_PREFLIGHT@') == 1, 'Reinstall preflight placeholder changed'
+path.write_text(template.replace('@PANASMS_REINSTALL_PREFLIGHT@', source))
 REINSTALL
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"

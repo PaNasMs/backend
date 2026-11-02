@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"panasms.local/backend/internal/system"
 	"panasms.local/backend/internal/systemops"
 )
 
@@ -32,6 +33,13 @@ func run(name string, args ...string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	if name == "lsblk" {
+		var err error
+		cmd, err = system.BlockDevicesCommand(ctx, args...)
+		if err != nil {
+			return nil, -1, err
+		}
+	}
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	data, err := cmd.Output()
 	code := 0

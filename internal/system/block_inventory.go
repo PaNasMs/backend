@@ -6,12 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 )
 
 // BlockDevicesRead only obtains lsblk metadata. It does not run SMART, fsck or
 // other device probes; callers use the existing health and temperature caches.
 func BlockDevicesRead(ctx context.Context, columns string) ([]map[string]any, error) {
-	raw, err := command(ctx, "/usr/bin/lsblk", "--json", "--bytes", "--output", columns)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd, err := BlockDevicesCommand(ctx, "--json", "--bytes", "--output", columns)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

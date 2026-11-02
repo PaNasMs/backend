@@ -37,12 +37,16 @@ func unmountPinnedWith(point string, expected folders.LiveMount, before func() e
 		target.Close()
 		return err
 	}
-	containing, err := folders.DirectoryMount(parent, rows)
+	var containing unix.Statx_t
+	err = unix.Statx(int(parent.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &containing)
 	target.Close()
 	if err != nil {
 		return err
 	}
-	if actual != expected || actual.ID == containing.ID {
+	if containing.Mask&unix.STATX_MNT_ID == 0 || containing.Mnt_id == 0 {
+		return reject("The mount identity is unavailable")
+	}
+	if actual != expected || actual.ID == containing.Mnt_id {
 		return reject("The mount changed; review a new operation plan")
 	}
 	// Pin only the parent: retaining a reference to the mounted root makes normal unmount busy.

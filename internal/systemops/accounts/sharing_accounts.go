@@ -194,13 +194,15 @@ func (s *sharingService) reconcile(ctx context.Context) error {
 				status = "pending"
 			}
 		}
-		if status != record.Status {
+		if status != record.Status || record.Status == "error" {
 			if err = s.disable(ctx, username, nil); err != nil {
 				failures = errors.Join(failures, err)
 				continue
 			}
-			record.Status = status
-			changed = true
+			if status != record.Status {
+				record.Status = status
+				changed = true
+			}
 		}
 	}
 	if changed {

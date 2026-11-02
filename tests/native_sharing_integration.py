@@ -94,6 +94,7 @@ args=sys.argv[1:]
 name=Path(sys.argv[0]).name
 if name=='systemctl' and args[:2]==['enable','--now'] and Path('/fixture/fail-reload').exists():
  Path('/fixture/fail-reload').unlink();sys.exit(7)
+if name=='smbpasswd' and '-d' in args and Path('/fixture/fail-disable').exists():sys.exit(7)
 if name=='smbpasswd' and '-a' in args and Path('/fixture/fail-sync').exists():sys.exit(7)
 if name=='exportfs' and args==['-ra'] and Path('/fixture/pause').exists() and Path('/var/lib/panasms-agent/sharing-transaction.json').exists():
  Path('/fixture/event').write_text(json.dumps({'pid':os.getpid(),'helper':os.getppid()}));os.kill(os.getpid(),signal.SIGSTOP)
@@ -390,6 +391,18 @@ def account_scenarios(passwords):
         for child in clients:
             child.terminate()
             child.wait(timeout=10)
+    Path('/fixture/fail-sync').touch()
+    Path('/fixture/fail-disable').touch()
+    failed = subprocess.run([HELPER, 'sharing', 'sync'], input=json.dumps({'user': 'alice', 'password': passwords['alice']}), text=True, capture_output=True)
+    assert failed.returncode != 0
+    smb('alice', passwords['alice'], 'ls')
+    Path('/fixture/fail-sync').unlink()
+    Path('/fixture/fail-disable').unlink()
+    cli('reconcile')
+    smb('alice', passwords['alice'], 'ls', success=False)
+    assert json.loads(Path('/etc/panasms/sharing.json').read_text())['accounts']['alice']['status'] == 'error'
+    cli('sync', {'user': 'alice', 'password': passwords['alice']})
+    print('PASS real periodic retry revokes stale SMB after failed immediate cleanup', flush=True)
     subprocess.run(['chpasswd'], input='alice:' + secrets.token_urlsafe(24) + '\n', text=True, check=True, capture_output=True)
     cli('reconcile')
     smb('alice', passwords['alice'], 'ls', success=False)

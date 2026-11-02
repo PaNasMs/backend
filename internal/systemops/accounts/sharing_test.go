@@ -513,6 +513,40 @@ func TestSharingReconcileContinuesAfterDisableFailure(t *testing.T) {
 	}
 }
 
+func TestSharingReconcileRetriesFailedSyncCleanupWithUnchangedRevision(t *testing.T) {
+	s := sharingFixture(t)
+	uid := 1000
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{
+		"alice": {UID: &uid, Enabled: true, Status: "ready", PasswordRevision: "revision"},
+	}})
+	real := s.run
+	disables := 0
+	s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
+		if args[0] == "smbpasswd" {
+			if slices.Contains(args, "-a") {
+				return nil, errors.New("fixture synchronization failure")
+			}
+			if slices.Contains(args, "-d") {
+				disables++
+				if disables == 1 {
+					return nil, errors.New("fixture transient disable failure")
+				}
+			}
+		}
+		return real(ctx, args, opt)
+	}
+	if err := s.syncPassword(context.Background(), "alice", "fixture-only-password"); err == nil {
+		t.Fatal("failed synchronization accepted")
+	}
+	if err := s.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.read()
+	if err != nil || disables != 2 || st.Accounts["alice"].Status != "error" || st.Accounts["alice"].PasswordRevision != "revision" {
+		t.Fatal(st, disables, err)
+	}
+}
+
 func TestSharingDisconnectOnlySelectedUserAndNotMainProcess(t *testing.T) {
 	s := sharingFixture(t)
 	pids := []string{}

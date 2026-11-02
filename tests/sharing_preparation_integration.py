@@ -18,6 +18,7 @@ import stat
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 FILES = tuple(Path(path) for path in ('/etc/panasms/sharing.json', '/etc/samba/panasms-shares.conf',
@@ -83,6 +84,23 @@ def main():
     parser.add_argument('--root-retry-after-interruption', action='store_true')
     args = parser.parse_args()
     prove_guest(args.vm_uuid)
+    with tempfile.TemporaryDirectory(prefix='panasms-go06-package-', dir='/run') as folder:
+        run(args, Path(folder))
+
+
+def pin_package(source, expected_hash, folder):
+    assert source.is_file() and not source.is_symlink()
+    data = source.read_bytes()
+    package = folder / 'verified.deb'
+    fd = os.open(package, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data)
+    assert hashlib.sha256(package.read_bytes()).hexdigest() == expected_hash
+    return package
+
+
+def run(args, folder):
+    args.package = pin_package(args.package, args.package_sha256, folder)
     assert args.package.is_file() and not args.package.is_symlink()
     assert hashlib.sha256(args.package.read_bytes()).hexdigest() == args.package_sha256
     assert command('dpkg-deb', '-f', str(args.package), 'Package') == 'panasms-prototype'

@@ -227,6 +227,27 @@ class Preparation(unittest.TestCase):
         self.assertEqual(self.files[0].read_bytes(), b'installed package source')
 
 
+class PackageFixture(unittest.TestCase):
+    def test_installed_fixture_is_pinned_after_source_replacement(self):
+        import hashlib
+        from sharing_preparation_integration import pin_package
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'input.deb'
+            source.write_bytes(b'verified package')
+            private = root / 'private'
+            private.mkdir(mode=0o700)
+            pinned = pin_package(source, hashlib.sha256(source.read_bytes()).hexdigest(), private)
+            source.write_bytes(b'replaced untrusted package')
+            self.assertEqual(pinned.read_bytes(), b'verified package')
+            self.assertEqual(pinned.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(pinned.stat().st_uid, os.getuid())
+            other = root / 'other'
+            other.mkdir(mode=0o700)
+            with self.assertRaises(AssertionError):
+                pin_package(source, hashlib.sha256(b'verified package').hexdigest(), other)
+
+
 class PairedRollback(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

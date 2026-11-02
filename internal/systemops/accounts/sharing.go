@@ -182,6 +182,9 @@ func (s *sharingService) save(st sharingState) error {
 	return s.write(s.state, string(raw), 0600)
 }
 func (s *sharingService) locked() (func(), error) {
+	return s.lockedContext(context.Background(), false)
+}
+func (s *sharingService) lockedContext(ctx context.Context, wait bool) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(s.lock), 0700); err != nil {
 		return nil, err
 	}
@@ -189,12 +192,30 @@ func (s *sharingService) locked() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		unix.Close(fd)
-		return nil, reject("A sharing operation is already in progress")
+	for {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return func() { unix.Close(fd) }, nil
+		}
+		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
+			unix.Close(fd)
+			return nil, err
+		}
+		if !wait {
+			unix.Close(fd)
+			return nil, reject("A sharing operation is already in progress")
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			unix.Close(fd)
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return func() { unix.Close(fd) }, nil
 }
+
 func (s *sharingService) command(ctx context.Context, args []string, op bool, r *systemops.Reporter) (string, error) {
 	raw, err := s.run(ctx, args, systemops.CommandOptions{Operation: op, Reporter: r})
 	return strings.TrimSpace(string(raw)), err
@@ -406,7 +427,7 @@ func (s *sharingService) plan(ctx context.Context, action string, p map[string]a
 		}
 	}
 	if action == "nfs.export" || action == "nfs.export-remove" {
-		return s.nfsPlan(ctx, action, p)
+		return s.nfsPlan(ctx, action, p, st)
 	}
 	target := stringParam(p, "target")
 	details := []any{}

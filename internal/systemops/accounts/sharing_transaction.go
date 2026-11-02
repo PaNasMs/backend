@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -82,7 +83,14 @@ func (s *sharingService) check(ctx context.Context, share sharedFolder) error {
 	return nil
 }
 func (s *sharingService) validate(ctx context.Context, shares []sharedFolder, r *systemops.Reporter) error {
+	previous, err := s.read()
+	if err != nil {
+		return err
+	}
 	for _, share := range shares {
+		if slices.ContainsFunc(previous.Shares, func(old sharedFolder) bool { return reflect.DeepEqual(old, share) }) {
+			continue
+		}
 		if share.SMB || share.NFS {
 			if err := s.check(ctx, share); err != nil {
 				return err
@@ -134,9 +142,6 @@ func (s *sharingService) reload(ctx context.Context, shares []sharedFolder, r *s
 		}
 	}
 	if s.tool("exportfs") {
-		if err := s.validateLegacy(ctx); err != nil {
-			return err
-		}
 		if slices.ContainsFunc(shares, func(v sharedFolder) bool { return v.NFS }) {
 			if _, err := s.command(ctx, []string{"systemctl", "enable", "--now", "nfs-kernel-server"}, true, r); err != nil {
 				return err

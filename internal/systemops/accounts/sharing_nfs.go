@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 
 	"panasms.local/backend/internal/systemops"
@@ -54,10 +55,9 @@ func (s *sharingService) nfsQuery() ([]byte, error) {
 	}
 	return marshal(map[string]any{"exports": rows})
 }
-func (s *sharingService) nfsPlan(ctx context.Context, action string, p map[string]any) ([]byte, error) {
+func (s *sharingService) nfsPlan(ctx context.Context, action string, p map[string]any, st sharingState) ([]byte, error) {
 	target := stringParam(p, "target")
-	mount, err := s.locate(ctx, target)
-	if err != nil {
+	if err := sharePathShape(target); err != nil {
 		return nil, err
 	}
 	text, err := sharingText(s.legacy)
@@ -65,14 +65,35 @@ func (s *sharingService) nfsPlan(ctx context.Context, action string, p map[strin
 		return nil, err
 	}
 	clients := stringParam(p, "clients")
-	if action == "nfs.export" {
+	state := []any{text}
+	if action == "nfs.export-remove" {
+		rows, err := s.nfsEntries()
+		if err != nil {
+			return nil, err
+		}
+		if !slices.ContainsFunc(rows, func(row legacyExport) bool { return row.Path == target }) {
+			return nil, reject("NFS publication no longer exists")
+		}
+	} else {
+		if slices.ContainsFunc(st.Shares, func(share sharedFolder) bool { return share.NFS && share.Path == target }) {
+			return nil, reject("This folder is already managed by Shared folders")
+		}
+		mount, err := s.locate(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		id, err := s.identity(target)
+		if err != nil {
+			return nil, err
+		}
+		state = append(state, mount, id)
 		if value, present := p["readOnly"]; present {
 			if _, ok := value.(bool); !ok {
 				return nil, reject("Protocol settings must be true or false")
 			}
 		}
 		values := strings.Split(clients, ",")
-		if len(values) == 0 || len(values) > 32 {
+		if len(values) > 32 {
 			return nil, reject("Specify NFS clients")
 		}
 		for _, value := range values {
@@ -81,21 +102,22 @@ func (s *sharingService) nfsPlan(ctx context.Context, action string, p map[strin
 			}
 		}
 	}
-	id, err := s.identity(target)
-	if err != nil {
-		return nil, err
-	}
-	fp, err := fingerprint(action, p, []any{text, mount, id})
+	fp, err := fingerprint(action, p, state)
 	if err != nil {
 		return nil, err
 	}
 	return marshal(map[string]any{"target": target, "confirmation": target, "details": []string{target, "Clients: " + clients, "NFS: Linux UID/GID permissions; root_squash enabled"}, "fingerprint": fp})
 }
+
 func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) ([]byte, error) {
 	target := stringParam(p, "target")
-	mount, err := s.locate(ctx, target)
-	if err != nil {
-		return nil, err
+	var mount sharingMount
+	var err error
+	if action == "nfs.export" {
+		mount, err = s.locate(ctx, target)
+		if err != nil {
+			return nil, err
+		}
 	}
 	text, err := sharingText(s.legacy)
 	if err != nil {
@@ -127,9 +149,6 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 	if _, err = s.command(ctx, []string{"systemctl", "enable", "--now", "nfs-kernel-server"}, true, r); err != nil {
 		return nil, s.rollback(ctx, r)
 	}
-	if err = s.validateLegacy(ctx); err != nil {
-		return nil, s.rollback(ctx, r)
-	}
 	if _, err = s.command(ctx, []string{"exportfs", "-ra"}, true, r); err != nil {
 		return nil, s.rollback(ctx, r)
 	}
@@ -137,17 +156,4 @@ func (s *sharingService) nfsExecute(ctx context.Context, action string, p map[st
 		return nil, err
 	}
 	return marshal(map[string]string{"message": "NFS share updated"})
-}
-
-func (s *sharingService) validateLegacy(ctx context.Context) error {
-	rows, err := s.nfsEntries()
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if _, err = s.locate(ctx, row.Path); err != nil {
-			return reject("Shared volume unavailable")
-		}
-	}
-	return nil
 }

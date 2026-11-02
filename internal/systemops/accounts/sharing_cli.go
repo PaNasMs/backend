@@ -82,7 +82,7 @@ func (s *sharingService) cli(ctx context.Context, args []string, input io.Reader
 			return err
 		}
 	case "recover", "reconcile", "republish", "remove", "prepare-downgrade":
-		unlock, err := s.locked()
+		unlock, err := s.lockedContext(ctx, args[0] == "recover" || args[0] == "prepare-downgrade")
 		if err != nil {
 			return err
 		}

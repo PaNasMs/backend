@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"panasms.local/backend/internal/systemops"
 )
@@ -605,24 +606,6 @@ func TestSharingWriterReaderInvariantAndMalformedOldState(t *testing.T) {
 		t.Fatal("invalid journal wrote before validation")
 	}
 }
-func TestSharingNFSUnreachableLegacyVolumeNotReloaded(t *testing.T) {
-	s := sharingFixture(t)
-	os.WriteFile(s.legacy, []byte("/srv/missing/data 192.0.2.1(rw,sync,no_subtree_check,root_squash)\n"), 0644)
-	s.locate = func(context.Context, string) (sharingMount, error) {
-		return sharingMount{}, errors.New("missing backing mount")
-	}
-	reloaded := false
-	real := s.run
-	s.run = func(ctx context.Context, args []string, opt systemops.CommandOptions) ([]byte, error) {
-		if args[0] == "exportfs" {
-			reloaded = true
-		}
-		return real(ctx, args, opt)
-	}
-	if err := s.reload(context.Background(), nil, nil); err == nil || reloaded {
-		t.Fatal("unmounted legacy publication reloaded", err, reloaded)
-	}
-}
 
 func TestSharingRecoveryInspectionDoesNotReadCredentialsOrCallServices(t *testing.T) {
 	s := sharingFixture(t)
@@ -749,5 +732,111 @@ func TestSharingDisconnectLeavesOtherUsersAndServerRunning(t *testing.T) {
 	}
 	if !reflect.DeepEqual(pids, []string{"21"}) {
 		t.Fatal("wrong session targets", pids)
+	}
+}
+
+func TestSharingFailedSyncRevokesStalePasswordImmediately(t *testing.T) {
+	s := sharingFixture(t)
+	uid := 1000
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{"alice": {UID: &uid, Enabled: true, Status: "ready", PasswordRevision: "old"}}})
+	disabled := false
+	s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+		if args[0] == "smbpasswd" && slices.Contains(args, "-a") {
+			return nil, errors.New("fixture failure")
+		}
+		if args[0] == "smbpasswd" && slices.Contains(args, "-d") {
+			disabled = true
+		}
+		return []byte("inactive"), nil
+	}
+	if _, err := s.dependency(context.Background(), "sync-password", "alice", "fixture-password"); err == nil {
+		t.Fatal("failed synchronization succeeded")
+	}
+	st, err := s.read()
+	if err != nil || !disabled || st.Accounts["alice"].Status != "error" {
+		t.Fatal(disabled, st, err)
+	}
+}
+func TestSharingStartupRecoveryWaitsForLockAndRespectsCancellation(t *testing.T) {
+	s := sharingFixture(t)
+	unlock, err := s.locked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err = s.lockedContext(ctx, true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.cli(context.Background(), []string{"recover"}, nil, io.Discard) }()
+	select {
+	case err := <-done:
+		t.Fatal("startup did not wait", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startup did not acquire released lock")
+	}
+}
+
+func TestSharingOfflineLegacyExportCanBeRemovedAndBlocksNoUnrelatedWork(t *testing.T) {
+	s := sharingFixture(t)
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{}, Accounts: map[string]*sharedAccount{}})
+	os.WriteFile(s.legacy, []byte("/srv/offline/data 192.0.2.1(rw,sync,no_subtree_check,root_squash)\n"), 0644)
+	old := s.locate
+	s.locate = func(ctx context.Context, path string) (sharingMount, error) {
+		if strings.HasPrefix(path, "/srv/offline") {
+			return sharingMount{}, errors.New("missing volume")
+		}
+		return old(ctx, path)
+	}
+	p := map[string]any{"target": "/srv/offline/data"}
+	fp := sharingFingerprint(t, s, "nfs.export-remove", p)
+	if _, err := s.execute(context.Background(), "nfs.export-remove", p, fp, nil); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.nfsEntries()
+	if err != nil || len(rows) != 0 {
+		t.Fatal(rows, err)
+	}
+	if exists, _ := sharingExists(s.journal); exists {
+		t.Fatal("removal journal retained")
+	}
+}
+func TestSharingCannotCreateDuplicateManagedNFSPolicy(t *testing.T) {
+	s := sharingFixture(t)
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{sharingFolder()}, Accounts: map[string]*sharedAccount{}})
+	if _, err := s.plan(context.Background(), "nfs.export", map[string]any{"target": sharingFolder().Path, "clients": "127.0.0.1", "readOnly": false}); err == nil || !strings.Contains(err.Error(), "already managed") {
+		t.Fatal(err)
+	}
+}
+func TestSharingRemoveSelectedWhileUnchangedOtherVolumeIsOffline(t *testing.T) {
+	s := sharingFixture(t)
+	a := sharingFolder()
+	b := a
+	b.Name = "Offline"
+	b.Path = "/srv/offline/data"
+	b.Mountpoint = "/srv/offline"
+	saveSharingFixture(t, s, sharingState{Shares: []sharedFolder{a, b}, Accounts: map[string]*sharedAccount{}})
+	s.locate = func(context.Context, string) (sharingMount, error) {
+		return sharingMount{}, errors.New("volume offline")
+	}
+	removed, err := s.removeShares(context.Background(), []string{a.Name})
+	if err != nil || len(removed) != 1 {
+		t.Fatal(removed, err)
+	}
+	st, err := s.read()
+	if err != nil || len(st.Shares) != 1 || st.Shares[0].Name != "Offline" {
+		t.Fatal(st, err)
+	}
+	if exists, _ := sharingExists(s.journal); exists {
+		t.Fatal("unrelated offline share trapped recovery")
 	}
 }

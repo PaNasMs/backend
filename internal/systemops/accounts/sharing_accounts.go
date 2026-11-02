@@ -165,6 +165,7 @@ func (s *sharingService) syncPassword(ctx context.Context, username, password st
 	}
 	if err = sync(); err != nil {
 		record.Status = "error"
+		_ = s.disable(context.WithoutCancel(ctx), username, nil)
 		if err = s.save(st); err != nil {
 			return err
 		}

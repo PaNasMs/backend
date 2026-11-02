@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"panasms.local/backend/internal/modules"
 	"testing"
 )
 
@@ -49,6 +50,7 @@ func TestRouteKnownViewGoesLegacy(t *testing.T) {
 }
 
 func TestRouteModuleExtensionViewGoesLegacy(t *testing.T) {
+	isolateModuleRegistry(t)
 	// "files" is served by a module query extension, not enumerated in the
 	// table, but must still route to legacy rather than be rejected.
 	var hit bool
@@ -62,6 +64,7 @@ func TestRouteModuleExtensionViewGoesLegacy(t *testing.T) {
 }
 
 func TestRoutePlanUnlistedActionGoesLegacy(t *testing.T) {
+	isolateModuleRegistry(t)
 	// Unlisted actions are resolved (and possibly rejected) by the legacy
 	// dispatcher, matching main.py; the router must not reject them itself.
 	var hit bool
@@ -131,4 +134,10 @@ func TestQueryViewsSortedAndComplete(t *testing.T) {
 			t.Errorf("QueryViews not sorted at %d: %q > %q", i, views[i-1], views[i])
 		}
 	}
+}
+
+func isolateModuleRegistry(t *testing.T) {
+	previous := modules.Root
+	modules.Root = t.TempDir()
+	t.Cleanup(func() { modules.Root = previous })
 }

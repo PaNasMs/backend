@@ -44,3 +44,10 @@ class PowerTest(unittest.TestCase):
             with self.assertRaises(Rejected):
                 main.dispatch('execute', 'admin', {'action': 'system.poweroff', 'params': {}, 'fingerprint': plan['fingerprint'], 'confirmation': 'wrong'})
             command.assert_not_called()
+
+    def test_core_dispatch_does_not_load_module_overrides(self):
+        with patch.object(main.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=1000, pw_gid=1000)), patch.object(main.grp, 'getgrnam', return_value=SimpleNamespace(gr_gid=27)), patch.object(main.os, 'getgrouplist', return_value=[1000, 27]), patch.object(main.system_updates, 'changing', return_value=False), patch.object(main.module_manager, 'load_operations', side_effect=Rejected('Conflicting native module')) as load, patch.object(host, 'command') as command:
+            result = main.dispatch('plan', 'admin', {'action': 'system.poweroff', 'params': {}})
+            self.assertTrue(result['fingerprint'])
+            load.assert_not_called()
+            command.assert_not_called()

@@ -31,6 +31,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "module-recovery-inspect" {
+		if err := management.InspectModuleRecovery(os.Stdin, os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "homes" && os.Args[2] == "recover" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)
@@ -257,7 +263,8 @@ func main() {
 	reporter := systemops.NewReporter(os.Stderr, systemops.Env)
 	defer reporter.Close()
 
-	if err := systemops.Run(mode, user, os.Stdin, os.Stdout, reporter, worker.New().Handle); err != nil {
+	dispatcher := worker.New()
+	if err := systemops.Run(mode, user, os.Stdin, os.Stdout, reporter, management.ModuleHandler(dispatcher.Handle, dispatcher.Authorize, dispatcher.Changing)); err != nil {
 		fmt.Fprintln(os.Stderr, "helper I/O failure")
 		os.Exit(1)
 	}

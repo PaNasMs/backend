@@ -14,6 +14,38 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_core_handler_identifiers_are_rejected_before_install(self):
+        for identifier in ('user', 'service', 'disk', 'updates', 'hostname', 'account-details', 'personal-folders', 'job', 'file'):
+            with self.subTest(identifier=identifier), self.assertRaisesRegex(Rejected, 'belongs to the core'):
+                m.manifest({'id': identifier, 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}})
+
+    def test_reserved_module_names_remain_valid_catalog_and_source_ids(self):
+        for value in ('power', 'journal', 'services', 'updates', 'homes', 'share', 'mount', 'disk'):
+            self.assertEqual(m.identifier(value), value)
+
+    def test_duplicate_handlers_rejected_before_install(self):
+        item = {'id': 'example', 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}, 'actions': ['example.run', 'example.run']}
+        with self.assertRaisesRegex(Rejected, 'Duplicate module handler'):
+            m.manifest(item)
+
+    def test_legacy_reserved_module_remains_manageable(self):
+        item = {'id': 'power', 'version': '0.1.0', 'api': 1, 'core': '>=0.2.0', 'architecture': 'all', 'title': 'Fixture', 'files': {'ui/index.js': '0'*64}, 'actions': ['power.run', 'power.run'], 'enabled': False}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'power').mkdir()
+            with patch.object(m, 'ROOT', root), patch.object(m, 'REGISTRY', root / 'registry.json'), patch.object(m, 'UNITS', root), patch.object(m, 'require_idle'), patch.object(m, 'command') as command, patch.object(m, 'atomic', side_effect=lambda path, text, mode=0o600: Path(path).write_text(text)), patch.object(m, 'activate'):
+                m.save_registry({'power': item})
+                self.assertTrue(m.plan('module.enable', {'target': 'power'}, 'alice')['fingerprint'])
+                m.execute('module.enable', {'target': 'power'}, 'alice')
+                self.assertTrue(m.registry()['power']['enabled'])
+                m.execute('module.disable', {'target': 'power'}, 'alice')
+                self.assertFalse(m.registry()['power']['enabled'])
+                m.execute('module.remove', {'target': 'power'}, 'alice')
+                self.assertNotIn('power', m.registry())
+                with self.assertRaisesRegex(Rejected, 'belongs to the core'):
+                    m.manifest(item)
+                command.assert_called()
+
     def test_optional_detailed_descriptions(self):
         item={'id':'example','version':'1.0.0','api':1,'core':'>=0.2.0','architecture':'all','title':'Example','files':{'ui/index.js':'0'*64}}
         m.manifest(item)
@@ -124,6 +156,7 @@ class Modules(unittest.TestCase):
                 capture_output=True,
             )
             payload = b'console.log("module")'
+            native = b'#!/bin/sh\necho "{}"\n'
             manifest = {
                 "id": "files",
                 "title": "Files",
@@ -132,7 +165,11 @@ class Modules(unittest.TestCase):
                 "core": ">=0.2.0,<0.3.0",
                 "architecture": "all",
                 "signer": "local",
-                "files": {"ui/index.js": hashlib.sha256(payload).hexdigest(),
+                "operations": "bin/server",
+                "actions": ["file.copy"],
+                "queries": ["files"],
+                "files": {"bin/server": hashlib.sha256(native).hexdigest(),
+                          "ui/index.js": hashlib.sha256(payload).hexdigest(),
                           "LICENSE": hashlib.sha256(b"license").hexdigest(),
                           "NOTICE": hashlib.sha256(b"notice").hexdigest()},
             }
@@ -162,6 +199,7 @@ class Modules(unittest.TestCase):
                     z.writestr("modules/files/manifest.json", raw)
                     z.writestr("modules/files/signature", (root / "sig").read_bytes())
                     z.writestr("modules/files/ui/index.js", content)
+                    z.writestr("modules/files/bin/server", native)
                     z.writestr("modules/files/LICENSE", b"license")
                     z.writestr("modules/files/NOTICE", b"notice")
                     if extra:
@@ -295,24 +333,23 @@ class Modules(unittest.TestCase):
                 self.assertFalse((root / ".transaction").exists())
 
 class NativeOperations(unittest.TestCase):
-    def test_native_manifest_loads_without_python_payload(self):
+    def test_native_selection_cannot_fall_back_through_python(self):
         module = {'enabled': True, 'actions': ['file.copy'], 'operations': 'bin/server', 'files': {'bin/server': 'a' * 64}}
-        with patch.object(m, 'registry', return_value={'files': module}):
-            handlers = m.load_operations('actions', 'file.copy')
-            self.assertEqual(len(handlers), 1)
-            self.assertIsInstance(handlers[0], m.NativeOperations)
+        with patch.object(m, 'registry', return_value={'files': module}), patch.object(m.subprocess, 'run') as run:
+            with self.assertRaisesRegex(Rejected, 'native handler'):
+                m.load_operations('actions', 'file.copy')
+            run.assert_not_called()
         with patch.object(m, 'registry', return_value={'files': {**module, 'enabled': False}}):
             self.assertEqual(m.load_operations('actions', 'file.copy'), [])
 
-    def test_native_error_is_not_reported_as_success(self):
-        handler = m.NativeOperations(Path('/module/bin/server'), ['file.copy'])
-        with patch.object(m.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"error":"Destination changed"}')):
-            with self.assertRaisesRegex(Rejected, 'Destination changed'):
-                handler.execute('file.copy', {'target': '/data/source'}, 'alice')
-
-    def test_native_cancellation_is_forwarded(self):
-        import job_control
-        handler = m.NativeOperations(Path('/module/bin/server'), ['file.copy'])
-        with patch.object(m.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"cancelled":true}')):
-            with self.assertRaises(job_control.Cancelled):
-                handler.execute('file.copy', {'target': '/data/source'}, 'alice')
+    def test_python_only_module_remains_loadable(self):
+        for mid, action in (('example', 'example.run'), ('file', 'file.custom')):
+            with self.subTest(module=mid), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                payload = root / mid / 'backend' / 'operations.py'
+                payload.parent.mkdir(parents=True)
+                payload.write_text(f'ACTIONS = [{action!r}]\ndef plan(action, params, user): return {{"actor": user}}\n')
+                module = {'enabled': True, 'actions': [action], 'files': {'backend/operations.py': 'a' * 64}}
+                with patch.object(m, 'ROOT', root), patch.object(m, 'registry', return_value={mid: module}):
+                    handlers = m.load_operations('actions', action)
+                    self.assertEqual(handlers[0].plan(action, {}, 'alice'), {'actor': 'alice'})

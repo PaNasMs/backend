@@ -135,24 +135,29 @@ func Query(ctx context.Context) (json.RawMessage, error) {
 			row["editable"] = false
 		}
 	}
-	var extra map[string]any
-	if a == nil && networknative.Active() {
-		extra, e = networknative.Inventory(rows)
-	} else {
-		raw, e = legacy(ctx, "inventory", "", "", map[string]any{"interfaces": rows})
-		if e == nil {
-			e = json.Unmarshal(raw, &extra)
-		}
-	}
-	if e != nil {
-		return nil, e
-	}
 	unlock, e := networkd.Lock()
 	if e != nil {
 		return nil, e
 	}
 	s, e := current(a)
 	unlock()
+	if e != nil {
+		return nil, e
+	}
+	var extra map[string]any
+	if a == nil && networknative.Active() {
+		extra, e = networknative.Inventory(rows)
+	} else {
+		var wifi any
+		if a != nil {
+			wifi, e = a.wifiInventory(rows)
+		}
+		if e == nil {
+			sharing, err := a.sharingInventory(rows)
+			e = err
+			extra = map[string]any{"interfaces": rows, "wifi": wifi, "sharing": sharing}
+		}
+	}
 	if e != nil {
 		return nil, e
 	}

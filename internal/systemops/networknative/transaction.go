@@ -121,6 +121,11 @@ func Operation(mode, action, user string, p map[string]any) (json.RawMessage, er
 		return nil, e
 	}
 	defer unlock()
+	return OperationLocked(mode, action, user, p)
+}
+
+// OperationLocked requires networkd.Lock so cross-provider recovery can be checked under the same lock.
+func OperationLocked(mode, action, user string, p map[string]any) (json.RawMessage, error) {
 	t, e := loadTransaction()
 	if e != nil {
 		return nil, e

@@ -173,8 +173,13 @@ def capture():
     return {str(path): entry(path) for path in FILES}
 
 
-def validate_entries(entries):
-    require(isinstance(entries, dict) and set(entries) == {str(path) for path in FILES},
+def capture_activation():
+    return {str(path): entry(path) for path in (NATIVE, ACTIVATION)}
+
+
+def validate_entries(entries, paths=None):
+    paths = FILES if paths is None else paths
+    require(isinstance(entries, dict) and set(entries) == {str(path) for path in paths},
             'Invalid paired sharing snapshot paths')
     for value in entries.values():
         require(isinstance(value, dict) and type(value.get('exists')) is bool, 'Invalid sharing snapshot')
@@ -198,7 +203,9 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def save_pair(folder, before):
+def save_pair(folder, before, activation_before):
+    validate_entries(activation_before, (NATIVE, ACTIVATION))
+    require(capture_activation() == activation_before, 'Sharing activation changed while the rollback archive was created')
     require(capture() == before, 'Sharing changed while the rollback archive was created')
     archive = folder / 'data.tar'
     with tarfile.open(archive, 'r:') as data:
@@ -211,19 +218,25 @@ def save_pair(folder, before):
             require(data.extractfile(members[0]).read() == base64.b64decode(state['data']),
                     'Sharing JSON changed while the rollback archive was created')
     path = folder / 'sharing-pair.json'
-    atomic(path, json.dumps({'schema': SCHEMA, 'archiveHash': digest(archive), 'files': before},
+    atomic(path, json.dumps({'schema': SCHEMA, 'archiveHash': digest(archive), 'files': before,
+                             'activation': activation_before},
                            sort_keys=True).encode())
     return hashlib.sha256(secure_read(path)).hexdigest()
 
 
-def load_pair(folder, expected_hash):
+def load_snapshot(folder, expected_hash):
     raw = secure_read(folder / 'sharing-pair.json')
     require(hashlib.sha256(raw).hexdigest() == expected_hash, 'Sharing rollback snapshot changed')
     value = json.loads(raw)
     require(value.get('schema') == SCHEMA and value.get('archiveHash') == digest(folder / 'data.tar'),
             'Sharing snapshot and rollback archive do not match')
     validate_entries(value['files'])
-    return value['files']
+    validate_entries(value.get('activation'), (NATIVE, ACTIVATION))
+    return value
+
+
+def load_pair(folder, expected_hash):
+    return load_snapshot(folder, expected_hash)['files']
 
 
 def converted(witness):
@@ -237,21 +250,26 @@ def converted(witness):
     return result
 
 
-def prepare_restore(source, source_hash, transaction, resume_units=()):
+def prepare_restore(source, source_hash, transaction, resume_units=(), source_activation=None):
+    require(source_activation is not None, 'Missing paired activation rollback evidence')
+    validate_entries(source_activation, (NATIVE, ACTIVATION))
     require(isinstance(transaction, str) and bool(transaction), 'Missing sharing rollback transaction')
     if GUARD.exists() or GUARD.is_symlink():
         guard = json.loads(secure_read(GUARD))
         require(guard.get('schema') == SCHEMA and guard.get('transaction') == transaction
-                and guard.get('sourceHash') == source_hash and guard.get('source') == source,
+                and guard.get('sourceHash') == source_hash and guard.get('source') == source
+                and guard.get('sourceActivation') == source_activation,
                 'Another sharing rollback requires recovery')
         require(isinstance(guard.get('resumeUnits'), list) and all(isinstance(unit, str) for unit in guard['resumeUnits']),
                 'Invalid sharing rollback service state')
         validate_entries(guard['witness'])
+        validate_entries(guard.get('witnessActivation'), (NATIVE, ACTIVATION))
         require(guard.get('phase') in ('prepared', 'restoring'), 'Invalid sharing rollback phase')
         return guard
     with locked():
         current = capture()
-    if current != source:
+        current_activation = capture_activation()
+    if current != source or current_activation != source_activation:
         result = subprocess.run([HELPER, 'sharing', 'rollback-check', '--source'],
                                 input=json.dumps({'schema': SCHEMA, 'source': source}),
                                 capture_output=True, text=True, timeout=60)
@@ -262,32 +280,42 @@ def prepare_restore(source, source_hash, transaction, resume_units=()):
         require(witness['files'] == current, 'Sharing changed during rollback validation')
     with locked():
         resume_check()
-        require(capture() == current, 'Sharing changed before rollback preparation')
+        require(capture() == current and capture_activation() == current_activation,
+                'Sharing changed before rollback preparation')
         guard = {'schema': SCHEMA, 'transaction': transaction, 'phase': 'prepared',
-                 'sourceHash': source_hash, 'source': source, 'witness': current, 'resumeUnits': list(resume_units)}
+                 'sourceHash': source_hash, 'source': source, 'witness': current, 'resumeUnits': list(resume_units),
+                 'sourceActivation': source_activation, 'witnessActivation': current_activation}
         atomic(GUARD, json.dumps(guard, sort_keys=True).encode())
     return guard
 
 
-def rollback_timer_state(source_version, target_version):
+def rollback_install(target_version, source_version=None):
     guard = json.loads(secure_read(GUARD))
     backup = json.loads(secure_read(UPDATE_ROOT / 'backup.json'))
     state = json.loads(secure_read(UPDATE_ROOT / 'state.json'))
     require(guard.get('schema') == SCHEMA and guard.get('phase') == 'prepared'
             and guard.get('transaction') == os.environ.get('PANASMS_UPDATE_TRANSACTION') == state.get('id')
             and state.get('phase') == 'rolling-back' and backup.get('complete') is True
-            and backup.get('version') == target_version and backup.get('toVersion') == source_version
+            and backup.get('version') == target_version
+            and (source_version is None or backup.get('toVersion') == source_version)
             and backup.get('sharingPairHash') == guard.get('sourceHash'),
             'The reverse package transition is not bound to the active rollback')
-    require(guard.get('source') == load_pair(Path(backup['folder']), backup['sharingPairHash']),
+    snapshot = load_snapshot(Path(backup['folder']), backup['sharingPairHash'])
+    require(guard.get('source') == snapshot['files'] and guard.get('sourceActivation') == snapshot['activation'],
             'The reverse package transition has mismatched sharing evidence')
+    validate_entries(guard.get('witnessActivation'), (NATIVE, ACTIVATION))
     validate_entries(guard['witness'])
     require(isinstance(guard.get('resumeUnits'), list) and all(isinstance(unit, str) for unit in guard['resumeUnits']),
             'Invalid rollback service state')
     with locked():
-        require(capture() in (guard['witness'], converted(guard['witness'])),
+        require(capture() in (guard['witness'], converted(guard['witness']))
+                and capture_activation() == guard['witnessActivation'],
                 'Sharing changed before reverse package transition')
-    return 'panasms-sharing.timer' in guard['resumeUnits']
+    return guard
+
+
+def rollback_timer_state(source_version, target_version):
+    return 'panasms-sharing.timer' in rollback_install(target_version, source_version)['resumeUnits']
 
 
 def package_stop(target_version):
@@ -377,6 +405,7 @@ def retry_transaction(source_hash):
 
 
 def begin_restore(guard):
+    validate_activation_restore(guard, retry=guard['phase'] == 'restoring')
     current = capture()
     expected = converted(guard['witness'])
     if guard['phase'] == 'prepared':
@@ -402,6 +431,7 @@ def clear_config_directory():
 
 
 def restore_pair(guard):
+    validate_activation_restore(guard, retry=True)
     expected = converted(guard['witness'])
     current = capture()
     require(all(current[name] in (value, guard['source'][name]) for name, value in expected.items()),
@@ -422,6 +452,25 @@ def restore_pair(guard):
             finally:
                 os.close(fd)
     require(capture() == guard['source'], 'Sharing rollback verification failed')
+    for path in (NATIVE, ACTIVATION):
+        name = str(path)
+        require(entry(path) in (guard['witnessActivation'][name], guard['sourceActivation'][name]),
+                'Sharing activation changed during rollback; current file was preserved')
+        value = guard['sourceActivation'][name]
+        if value['exists']:
+            atomic(path, base64.b64decode(value['data']), mode=value['mode'], gid=value['gid'])
+        elif path.exists():
+            unlink_sync(path)
+    require(capture_activation() == guard['sourceActivation'], 'Sharing activation rollback verification failed')
+
+
+def validate_activation_restore(guard, retry=False):
+    validate_entries(guard.get('sourceActivation'), (NATIVE, ACTIVATION))
+    validate_entries(guard.get('witnessActivation'), (NATIVE, ACTIVATION))
+    current = capture_activation()
+    require(all(current[name] in ((value, guard['sourceActivation'][name]) if retry else (value,))
+                for name, value in guard['witnessActivation'].items()),
+            'Sharing activation changed after rollback preparation; current files were preserved')
 
 
 def unlink_sync(path):
@@ -438,12 +487,12 @@ def finish_restore():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation', 'package-stop', 'package-resume', 'package-abort', 'target-capabilities'))
+    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation', 'package-stop', 'package-resume', 'package-abort', 'target-capabilities', 'rollback-install'))
     parser.add_argument('target_version', nargs='?')
     args = parser.parse_args()
     mode = args.mode
-    if (mode in ('prepare-activation', 'package-stop')) != (args.target_version is not None):
-        parser.error('prepare-activation and package-stop require a target package version')
+    if (mode in ('prepare-activation', 'package-stop', 'rollback-install')) != (args.target_version is not None):
+        parser.error('prepare-activation, package-stop and rollback-install require a target package version')
     require(os.geteuid() == OWNER, 'Sharing compatibility requires root')
     if mode == 'capabilities':
         print(json.dumps(capabilities(), sort_keys=True))
@@ -455,6 +504,8 @@ if __name__ == '__main__':
         resume_check()
     elif mode == 'prepare-activation':
         prepare_activation(args.target_version)
+    elif mode == 'rollback-install':
+        rollback_install(args.target_version)
     elif mode == 'package-stop':
         package_stop(args.target_version)
     elif mode in ('package-resume', 'package-abort'):

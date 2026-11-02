@@ -249,12 +249,13 @@ class PairedRollback(unittest.TestCase):
         paths[2].write_bytes(b'')
         paths[2].chmod(0o644)
         self.source = compat.capture()
+        self.source_activation = compat.capture_activation()
         self.folder = self.root / 'backup'
         self.folder.mkdir()
         with tarfile.open(self.folder / 'data.tar', 'w') as archive:
             archive.add(paths[0], arcname=str(paths[0]).lstrip('/'))
         (self.folder / 'data.tar').chmod(0o600)
-        self.source_hash = compat.save_pair(self.folder, self.source)
+        self.source_hash = compat.save_pair(self.folder, self.source, self.source_activation)
 
     def candidate(self):
         for path in compat.FILES:
@@ -266,13 +267,70 @@ class PairedRollback(unittest.TestCase):
         current = compat.capture()
         reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
         with patch.object(compat.subprocess, 'run', return_value=reply):
-            return compat.prepare_restore(self.source, self.source_hash, 'transaction')
+            return compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
+
+    def test_activation_metadata_restores_exact_absence_after_partial_retry(self):
+        compat.atomic(compat.NATIVE, b'{"packageVersion":"A"}', 0o640)
+        self.source_activation = compat.capture_activation()
+        self.source_hash = compat.save_pair(self.folder, self.source, self.source_activation)
+        compat.atomic(compat.NATIVE, b'{"packageVersion":"B"}')
+        compat.atomic(compat.ACTIVATION, b'{"targetVersion":"B"}')
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        original = compat.unlink_sync
+        def fail(path):
+            if path == compat.ACTIVATION:
+                raise OSError('interrupted metadata restore')
+            return original(path)
+        with patch.object(compat, 'unlink_sync', side_effect=fail):
+            with self.assertRaises(OSError):
+                compat.restore_pair(guard)
+        self.assertEqual(compat.entry(compat.NATIVE), self.source_activation[str(compat.NATIVE)])
+        self.assertTrue(compat.ACTIVATION.exists())
+        retry = self.prepare()
+        compat.begin_restore(retry)
+        compat.restore_pair(retry)
+        self.assertEqual(compat.capture_activation(), self.source_activation)
+
+    def test_activation_foreign_edit_blocks_before_any_policy_restore(self):
+        compat.atomic(compat.NATIVE, b'candidate')
+        self.candidate()
+        guard = self.prepare()
+        compat.begin_restore(guard)
+        before = compat.capture()
+        compat.atomic(compat.NATIVE, b'foreign')
+        with self.assertRaises(Rejected):
+            compat.restore_pair(guard)
+        self.assertEqual(compat.capture(), before)
+        self.assertEqual(compat.NATIVE.read_bytes(), b'foreign')
+        self.assertTrue(compat.GUARD.exists())
+
+    def test_activation_snapshot_is_hash_bound_and_missing_evidence_rejected(self):
+        snapshot = compat.load_snapshot(self.folder, self.source_hash)
+        self.assertEqual(snapshot['activation'], self.source_activation)
+        snapshot.pop('activation')
+        compat.atomic(self.folder / 'sharing-pair.json', json.dumps(snapshot).encode())
+        import hashlib
+        changed = hashlib.sha256((self.folder / 'sharing-pair.json').read_bytes()).hexdigest()
+        with self.assertRaises(Rejected):
+            compat.load_snapshot(self.folder, changed)
+        compat.atomic(compat.ACTIVATION, b'changed during archive')
+        with self.assertRaises(Rejected):
+            compat.save_pair(self.folder, self.source, self.source_activation)
+
+    def test_metadata_only_transition_requires_native_validation(self):
+        compat.atomic(compat.ACTIVATION, b'pending')
+        with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run:
+            with self.assertRaises(Rejected):
+                compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
+        self.assertEqual(run.call_args.args[0][-1], '--source')
+        self.assertFalse(compat.GUARD.exists())
 
     def test_native_rollback_witness_receives_verified_source_only_on_stdin(self):
         current = self.candidate()
         reply = SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
         with patch.object(compat.subprocess, 'run', return_value=reply) as run:
-            compat.prepare_restore(self.source, self.source_hash, 'transaction')
+            compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
         self.assertEqual(run.call_args.args[0], [compat.HELPER, 'sharing', 'rollback-check', '--source'])
         self.assertEqual(json.loads(run.call_args.kwargs['input']), {'schema': 1, 'source': self.source})
 
@@ -318,6 +376,32 @@ class PairedRollback(unittest.TestCase):
                 with self.assertRaises(Rejected):
                     compat.package_stop('1.0')
         self.assertEqual(json.loads(compat.PACKAGE_STATE.read_text()), original)
+
+    def test_rollback_install_is_readonly_and_bound_to_activation_pair(self):
+        compat.atomic(compat.NATIVE, b'candidate receipt')
+        guard = self.prepare()
+        backup = {'complete': True, 'version': '1.0', 'toVersion': '2.0',
+                  'sharingPairHash': self.source_hash, 'folder': str(self.folder)}
+        compat.atomic(compat.UPDATE_ROOT / 'backup.json', json.dumps(backup).encode())
+        compat.atomic(compat.UPDATE_ROOT / 'state.json', json.dumps({'id': 'transaction', 'phase': 'rolling-back'}).encode())
+        before = compat.capture_activation()
+        with patch.dict(os.environ, {'PANASMS_UPDATE_TRANSACTION': 'transaction'}):
+            with patch.object(compat, 'atomic') as write, patch.object(compat.subprocess, 'run') as run:
+                self.assertEqual(compat.rollback_install('1.0'), guard)
+                write.assert_not_called()
+                run.assert_not_called()
+            with self.assertRaises(Rejected):
+                compat.rollback_install('2.0')
+            altered = {**guard, 'sourceActivation': before}
+            compat.atomic(compat.GUARD, json.dumps(altered).encode())
+            with self.assertRaises(Rejected):
+                compat.rollback_install('1.0')
+            compat.atomic(compat.GUARD, json.dumps(guard).encode())
+            compat.atomic(compat.ACTIVATION, b'foreign')
+            with self.assertRaises(Rejected):
+                compat.rollback_install('1.0')
+        self.assertEqual(compat.NATIVE.read_bytes(), b'candidate receipt')
+        self.assertEqual(compat.ACTIVATION.read_bytes(), b'foreign')
 
     def test_activation_ticket_attests_old_source_without_mutating_publications(self):
         before = compat.capture()
@@ -377,7 +461,7 @@ class PairedRollback(unittest.TestCase):
         self.candidate()
         with patch.object(compat.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             with self.assertRaises(Rejected):
-                compat.prepare_restore(self.source, self.source_hash, 'transaction')
+                compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
         self.assertFalse(compat.GUARD.exists())
         compat.JOURNALS[0].write_bytes(b'native journal with legacy NFS snapshot')
         with self.assertRaises(Rejected):
@@ -392,7 +476,7 @@ class PairedRollback(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout=json.dumps({'schema': 1, 'files': current, 'journalsAbsent': True}))
         with patch.object(compat.subprocess, 'run', side_effect=changed):
             with self.assertRaises(Rejected):
-                compat.prepare_restore(self.source, self.source_hash, 'transaction')
+                compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
         self.assertFalse(compat.GUARD.exists())
         guard = self.prepare()
         compat.FILES[3].write_bytes(b'later foreign edit')
@@ -414,7 +498,7 @@ class PairedRollback(unittest.TestCase):
             with self.assertRaises(OSError):
                 compat.restore_pair(guard)
         self.assertTrue(compat.GUARD.exists())
-        retry = compat.prepare_restore(self.source, self.source_hash, 'transaction')
+        retry = compat.prepare_restore(self.source, self.source_hash, 'transaction', source_activation=self.source_activation)
         compat.begin_restore(retry)
         compat.restore_pair(retry)
         self.assertEqual(compat.capture(), self.source)

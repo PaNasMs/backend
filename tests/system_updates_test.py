@@ -24,6 +24,7 @@ class Updates(unittest.TestCase):
             p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
         for name,value in [('OWNER',os.getuid()),('FILES',tuple(self.root/name for name in ('sharing','smb','managed-nfs','legacy-nfs'))),
                            ('LOCKS',(self.root/'sharing.lock',self.root/'old-sharing.lock')),('GUARD',self.root/'sharing-restore'),
+                           ('ACTIVATION',self.root/'activation'),('NATIVE',self.root/'native'),
                            ('JOURNALS',(self.root/'sharing-journal',self.root/'legacy-journal'))]:
             guard=patch.object(u.sharing_compat,name,value);guard.start();self.addCleanup(guard.stop)
         u.save('state.json',{'id':'test','phase':'queued','operation':'install','version':'0.2.6'})

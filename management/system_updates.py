@@ -395,6 +395,7 @@ def backup(units):
     with sharing_compat.locked():
         sharing_compat.resume_check()
         sharing_before=sharing_compat.capture()
+        activation_before=sharing_compat.capture_activation()
         phase('backing-up')
         folder=ROOT/'backups'/read('state.json',{})['id'];folder.mkdir(parents=True)
         for name in installed():run(['dpkg-repack',name],cwd=folder,timeout=180)
@@ -409,16 +410,17 @@ def backup(units):
             fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
             try:os.fsync(fd)
             finally:os.close(fd)
-        pair_hash=sharing_compat.save_pair(folder,sharing_before)
+        pair_hash=sharing_compat.save_pair(folder,sharing_before,activation_before)
         save('backup.json',{'folder':str(folder),'packages':packages,'version':installed()[CORE],'units':units,'complete':True,'sharingPairHash':pair_hash,'moduleHash':module_hash(),'toVersion':read('state.json',{})['version']})
 
 
 def restore(boot=False):
     b=read('backup.json',{});require(b.get('complete'),'No complete rollback backup is available')
     require(b.get('sharingPairHash'),'This backup predates paired sharing rollback; manual recovery is required')
-    source=sharing_compat.load_pair(Path(b['folder']),b['sharingPairHash'])
+    snapshot=sharing_compat.load_snapshot(Path(b['folder']),b['sharingPairHash'])
+    source=snapshot['files']
     transaction=read('state.json',{})['id']
-    guard=sharing_compat.prepare_restore(source,b['sharingPairHash'],transaction,read('active-units.json',b['units']))
+    guard=sharing_compat.prepare_restore(source,b['sharingPairHash'],transaction,read('active-units.json',b['units']),snapshot['activation'])
     phase('rolling-back')
     stop(services())
     if guard['phase']=='prepared':

@@ -219,3 +219,17 @@ func TestPersonalFolderQueryKeepsAuthenticatedUserAndRequestedPath(t *testing.T)
 		t.Fatal(calls)
 	}
 }
+
+func TestNetworkRecoveryInspectionRequiresAdministrator(t *testing.T) {
+	d, _ := setup()
+	called := false
+	d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{UID: 1000, Role: "user"}, nil }
+	d.Recover = func(context.Context, *systemops.Request) (json.RawMessage, error) {
+		called = true
+		return json.RawMessage(`{}`), nil
+	}
+	_, err := d.Handle(systemops.ModeRecover, "member", &systemops.Request{Action: "smb.mount", Params: map[string]any{"point": "/mnt/share"}}, reporter())
+	if err == nil || called {
+		t.Fatal("member reached admin recovery inspection", err)
+	}
+}

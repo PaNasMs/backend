@@ -182,6 +182,18 @@ def namespace(root, loop, binary, nonce):
         '#!/usr/bin/python3\nimport sys,os,time,json\nfrom pathlib import Path\nassert sys.argv[1:]==["daemon-reload"],sys.argv\nif Path("/fixture/pause-reload").exists():\n Path("/fixture/reload-event").write_text(json.dumps({"pid":os.getpid()}))\n while True:time.sleep(.05)\n'
     )
     tool.chmod(0o755)
+    mount_tool = root / "fixture/bin/mount"
+    mount_tool.write_text(
+        """#!/usr/bin/python3
+import json,os,sys,time
+from pathlib import Path
+if Path('/fixture/pause-mount').exists() and sys.argv[1:3] in (['-t','cifs'],['-t','nfs']):
+ Path('/fixture/mount-event').write_text(json.dumps({'pid':os.getpid()}))
+ while True:time.sleep(.05)
+os.execv('/usr/bin/mount',['/usr/bin/mount',*sys.argv[1:]])
+"""
+    )
+    mount_tool.chmod(0o755)
     shutil.copy(binary, root / "usr/lib/panasms/panasms-system-helper")
     (root / "usr/lib/panasms/panasms-system-helper").chmod(0o755)
     shutil.copy(__file__, root / "fixture/harness.py")
@@ -297,6 +309,58 @@ def scenarios():
         )
         cmd("exportfs", "-ra")
         original = Path("/etc/fstab").read_bytes()
+        pending = dict(
+            target="//127.0.0.1/Fixture",
+            point="/mnt/pending",
+            username="admin",
+            password=password,
+            automount=True,
+        )
+        pending_plan = invoke("plan", "smb.mount", pending)
+        assert not pending_plan.get("error"), pending_plan
+        Path("/fixture/pause-mount").touch()
+        pending_body = dict(
+            action="smb.mount",
+            params=pending,
+            fingerprint=pending_plan["fingerprint"],
+            confirmation=pending_plan["confirmation"],
+        )
+        pending_worker = subprocess.Popen(
+            ["/usr/lib/panasms/panasms-system-helper", "execute", "admin"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        pending_worker.stdin.write(json.dumps(pending_body))
+        pending_worker.stdin.close()
+        pending_event = Path("/fixture/mount-event")
+        for _ in range(200):
+            if pending_event.exists():
+                break
+            assert pending_worker.poll() is None
+            time.sleep(0.05)
+        assert pending_event.exists()
+        pending_pid = json.loads(pending_event.read_text())["pid"]
+        assert b"/fixture/bin/mount" in Path("/proc", str(pending_pid), "cmdline").read_bytes()
+        os.kill(pending_worker.pid, signal.SIGKILL)
+        os.kill(pending_pid, signal.SIGKILL)
+        pending_worker.wait(timeout=10)
+        Path("/fixture/pause-mount").unlink()
+        pending_event.unlink()
+        assert (
+            subprocess.run(["findmnt", "--mountpoint", pending["point"]], capture_output=True).returncode == 1
+        )
+        report = invoke("recover", "smb.mount", pending)
+        assert report.get("recoveryAction") == "smb.unmount", report
+        assert report["checks"][0]["value"]["pendingJournal"] is True
+        op(report["recoveryAction"], {"target": pending["point"]})
+        assert not list(Path("/var/lib/panasms-agent/network-mounts").glob("*.json"))
+        assert not list(Path("/etc/panasms/network-credentials").iterdir())
+        print(
+            "PASS real pre-attach SIGKILL exposes explicit recovery action and cleans absent public mount",
+            flush=True,
+        )
         interrupted = dict(
             target="//127.0.0.1/Fixture",
             point="/mnt/interrupted",

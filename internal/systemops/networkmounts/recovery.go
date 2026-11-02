@@ -51,10 +51,16 @@ func (s *service) recovery(point string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{"point": point, "mounted": false, "phase": "No pending journal"}
+	result := map[string]any{"point": point, "mounted": false, "phase": "No pending journal", "pendingJournal": state != nil, "recoveryAction": nil}
 	if state != nil {
 		result["phase"] = state.Phase
 		result["source"] = state.Source
+		switch state.FSType {
+		case "cifs":
+			result["recoveryAction"] = "smb.unmount"
+		case "nfs":
+			result["recoveryAction"] = "nfs.unmount"
+		}
 	}
 	for _, row := range rows {
 		if row.Target == point {

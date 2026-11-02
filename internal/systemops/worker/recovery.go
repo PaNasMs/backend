@@ -34,6 +34,8 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		if err != nil {
 			return nil, err
 		}
+		next = state["recoveryAction"]
+		delete(state, "recoveryAction")
 		add("Network mount", state)
 	case req.Action == "folder.permissions":
 		route = "/storage"

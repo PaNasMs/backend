@@ -454,3 +454,41 @@ func TestPreviousBootNonpersistentMountCanBeRemounted(t *testing.T) {
 		})
 	}
 }
+
+func TestPendingStageWithoutPublicMountOffersExplicitRecovery(t *testing.T) {
+	for _, fs := range []string{"cifs", "nfs"} {
+		t.Run(fs, func(t *testing.T) {
+			s, p, _ := executionFixture(t)
+			point := param(p, "point")
+			state := &transaction{Schema: 1, Point: point, Source: param(p, "target"), FSType: fs, Phase: "preparing", Stage: true, BeforeHash: hashText("fixture")}
+			if err := s.save(state); err != nil {
+				t.Fatal(err)
+			}
+			report, err := s.recovery(point)
+			if err != nil {
+				t.Fatal(err)
+			}
+			action := "nfs.unmount"
+			if fs == "cifs" {
+				action = "smb.unmount"
+			}
+			if report["pendingJournal"] != true || report["mounted"] != false || report["recoveryAction"] != action || report["point"] != point {
+				t.Fatal(report)
+			}
+			if err := s.removeState(point); err != nil {
+				t.Fatal(err)
+			}
+			report, err = s.recovery(point)
+			if err != nil || report["recoveryAction"] != nil || report["pendingJournal"] != false {
+				t.Fatal(report, err)
+			}
+			state.FSType = "unknown"
+			if err := s.save(state); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.recovery(point); err == nil {
+				t.Fatal("malformed journal produced recovery action")
+			}
+		})
+	}
+}

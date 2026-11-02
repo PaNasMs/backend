@@ -5,13 +5,14 @@ import grp
 import ipaddress
 import pwd
 import account_policy
+import sharing_compat
 
 ACTIONS = {'share.save', 'share.remove', 'share.account', 'share.recover', 'share.disconnect'}
 STATE = Path('/etc/panasms/sharing.json')
 SMB = Path('/etc/samba/panasms-shares.conf')
 EXPORTS = Path('/etc/exports.d/panasms-shares.exports')
 JOURNAL = Path('/var/lib/panasms-agent/sharing-transaction.json')
-LOCK = Path('/run/panasms-agent/sharing.lock')
+LOCK = Path('/var/lib/panasms-agent/sharing.lock')
 HEADER = '# Managed by PaNasMs. Edit using Shared folders.\n'
 
 
@@ -20,6 +21,7 @@ def locked():
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     with LOCK.open('a') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        sharing_compat.resume_check()
         yield
 
 
@@ -374,6 +376,7 @@ def folders(target, user=None):
 
 if __name__ == '__main__':
     try:
+        sharing_compat.resume_check()
         if len(sys.argv) == 3 and sys.argv[1] == '--check':
             s = next(s for s in read()['shares'] if s['name'] == sys.argv[2])
             require(volume(s['path']) == s['volume'], 'Shared volume unavailable')

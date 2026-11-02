@@ -3,6 +3,7 @@ Description=PaNasMs restricted system authentication agent
 After=local-fs.target
 
 [Service]
+ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing_compat.py resume-check
 Environment=PANASMS_MAINTENANCE_LOCK=/run/lock/panasms-maintenance.lock
 User=root
 Group=panasms

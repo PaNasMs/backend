@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parents[1]/'management'))
@@ -21,6 +22,11 @@ class Updates(unittest.TestCase):
         guard=patch.object(u,'MAINTENANCE',self.root/'maintenance.lock');guard.start();self.addCleanup(guard.stop)
         for obj,name,value in [(u,'ROOT',self.root),(u,'CONFIG',self.root/'config.json'),(u,'installed',lambda:{'panasms-prototype':'0.2.5'}),(u.time,'sleep',lambda _:None)]:
             p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
+        for name,value in [('OWNER',os.getuid()),('FILES',tuple(self.root/name for name in ('sharing','smb','managed-nfs','legacy-nfs'))),
+                           ('LOCKS',(self.root/'sharing.lock',self.root/'old-sharing.lock')),('GUARD',self.root/'sharing-restore'),
+                           ('ACTIVATION',self.root/'activation'),('NATIVE',self.root/'native'),
+                           ('JOURNALS',(self.root/'sharing-journal',self.root/'legacy-journal'))]:
+            guard=patch.object(u.sharing_compat,name,value);guard.start();self.addCleanup(guard.stop)
         u.save('state.json',{'id':'test','phase':'queued','operation':'install','version':'0.2.6'})
     def test_maintenance_excludes_active_operation_and_new_submissions(self):
         with u.MAINTENANCE.open() as operation:
@@ -167,11 +173,23 @@ class Updates(unittest.TestCase):
                 state=u.read('state.json',{})
                 self.assertEqual(state['phase'],'rolled-back')
                 self.assertIn('Installed version' if cooling=='stale' else 'panasms-cooling.service',state['error'])
+    def test_explicit_retry_keeps_guard_transaction_and_original_resume_units(self):
+        guard={'schema':1,'transaction':'original-transaction','sourceHash':'snapshot',
+               'resumeUnits':['smbd.service']}
+        u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps(guard).encode())
+        u.save('backup.json',{'version':'0.2.5','sharingPairHash':'snapshot'})
+        with patch.object(u,'plan'),patch.object(u,'run'):
+            u.execute('system.update.rollback',{})
+        self.assertEqual(u.read('state.json',{})['id'],'original-transaction')
+        self.assertEqual(json.loads(u.sharing_compat.GUARD.read_text()),guard)
+
     def test_backup_repacks_every_installed_package(self):
         u.save('state.json',{'id':'a'*32,'phase':'backing-up','version':'0.2.6'})
         current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}
         def run(args,cwd=None,**kw):
             if args[0]=='dpkg-repack':(Path(cwd)/f'{args[1]}_0.2.5_arm64.deb').write_bytes(b'deb')
+            if args[0]=='tar':
+                with tarfile.open(args[2],'w'):pass
             return ''
         with patch.object(u,'installed',return_value=current),patch.object(u,'run',side_effect=run):u.backup(['core','panasms-cooling.service'])
         backup=u.read('backup.json',{})
@@ -193,9 +211,33 @@ class Updates(unittest.TestCase):
         u.save('active-units.json',['core','agent'])
         for phase in ('queued','backing-up','installing','verifying','rolling-back'):
             u.save('state.json',{'id':'test','phase':phase})
-            with patch.object(u,'restore') as restore, patch.object(u,'start') as start:u.recover()
+            with patch.object(u,'restore',return_value=['core','agent']) as restore, patch.object(u,'start') as start:u.recover()
             self.assertEqual(restore.called,phase in ('installing','verifying','rolling-back'))
             start.assert_called_once_with(['core','agent'],boot=True)
+
+    def test_explicit_root_retry_admits_recovery_required_without_agent(self):
+        u.save('state.json',{'id':'original','phase':'recovery-required'})
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',return_value=['core','agent']) as restore:
+            u.recover(boot=False,retry=True)
+        restore.assert_called_once_with(boot=False)
+        self.assertEqual(os.environ['PANASMS_UPDATE_TRANSACTION'],'original')
+        self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
+
+    def test_root_retry_failure_keeps_guard_and_requires_explicit_retry(self):
+        u.save('state.json',{'id':'original','phase':'recovery-required'})
+        u.sharing_compat.GUARD.write_bytes(b'recovery evidence')
+        with patch.object(u,'restore') as restore:
+            u.recover()
+            restore.assert_not_called()
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',side_effect=Rejected('foreign sharing file')):
+            with self.assertRaisesRegex(Rejected,'foreign sharing file'):
+                u.recover(boot=False,retry=True)
+        self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
+        self.assertEqual(u.sharing_compat.GUARD.read_bytes(),b'recovery evidence')
+        with patch.object(u.os,'geteuid',return_value=1000),patch.object(u,'restore') as restore:
+            with self.assertRaisesRegex(Rejected,'requires root'):
+                u.recover(boot=False,retry=True)
+            restore.assert_not_called()
 
     def test_boot_restart_does_not_wait_for_units_ordered_after_recovery(self):
         with patch.object(u,'run') as run:u.start(['core','agent'],boot=True)

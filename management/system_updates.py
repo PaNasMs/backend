@@ -17,6 +17,7 @@ import urllib.request
 import uuid
 from contextlib import contextmanager, ExitStack
 from common import Rejected, require, json, fingerprint
+import sharing_compat
 
 ROOT = Path('/var/lib/panasms-updates')
 CONFIG = Path('/etc/panasms/updates.json')
@@ -129,7 +130,7 @@ def query():
     return {'settings':config(),'installed':current,'candidate':candidate,'checkedAt':cache.get('checkedAt'),
             'available':bool(candidate and greater(candidate['version'],current.get(CORE,'0'))),
             'state':state,'busy':busy(),'history':read('history.json',[]),
-            'rollbackAvailable': bool(read('backup.json',{}).get('complete')) and not busy()}
+            'rollbackAvailable': bool(read('backup.json',{}).get('complete') and read('backup.json',{}).get('sharingPairHash')) and not busy()}
 
 
 def settings(p):
@@ -155,6 +156,7 @@ def plan(action,p,user=None):
         module_idle(skip_terminal=True)
         backup=read('backup.json',{})
         require(backup.get('complete'),'No complete rollback backup is available')
+        require(backup.get('sharingPairHash'),'This backup predates paired sharing rollback; manual recovery is required')
         require(backup.get('moduleHash')==module_hash(),'Installed modules changed after the backup; automatic rollback is unavailable')
         require(current['installed'].get(CORE)==backup.get('toVersion') or read('state.json',{}).get('phase')=='recovery-required','Rollback backup does not match the installed version')
         target=backup['version'];details=[target,'Restore previous PaNasMs packages, settings and databases. User files are not restored.']
@@ -171,15 +173,16 @@ def execute(action,p,user=None):
             publish_status()
             return {'message':'Update preferences saved'}
         operation=action.rsplit('.',1)[1]
+        transaction=sharing_compat.retry_transaction(read('backup.json',{}).get('sharingPairHash')) if operation=='rollback' else None
         save('active-units.json',[])
         worker=ROOT/'worker';worker.mkdir(exist_ok=True)
-        for name in ('system_updates.py','common.py'):
+        for name in ('system_updates.py','common.py','sharing_compat.py'):
             shutil.copy2(Path(__file__).parent/name,worker/name)
             with (worker/name).open('rb') as file:os.fsync(file.fileno())
         fd=os.open(worker,os.O_RDONLY|os.O_DIRECTORY)
         try:os.fsync(fd)
         finally:os.close(fd)
-        save('state.json',{'id':uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':read('backup.json',{}).get('version') if operation=='rollback' else (query()['candidate'] or {}).get('version'),'error':''})
+        save('state.json',{'id':transaction or uuid.uuid4().hex,'operation':operation,'phase':'queued','startedAt':dt.datetime.now(dt.timezone.utc).isoformat(),'version':read('backup.json',{}).get('version') if operation=='rollback' else (query()['candidate'] or {}).get('version'),'error':''})
         try:run(['systemctl','start','--no-block','panasms-update.service'],timeout=30)
         except Exception:
             save('state.json',{});raise
@@ -323,7 +326,7 @@ def apt_plan(paths):
 
 
 def services():
-    units=['panasms-core.service','panasms-agent.service','panasms-sharing.timer','panasms-sharing.service','panasms-oled.service']
+    units=['panasms-core.service','panasms-agent.service','panasms-sharing.timer','panasms-sharing.service','panasms-oled.service','smbd.service','nfs-server.service']
     units+=run(['systemctl','list-units','--type=service','--state=running','--no-legend','--plain','panasms-module-*.service']).splitlines()
     units=[u.split()[0] for u in units]
     return [u for u in units if active(u)]
@@ -389,35 +392,54 @@ def module_hash():
 
 
 def backup(units):
-    phase('backing-up')
-    folder=ROOT/'backups'/read('state.json',{})['id'];folder.mkdir(parents=True)
-    for name in installed():run(['dpkg-repack',name],cwd=folder,timeout=180)
-    items=[p for p in ('etc/panasms','var/lib/panasms','var/lib/panasms-agent/jobs.db','var/lib/panasms-agent/jobs.db-wal','var/lib/panasms-agent/jobs.db-shm','var/lib/panasms-modules/registry.json') if (Path('/')/p).exists()]
-    run(['tar','-cpf',str(folder/'data.tar'),'-C','/',*items],timeout=180)
-    packages=[str(p) for p in folder.glob('*.deb')]
-    require(len(packages)==len(installed()),'Could not create complete rollback packages')
-    for path in folder.iterdir():
-        with path.open('rb') as file:os.fsync(file.fileno())
-    for path in (folder,folder.parent):
-        fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
-        try:os.fsync(fd)
-        finally:os.close(fd)
-    save('backup.json',{'folder':str(folder),'packages':packages,'version':installed()[CORE],'units':units,'complete':True,'moduleHash':module_hash(),'toVersion':read('state.json',{})['version']})
+    with sharing_compat.locked():
+        sharing_compat.resume_check()
+        sharing_before=sharing_compat.capture()
+        activation_before=sharing_compat.capture_activation()
+        phase('backing-up')
+        folder=ROOT/'backups'/read('state.json',{})['id'];folder.mkdir(parents=True)
+        for name in installed():run(['dpkg-repack',name],cwd=folder,timeout=180)
+        items=[p for p in ('etc/panasms','var/lib/panasms','var/lib/panasms-agent/jobs.db','var/lib/panasms-agent/jobs.db-wal','var/lib/panasms-agent/jobs.db-shm','var/lib/panasms-modules/registry.json') if (Path('/')/p).exists()]
+        run(['tar','-cpf',str(folder/'data.tar'),'-C','/',*items],timeout=180)
+        (folder/'data.tar').chmod(0o600)
+        packages=[str(p) for p in folder.glob('*.deb')]
+        require(len(packages)==len(installed()),'Could not create complete rollback packages')
+        for path in folder.iterdir():
+            with path.open('rb') as file:os.fsync(file.fileno())
+        for path in (folder,folder.parent):
+            fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+        pair_hash=sharing_compat.save_pair(folder,sharing_before,activation_before)
+        save('backup.json',{'folder':str(folder),'packages':packages,'version':installed()[CORE],'units':units,'complete':True,'sharingPairHash':pair_hash,'moduleHash':module_hash(),'toVersion':read('state.json',{})['version']})
 
 
 def restore(boot=False):
     b=read('backup.json',{});require(b.get('complete'),'No complete rollback backup is available')
+    require(b.get('sharingPairHash'),'This backup predates paired sharing rollback; manual recovery is required')
+    snapshot=sharing_compat.load_snapshot(Path(b['folder']),b['sharingPairHash'])
+    source=snapshot['files']
+    transaction=read('state.json',{})['id']
+    guard=sharing_compat.prepare_restore(source,b['sharingPairHash'],transaction,read('active-units.json',b['units']),snapshot['activation'])
     phase('rolling-back')
     stop(services())
-    run(['dpkg','--force-confold','-i',*b['packages']],timeout=900)
-    for p in (Path('/var/lib/panasms'),Path('/etc/panasms')):
-        require(not p.is_symlink(),'Refusing rollback through a symbolic link')
-        if p.exists():shutil.rmtree(p)
-    for suffix in ('','-wal','-shm'):Path('/var/lib/panasms-agent/jobs.db'+suffix).unlink(missing_ok=True)
-    run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/'],timeout=180)
+    if guard['phase']=='prepared':
+        run(['dpkg','--force-confold','-i',*b['packages']],timeout=900)
+    with sharing_compat.locked():
+        sharing_compat.begin_restore(guard)
+        sharing_compat.clear_config_directory()
+        for p in (Path('/var/lib/panasms'),):
+            require(not p.is_symlink(),'Refusing rollback through a symbolic link')
+            if p.exists():shutil.rmtree(p)
+        for suffix in ('','-wal','-shm'):Path('/var/lib/panasms-agent/jobs.db'+suffix).unlink(missing_ok=True)
+        run(['tar','-xpf',str(Path(b['folder'])/'data.tar'),'-C','/',
+             '--exclude=etc/panasms/sharing.json','--exclude=./etc/panasms/sharing.json'],timeout=180)
+        sharing_compat.restore_pair(guard)
+        sharing_compat.finish_restore()
     display=Path('/usr/lib/panasms/panasms-oled')
     if display.is_file():run([str(display),'restore'],timeout=30)
-    if not boot:start(b['units']);healthy()
+    if not boot:start(guard['resumeUnits']);healthy()
+    return guard['resumeUnits']
 
 
 def work():
@@ -474,16 +496,18 @@ def work():
                 finish('failed',str(e))
 
 
-def recover(boot=True):
+def recover(boot=True, retry=False):
+    if retry:require(os.geteuid()==0,'Retrying a failed rollback requires root')
     with locked():
         s=read('state.json',{})
-        if s.get('phase') in ('installing','verifying','rolling-back'):
+        if retry:require(s.get('phase')=='recovery-required','No failed rollback requires an explicit retry')
+        if s.get('phase') in ('installing','verifying','rolling-back') or retry:
             try:
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
-                with maintenance():restore(boot=boot)
+                with maintenance():restored_units=restore(boot=boot)
                 # Package removal cancels boot jobs; queue them again without waiting on this unit.
-                if boot:start(read('backup.json',{})['units'],boot=True)
-                finish('rolled-back','Interrupted update restored during boot')
+                if boot:start(restored_units if restored_units is not None else read('backup.json',{})['units'],boot=True)
+                finish('rolled-back','Failed rollback retried by administrator' if retry else 'Interrupted update restored during boot')
             except Exception as e:finish('recovery-required',str(e));raise
         elif s.get('phase') in ACTIVE:
             start(read('active-units.json',[]),boot=boot)
@@ -519,5 +543,5 @@ def tick():
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','tick']);a=p.parse_args()
-    {'work':work,'recover':lambda:recover(boot=os.environ.get('PANASMS_UPDATE_RUNTIME')!='1'),'tick':tick}[a.mode]()
+    p=argparse.ArgumentParser();p.add_argument('mode',choices=['work','recover','retry-rollback','tick']);a=p.parse_args()
+    {'work':work,'recover':lambda:recover(boot=os.environ.get('PANASMS_UPDATE_RUNTIME')!='1'),'retry-rollback':lambda:recover(boot=False,retry=True),'tick':tick}[a.mode]()

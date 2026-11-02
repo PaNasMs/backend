@@ -103,7 +103,7 @@ class ManagementContractTest(unittest.TestCase):
             with patch.object(system_updates, 'ROOT', root), patch.object(system_updates, 'CONFIG', root / 'config.json'), patch.object(system_updates, 'installed', return_value={'panasms-prototype': '0.2.6'}):
                 validate('SystemUpdates', system_updates.query())
                 system_updates.save('state.json', {'phase':'recovery-required','error':'interrupted'})
-                system_updates.save('backup.json', {'complete':True})
+                system_updates.save('backup.json', {'complete':True,'sharingPairHash':'paired-fixture'})
                 system_updates.save('history.json', [{'phase':'failed','version':None}])
                 validate('SystemUpdates', system_updates.query())
                 result = job_recovery.inspect({'action':'system.update.install'})

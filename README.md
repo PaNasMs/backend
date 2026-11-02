@@ -402,6 +402,21 @@ system packages; update those dependencies separately first. The
 [update lifecycle](https://github.com/PaNasMs/panasms/blob/main/documentation/system-updates.md)
 documents publication, trust, backup and recovery.
 
+Sharing rollback restores its JSON and generated Samba/NFS files as one verified pair, including
+file absence and permissions. While recovery is incomplete, the guard deliberately keeps the
+agent, panel and sharing services stopped. After resolving the reported I/O failure or inspecting
+conflicting external edits, an administrator can retry without the panel:
+
+```sh
+sudo python3 /var/lib/panasms-updates/worker/system_updates.py retry-rollback
+```
+
+This root-only command uses the retained update worker, the existing transaction, paired archive
+and recorded service state. It does not bypass foreign-file checks or clear an unresolved guard.
+A failed retry retains `recovery-required` and the evidence; do not delete the guard or sharing
+journals to force services to start. Backups created before paired-sharing support require manual
+recovery rather than this automatic rollback path.
+
 ## Jobs, cancellation and recovery
 
 Account and storage changes go through a plan, confirmation and run workflow, and each run is a

@@ -17,6 +17,7 @@ import (
 )
 
 type networkUserKey struct{}
+type validatedPlanKey struct{}
 
 type Dispatcher struct {
 	Authorize func(string) (auth.Identity, error)
@@ -123,7 +124,9 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		return nil, err
 	}
 	mutated = true
-	return d.Execute(context.WithValue(context.Background(), networkUserKey{}, user), req.Action, req.Params, r)
+	ctx := context.WithValue(context.Background(), networkUserKey{}, user)
+	ctx = context.WithValue(ctx, validatedPlanKey{}, p.Fingerprint)
+	return d.Execute(ctx, req.Action, req.Params, r)
 }
 
 func changing() (bool, error) {
@@ -165,10 +168,17 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 		return hostname.Query()
 	case "web-access":
 		return webaccess.Default().Query()
+	case "homes":
+		return accounts.HomesQuery()
+	case "homes-check":
+		return accounts.HomesPreflight(ctx, target)
 	}
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if action == "homes.move" || action == "homes.recover" {
+		return accounts.PlanHomes(ctx, action, p)
+	}
 	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" || strings.HasPrefix(action, "network.wifi.") || strings.HasPrefix(action, "network.share.") {
 		return network.Operation(ctx, "plan", action, user, p)
 	}
@@ -187,6 +197,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if action == "homes.move" || action == "homes.recover" {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return accounts.ExecuteHomes(ctx, action, p, expected, r)
+	}
 	if action == "network.configure" || action == "network.confirm" || action == "network.rollback" || strings.HasPrefix(action, "network.wifi.") || strings.HasPrefix(action, "network.share.") {
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		return network.Operation(ctx, "execute", action, user, p)

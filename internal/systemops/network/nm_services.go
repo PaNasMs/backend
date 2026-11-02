@@ -61,7 +61,7 @@ func supplementalOperation(mode, action, user string, p map[string]any) (json.Ra
 	defer unlock()
 	a, e := connect()
 	if e != nil {
-		return nil, e
+		return nil, &systemops.Rejected{Message: "Start NetworkManager to recover the pending network change"}
 	}
 	defer a.bus.Close()
 	if _, e = current(a); e != nil {
@@ -236,7 +236,7 @@ func RunNMServices() error {
 			return e
 		}
 		e = func() error {
-			groups, e := loadNMGroups()
+			groups, preserved, e := partitionNMGroups()
 			if e != nil {
 				return e
 			}
@@ -256,8 +256,10 @@ func RunNMServices() error {
 							groups[i].Enabled = false
 						}
 					}
-					if e = storeNMGroups(groups); e != nil {
-						return e
+					if len(groups) > 0 {
+						if e = storePartitionedNMGroups(groups, preserved); e != nil {
+							return e
+						}
 					}
 					if e = nmWrite(path, boot, 0600); e != nil {
 						return e
@@ -273,7 +275,7 @@ func RunNMServices() error {
 					return e
 				}
 			}
-			groups, e = loadNMGroups()
+			groups, _, e = partitionNMGroups()
 			if e != nil {
 				return e
 			}
@@ -310,7 +312,7 @@ func RemoveNMServices() error {
 		return e
 	}
 	defer a.bus.Close()
-	groups, preserved, e := removalNMGroups()
+	groups, preserved, e := partitionNMGroups()
 	if e != nil {
 		return e
 	}
@@ -378,7 +380,7 @@ func CheckServiceRemoval() error {
 	return nil
 }
 
-func removalNMGroups() ([]nmGroup, []json.RawMessage, error) {
+func partitionNMGroups() ([]nmGroup, []json.RawMessage, error) {
 	owned := []nmGroup{}
 	preserved := []json.RawMessage{}
 	raw, e := os.ReadFile(filepath.Join(sharingRoot, "groups.json"))
@@ -410,4 +412,16 @@ func removalNMGroups() ([]nmGroup, []json.RawMessage, error) {
 		owned = append(owned, g)
 	}
 	return owned, preserved, nil
+}
+
+func storePartitionedNMGroups(groups []nmGroup, preserved []json.RawMessage) error {
+	all := append([]json.RawMessage{}, preserved...)
+	for _, group := range groups {
+		raw, e := json.Marshal(group)
+		if e != nil {
+			return e
+		}
+		all = append(all, raw)
+	}
+	return writeNetworkJSON(filepath.Join(sharingRoot, "groups.json"), all)
 }

@@ -183,8 +183,18 @@ func TestNMRemovalPreservesForeignProviderSchema(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(sharingRoot, "groups.json"), []byte(raw), 0600); e != nil {
 		t.Fatal(e)
 	}
-	owned, foreign, e := removalNMGroups()
+	owned, foreign, e := partitionNMGroups()
 	if e != nil || len(owned) != 1 || owned[0].ID != "nm" || len(foreign) != 1 || !strings.Contains(string(foreign[0]), `"retain":true`) || !strings.Contains(string(foreign[0]), `"wifi":["foreign-schema"]`) {
 		t.Fatalf("foreign provider state lost: %+v %s %v", owned, foreign, e)
+	}
+	writer := nmWrite
+	nmWrite = func(path, content string, mode os.FileMode) error { return os.WriteFile(path, []byte(content), mode) }
+	t.Cleanup(func() { nmWrite = writer })
+	if e = storePartitionedNMGroups(owned, foreign); e != nil {
+		t.Fatal(e)
+	}
+	written, e := os.ReadFile(filepath.Join(sharingRoot, "groups.json"))
+	if e != nil || !strings.Contains(string(written), `"retain":true`) || !strings.Contains(string(written), `"wifi":["foreign-schema"]`) {
+		t.Fatalf("service update lost foreign fields: %s %v", written, e)
 	}
 }

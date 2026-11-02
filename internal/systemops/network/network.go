@@ -170,6 +170,13 @@ func Operation(ctx context.Context, mode, action, user string, p map[string]any)
 			a.bus.Close()
 			return supplementalOperation(mode, action, user, p)
 		}
+		if active(s) {
+			message := "Confirm or roll back the pending network change first"
+			if supplementalKind(s.Kind) {
+				message = "Start NetworkManager to recover the pending network change"
+			}
+			return nil, &systemops.Rejected{Message: message}
+		}
 		if !networknative.Active() {
 			return nil, fmt.Errorf("No supported network manager is active")
 		}

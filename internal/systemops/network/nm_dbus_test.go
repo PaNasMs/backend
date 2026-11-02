@@ -648,3 +648,58 @@ func TestNMInventoryToleratesUnsupportedWifiPolicy(t *testing.T) {
 		t.Fatal("policy mutation accepted without stable identity")
 	}
 }
+
+func TestNMDurablePendingBlocksProviderFallback(t *testing.T) {
+	_, _ = newNMFixture(t)
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", "unix:path="+filepath.Join(t.TempDir(), "absent-bus"))
+	s := &nmChange{state: state{ID: strings.Repeat("e", 32), Kind: "network.wifi.radio", Status: "pending", Deadline: 1e12}}
+	if e := writeNetworkJSON(wifiRecoveryPath, s); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := Operation(context.Background(), "plan", "network.wifi.scan", "admin", map[string]any{"interface": "pnwifi0"}); e == nil || !strings.Contains(e.Error(), "pending network change") {
+		t.Fatalf("provider fallback bypassed the durable pending guard: %v", e)
+	}
+}
+
+func TestNMImmediateConfirmationWriteFailureDoesNotClaimCommit(t *testing.T) {
+	a, f := newNMSharingFixture(t)
+	if e := os.MkdirAll(filepath.Join(netClassRoot, "pneth2"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	f.mu.Lock()
+	f.props["/device/3"] = map[string]map[string]dbus.Variant{nm + ".Device": {"Interface": dbus.MakeVariant("pneth2"), "Managed": dbus.MakeVariant(true), "DeviceType": dbus.MakeVariant(uint32(1)), "State": dbus.MakeVariant(uint32(30)), "HwAddress": dbus.MakeVariant("00:11:22:33:44:77"), "ActiveConnection": dbus.MakeVariant(dbus.ObjectPath("/"))}}
+	f.mu.Unlock()
+	f.exportProperties(t, "/device/3")
+	p := map[string]any{"name": "Fixture share", "source": "pneth0", "outputs": []any{"pneth1", "pneth2"}, "mode": "bridge", "wifi": map[string]any{}, "autostart": true}
+	if _, e := a.sharingExecute("network.share.save", "admin", p); e != nil {
+		t.Fatal(e)
+	}
+	s, e := readNMChange(filepath.Join(sharingRoot, "pending.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = a.confirmNMSharing(s); e != nil {
+		t.Fatal(e)
+	}
+	groups, e := loadNMGroups()
+	if e != nil {
+		t.Fatal(e)
+	}
+	writer := nmWrite
+	injected := false
+	nmWrite = func(path, content string, mode os.FileMode) error {
+		if !injected && path == filepath.Join(sharingRoot, "pending.json") && strings.Contains(content, `"status":"confirmed"`) {
+			injected = true
+			return fmt.Errorf("injected durable commit failure")
+		}
+		return writer(path, content, mode)
+	}
+	_, e = a.sharingExecute("network.share.remove-port", "admin", map[string]any{"id": groups[0].ID, "interface": "pneth1"})
+	if !injected || e == nil || strings.Contains(e.Error(), "confirmed") {
+		t.Fatalf("false confirmation after failed commit: %v", e)
+	}
+	restored, e := loadNMGroups()
+	if e != nil || len(restored) != 1 || !slices.Contains(restored[0].Outputs, "pneth1") {
+		t.Fatalf("uncommitted removal not restored: %+v %v", restored, e)
+	}
+}

@@ -202,7 +202,13 @@ func (a *adapter) sharingExecute(action, user string, p map[string]any) (any, er
 	if e = apply(); e != nil {
 		// A persisted confirmation is a commit boundary; never roll it back after cleanup errors.
 		if s.Status == "confirmed" {
-			return nil, fmt.Errorf("Sharing changes were confirmed; cleanup requires recovery")
+			persisted, readErr := readNMChange(filepath.Join(sharingRoot, "pending.json"))
+			if readErr != nil {
+				return nil, fmt.Errorf("Sharing operation interrupted; recovery is required")
+			}
+			if persisted != nil && persisted.ID == s.ID && persisted.Status == "confirmed" {
+				return nil, fmt.Errorf("Sharing changes were confirmed; cleanup requires recovery")
+			}
 		}
 		if rollback := a.rollbackNMSharing(s); rollback != nil {
 			return nil, fmt.Errorf("Sharing operation interrupted; recovery is required")

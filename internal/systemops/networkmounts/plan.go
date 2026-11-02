@@ -32,6 +32,12 @@ func within(path, root string) bool {
 }
 
 type service struct {
+	attach             func(string, *os.File, func(uint64) error) (uint64, error)
+	unmount            func(string, folders.LiveMount) error
+	root               string
+	proc               string
+	owner              int
+	write              func(string, string, os.FileMode) error
 	fstab, credentials string
 	mounts             func() ([]folders.LiveMount, error)
 	lookup             func(string) (*user.User, error)
@@ -40,7 +46,7 @@ type service struct {
 }
 
 func defaultService() *service {
-	return &service{fstab: "/etc/fstab", credentials: "/etc/panasms/network-credentials", mounts: folders.ReadMounts, lookup: user.Lookup, path: folders.MountPath, run: systemops.Command}
+	return &service{proc: "/proc", attach: attachStaged, unmount: unmountPinned, root: "/var/lib/panasms-agent/network-mounts", owner: 0, write: systemops.AtomicWrite, fstab: "/etc/fstab", credentials: "/etc/panasms/network-credentials", mounts: folders.ReadMounts, lookup: user.Lookup, path: folders.MountPath, run: systemops.Command}
 }
 func safePath(path string) error {
 	for current := path; ; current = filepath.Dir(current) {
@@ -73,7 +79,24 @@ var smbSource = regexp.MustCompile(`^//[a-zA-Z0-9.-]+/[^/\s\x00\\#]+$`)
 func Plan(ctx context.Context, action string, p map[string]any, name string) (json.RawMessage, error) {
 	return defaultService().plan(ctx, action, p, name)
 }
+
+type preparedPlan struct {
+	identity    []string
+	raw         json.RawMessage
+	conf, point string
+	mounts      []folders.LiveMount
+	record      *transaction
+	witness     pathWitness
+}
+
 func (s *service) plan(ctx context.Context, action string, p map[string]any, name string) (json.RawMessage, error) {
+	prepared, err := s.prepare(ctx, action, p, name)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.raw, nil
+}
+func (s *service) prepare(ctx context.Context, action string, p map[string]any, name string) (*preparedPlan, error) {
 	if !IsAction(action) {
 		return nil, reject("Unknown operation")
 	}
@@ -111,10 +134,17 @@ func (s *service) plan(ctx context.Context, action string, p map[string]any, nam
 			return nil, reject("The folder contains mounted volumes; unmount them first")
 		}
 	}
+	record, err := s.load(point)
+	if err != nil {
+		return nil, err
+	}
 	target := param(p, "target")
 	details := []string{}
 	identity := []string{}
 	if mounting {
+		if record != nil {
+			return nil, reject("A network mount operation already exists; unmount the share before trying again")
+		}
 		valid := nfsSource.MatchString(target)
 		if action == "smb.mount" {
 			valid = smbSource.MatchString(target)
@@ -183,24 +213,57 @@ func (s *service) plan(ctx context.Context, action string, p map[string]any, nam
 			duration = "Mount at startup"
 		}
 		details = []string{target, point, access, duration}
+
 	} else {
-		if len(matches) != 1 {
-			return nil, reject("Network mount not found")
-		}
-		m := matches[0]
-		if action == "nfs.unmount" && (m.FSType != "nfs" && m.FSType != "nfs4") || action == "smb.unmount" && m.FSType != "cifs" {
-			return nil, reject("Network mount not found")
-		}
-		busy, err := s.run(ctx, []string{"fuser", "-m", point}, systemops.CommandOptions{Accepted: []int{0, 1}})
+		row, err := ownedEntry(string(conf), point)
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(string(busy)) != "" {
-			return nil, reject("Folder is in use by processes (PID: " + strings.TrimSpace(string(busy)) + "). Finish file transfers or close programs using the folder.")
+		validType := func(fs string) bool {
+			if action == "nfs.unmount" {
+				return fs == "nfs" || fs == "nfs4"
+			}
+			return fs == "cifs"
 		}
-		details = []string{m.Source, point, "Unmount the share and remove automatic mounting if configured by the panel"}
+		source := ""
+		if len(matches) > 1 {
+			return nil, reject("Network mount not found")
+		}
+		if len(matches) == 1 {
+			m := matches[0]
+			if !validType(m.FSType) {
+				return nil, reject("Network mount not found")
+			}
+			source = m.Source
+			if record != nil && (record.Source != m.Source || !validType(record.FSType)) {
+				return nil, reject("The mount changed; review a new operation plan")
+			}
+			busy, err := s.run(ctx, []string{"fuser", "-m", point}, systemops.CommandOptions{Accepted: []int{0, 1}})
+			if err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(string(busy)) != "" {
+				return nil, reject("Folder is in use by processes (PID: " + s.busyDescription(string(busy)) + "). Finish file transfers or close programs using the folder.")
+			}
+		} else if record != nil && validType(record.FSType) {
+			source = record.Source
+		} else if row != nil && validType(row[2]) {
+			source = row[0]
+		} else {
+			return nil, reject("Network mount not found")
+		}
+		if row != nil && (!validType(row[2]) || row[0] != source) {
+			return nil, reject("Network mount configuration changed; review recovery before continuing")
+		}
+		details = []string{source, point, "Unmount the share and remove automatic mounting if configured by the panel"}
+
 	}
-	raw, err := json.Marshal([]any{p, []any{string(conf), mounts, name, identity}})
+	witness, file, err := closestDirectory(point)
+	if err != nil {
+		return nil, err
+	}
+	file.Close()
+	raw, err := json.Marshal([]any{p, []any{string(conf), mounts, name, identity, record, witness}})
 	if err != nil {
 		return nil, err
 	}
@@ -212,5 +275,24 @@ func (s *service) plan(ctx context.Context, action string, p map[string]any, nam
 	if err != nil {
 		return nil, fmt.Errorf("mount plan: %w", err)
 	}
-	return json.Marshal(map[string]any{"target": target, "details": details, "confirmation": target, "fingerprint": fp})
+	raw, err = json.Marshal(map[string]any{"target": target, "details": details, "confirmation": target, "fingerprint": fp})
+	if err != nil {
+		return nil, err
+	}
+	return &preparedPlan{identity: identity, raw: raw, conf: string(conf), point: point, mounts: mounts, record: record, witness: witness}, nil
+}
+
+func ownedEntry(text, point string) ([]string, error) {
+	var result []string
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasSuffix(strings.TrimSpace(line), marker(point)) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 8 || folders.UnescapeMount(fields[1]) != point || result != nil {
+			return nil, reject("Network mount configuration changed; review recovery before continuing")
+		}
+		result = fields
+	}
+	return result, nil
 }

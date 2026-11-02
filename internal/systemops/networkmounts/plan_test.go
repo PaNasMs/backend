@@ -15,11 +15,14 @@ import (
 func fixture(t *testing.T) (*service, map[string]any) {
 	t.Helper()
 	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	conf := filepath.Join(root, "fstab")
 	if err := os.WriteFile(conf, []byte("UUID=root / ext4 defaults 0 1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return &service{fstab: conf, credentials: filepath.Join(root, "credentials"), mounts: func() ([]folders.LiveMount, error) { return []folders.LiveMount{}, nil }, lookup: func(string) (*user.User, error) { return &user.User{Uid: "1000", Gid: "1000"}, nil }, path: func(p string) error { _, err := systemops.CleanPath(p); return err }, run: func(context.Context, []string, systemops.CommandOptions) ([]byte, error) { return nil, nil }}, map[string]any{"target": "//nas/share", "point": filepath.Join(root, "share"), "username": "member", "password": "secret-value", "automount": true}
+	return &service{proc: filepath.Join(root, "proc"), root: filepath.Join(root, "state"), owner: os.Geteuid(), write: func(path, text string, mode os.FileMode) error { return os.WriteFile(path, []byte(text), mode) }, fstab: conf, credentials: filepath.Join(root, "credentials"), mounts: func() ([]folders.LiveMount, error) { return []folders.LiveMount{}, nil }, lookup: func(string) (*user.User, error) { return &user.User{Uid: "1000", Gid: "1000"}, nil }, path: func(p string) error { _, err := systemops.CleanPath(p); return err }, run: func(context.Context, []string, systemops.CommandOptions) ([]byte, error) { return nil, nil }}, map[string]any{"target": "//nas/share", "point": filepath.Join(root, "share"), "username": "member", "password": "secret-value", "automount": true}
 }
 func TestPlanDoesNotCreateOrExposeCredentials(t *testing.T) {
 	s, p := fixture(t)
@@ -88,7 +91,7 @@ func TestUnmountRequiresExactTypeAndNoBusyProcesses(t *testing.T) {
 	s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
 		return []byte("123 456"), nil
 	}
-	if _, err := s.plan(context.Background(), "smb.unmount", params, "member"); err == nil || !strings.Contains(err.Error(), "123 456") {
+	if _, err := s.plan(context.Background(), "smb.unmount", params, "member"); err == nil || (!strings.Contains(err.Error(), "123") || !strings.Contains(err.Error(), "456")) {
 		t.Fatal(err)
 	}
 }

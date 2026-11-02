@@ -6,6 +6,7 @@ import (
 	"os"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
+	"panasms.local/backend/internal/systemops/networkmounts"
 	"strings"
 
 	"panasms.local/backend/internal/auth"
@@ -185,6 +186,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if networkmounts.IsAction(action) {
+		return networkmounts.Plan(ctx, action, p, user)
+	}
 	if action == "folder.permissions" {
 		return folders.PlanPermissions(p)
 	}
@@ -212,6 +216,11 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if networkmounts.IsAction(action) {
+		user, _ := ctx.Value(networkUserKey{}).(string)
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return networkmounts.Execute(ctx, action, p, user, expected, r)
+	}
 	if action == "folder.permissions" {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return folders.ExecutePermissions(p, expected)

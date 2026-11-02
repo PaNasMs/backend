@@ -10,6 +10,7 @@ import (
 	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
+	"panasms.local/backend/internal/systemops/networkmounts"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
 	"time"
@@ -23,6 +24,17 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case networkmounts.IsAction(req.Action):
+		route = "/storage/mounts"
+		point := target
+		if strings.HasSuffix(req.Action, ".mount") {
+			point, _ = req.Params["point"].(string)
+		}
+		state, err := networkmounts.Recovery(point)
+		if err != nil {
+			return nil, err
+		}
+		add("Network mount", state)
 	case req.Action == "folder.permissions":
 		route = "/storage"
 		state, err := folders.PermissionState(target)

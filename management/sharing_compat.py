@@ -113,6 +113,12 @@ def configure():
         unlink_sync(INSTALL_MODE)
 
 
+def target_capabilities():
+    version = package_version(configuring=True)
+    attest()
+    return {'schema': SCHEMA, 'packageVersion': version, 'pairedRestore': 1}
+
+
 def capabilities():
     value = json.loads(secure_read(MARKER))
     require(value.get('schema') == SCHEMA and value.get('packageVersion') == package_version()
@@ -430,7 +436,7 @@ def finish_restore():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation', 'package-stop', 'package-resume', 'package-abort'))
+    parser.add_argument('mode', choices=('capabilities', 'configure', 'check-install', 'resume-check', 'prepare-activation', 'package-stop', 'package-resume', 'package-abort', 'target-capabilities'))
     parser.add_argument('target_version', nargs='?')
     args = parser.parse_args()
     mode = args.mode
@@ -439,6 +445,8 @@ if __name__ == '__main__':
     require(os.geteuid() == OWNER, 'Sharing compatibility requires root')
     if mode == 'capabilities':
         print(json.dumps(capabilities(), sort_keys=True))
+    elif mode == 'target-capabilities':
+        print(json.dumps(target_capabilities(), sort_keys=True))
     elif mode == 'configure':
         configure()
     elif mode == 'resume-check':

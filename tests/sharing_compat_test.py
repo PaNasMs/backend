@@ -32,6 +32,16 @@ class Preparation(unittest.TestCase):
             guard.start()
             self.addCleanup(guard.stop)
 
+    def test_target_attestation_never_marks_source_ready_before_configuration(self):
+        self.assertEqual(compat.target_capabilities(), {'schema': 1, 'packageVersion': '1.0', 'pairedRestore': 1})
+        self.assertFalse(compat.MARKER.exists())
+        with self.assertRaises(FileNotFoundError):
+            compat.capabilities()
+        self.files[0].unlink()
+        with self.assertRaises(FileNotFoundError):
+            compat.target_capabilities()
+        self.assertFalse(compat.MARKER.exists())
+
     def test_capability_requires_configured_version_and_exact_installed_code(self):
         with self.assertRaises(FileNotFoundError):
             compat.capabilities()

@@ -162,24 +162,18 @@ func text(path string) string {
 }
 func StorageRead(ctx context.Context) (Storage, error) {
 	s := Storage{Devices: []map[string]any{}, Mounts: []map[string]any{}, Arrays: []Array{}, ObservedAt: time.Now().UTC()}
-	raw, e := command(ctx, "/usr/bin/lsblk", "--json", "--bytes", "--output", "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,FSTYPE,UUID,MOUNTPOINTS,PKNAME,ROTA,MAJ:MIN,LABEL")
+	devices, e := BlockDevicesRead(ctx, "NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,FSTYPE,UUID,MOUNTPOINTS,PKNAME,ROTA,MAJ:MIN,LABEL")
 	if e != nil {
 		return s, e
 	}
-	var d struct {
-		Devices []map[string]any `json:"blockdevices"`
-	}
-	if e = json.Unmarshal(raw, &d); e != nil {
-		return s, e
-	}
-	for _, device := range d.Devices {
+	for _, device := range devices {
 		name, _ := device["kname"].(string)
 		if strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "zram") || strings.HasPrefix(name, "loop") {
 			continue
 		}
 		s.Devices = append(s.Devices, device)
 	}
-	raw, e = command(ctx, "/usr/bin/findmnt", "--task", "1", "--json", "--bytes", "--list", "--real", "--output", "SOURCE,TARGET,FSTYPE,OPTIONS,MAJ:MIN,SIZE,USED,AVAIL")
+	raw, e := command(ctx, "/usr/bin/findmnt", "--task", "1", "--json", "--bytes", "--list", "--real", "--output", "SOURCE,TARGET,FSTYPE,OPTIONS,MAJ:MIN,SIZE,USED,AVAIL")
 	if e != nil {
 		return s, e
 	}

@@ -69,3 +69,28 @@ func TestPartitionIdentityUsesParentIncarnationWithoutSlavesDirectory(t *testing
 		t.Fatal("missing whole-device dependencies accepted")
 	}
 }
+
+func TestIdentityRejectsMissingSlavesWithoutPartitionMarker(t *testing.T) {
+	inv := fixtureInventory(t, `[{"path":"/dev/sda","kname":"sda","type":"disk"}]`)
+	sys := t.TempDir()
+	node := filepath.Join(sys, "sda")
+	if err := os.Mkdir(node, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"dev": "8:0", "diskseq": "42"} {
+		if err := os.WriteFile(filepath.Join(node, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := inv.Identity("/dev/sda", sys)
+	pathError, ok := err.(*os.PathError)
+	if !ok || !os.IsNotExist(err) || pathError.Path != filepath.Join(node, "slaves") {
+		t.Fatalf("expected missing slaves rejection, got %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(node, "slaves"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inv.Identity("/dev/sda", sys); err != nil {
+		t.Fatal(err)
+	}
+}

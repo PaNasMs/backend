@@ -314,6 +314,7 @@ func TestNMWifiConnectionPrivateDBusConfirmAndOldJournal(t *testing.T) {
 		t.Fatal("connection persisted before confirmation")
 	}
 	s.HashVersion = 0
+	s.Previous = nil
 	s.ProfileHash, e = legacyProfileSignature(profile)
 	if e != nil {
 		t.Fatal(e)

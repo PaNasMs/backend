@@ -90,7 +90,7 @@ func validateHome(path, target string, existing bool, users []passwdUser) error 
 	var mounts struct {
 		Filesystems []mount `json:"filesystems"`
 	}
-	if err := readCommandJSON([]string{"findmnt", "--json", "--list", "--output", "TARGET,FSTYPE,OPTIONS,MAJ:MIN"}, &mounts); err != nil {
+	if err := readCommandJSON([]string{"findmnt", "--json", "--list", "--output", "TARGET,FSTYPE,OPTIONS,MAJ:MIN,UUID"}, &mounts); err != nil {
 		return err
 	}
 	best := mount{}
@@ -118,6 +118,7 @@ type mount struct {
 	FSType  string `json:"fstype"`
 	Options string `json:"options"`
 	Device  string `json:"maj:min"`
+	UUID    string `json:"uuid"`
 }
 
 func readCommandJSON(args []string, v any) error {
@@ -137,16 +138,19 @@ func homeVolume(m mount) error {
 		Type      string            `json:"type"`
 		Removable json.RawMessage   `json:"rm"`
 		Transport string            `json:"tran"`
+		FSType    string            `json:"fstype"`
+		UUID      string            `json:"uuid"`
 		Children  []json.RawMessage `json:"children"`
 	}
 	var raw struct {
 		Devices []json.RawMessage `json:"blockdevices"`
 	}
-	if err := readCommandJSON([]string{"lsblk", "--json", "--output", "NAME,MAJ:MIN,TYPE,RM,TRAN"}, &raw); err != nil {
+	if err := readCommandJSON([]string{"lsblk", "--json", "--output", "NAME,MAJ:MIN,TYPE,RM,TRAN,FSTYPE,UUID"}, &raw); err != nil {
 		return err
 	}
 	local := map[string]bool{}
 	unsafe := map[string]bool{}
+	btrfsMembers := map[string][]string{}
 	var walk func(json.RawMessage, bool) error
 	walk = func(raw json.RawMessage, parentUnsafe bool) error {
 		var d device
@@ -156,6 +160,9 @@ func homeVolume(m mount) error {
 		bad := parentUnsafe || d.Transport == "usb" || string(d.Removable) == "true" || (string(d.Removable) == "1" || string(d.Removable) == `"1"`) || d.Type == "loop"
 		local[d.ID] = true
 		unsafe[d.ID] = unsafe[d.ID] || bad
+		if d.FSType == "btrfs" && d.UUID != "" && d.ID != "" {
+			btrfsMembers[d.UUID] = append(btrfsMembers[d.UUID], d.ID)
+		}
 		for _, child := range d.Children {
 			if err := walk(child, bad); err != nil {
 				return err
@@ -168,8 +175,14 @@ func homeVolume(m mount) error {
 			return err
 		}
 	}
+	if m.FSType == "btrfs" && len(btrfsMembers[m.UUID]) != 0 {
+		local[m.Device] = true
+		for _, member := range btrfsMembers[m.UUID] {
+			unsafe[m.Device] = unsafe[m.Device] || unsafe[member]
+		}
+	}
 	if !local[m.Device] || unsafe[m.Device] {
-		return reject("Home folders require a permanent local disk; removable and USB devices are not supported")
+		return reject("Home folders cannot be stored on USB or removable devices")
 	}
 	if m.Target != "/" {
 		var configured struct {
@@ -185,7 +198,7 @@ func homeVolume(m mount) error {
 			}
 		}
 		if !found {
-			return reject("Configure this volume to mount automatically before moving home folders")
+			return reject("Configure automatic mounting for the destination volume first")
 		}
 	}
 	return nil

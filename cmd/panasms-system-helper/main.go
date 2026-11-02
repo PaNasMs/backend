@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,6 +30,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "homes" && os.Args[2] == "recover" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := accounts.RecoverHomes(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "power-control" && os.Args[2] == "configure" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

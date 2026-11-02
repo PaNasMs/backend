@@ -22,6 +22,23 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case strings.HasPrefix(req.Action, "homes."):
+		route = "/settings/users"
+		raw, err := accounts.HomesQuery()
+		if err != nil {
+			return nil, err
+		}
+		var state struct{ Recovery bool }
+		if err := json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		value := "No pending journal"
+		if state.Recovery {
+			value = "Recovery required"
+			next = "homes.recover"
+		}
+		add("Home recovery journal", value)
+		message = "Open home-folder settings. Recover an existing transfer before attempting another move; destination copies may have been retained."
 	case strings.HasPrefix(req.Action, "network.access."):
 		route = "/settings/network"
 		raw, err := networkaccess.Query()

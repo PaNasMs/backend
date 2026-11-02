@@ -1033,3 +1033,31 @@ func TestNMSharingPortsBindPermanentMAC(t *testing.T) {
 		}
 	}
 }
+
+func TestNMSharingLegacyWiredBindingWithoutPermanentMAC(t *testing.T) {
+	for _, test := range []struct {
+		name, permanent, current, identity string
+		want                               bool
+	}{
+		{"legacy unchanged", "", "00:11:22:33:44:66", "pneth1", true},
+		{"different physical device", "", "00:11:22:33:44:66", "other-device", false},
+		{"different current address", "", "00:11:22:33:44:77", "pneth1", false},
+		{"missing saved identity", "", "00:11:22:33:44:66", "", false},
+		{"permanent mismatch wins", "00:11:22:33:44:77", "00:11:22:33:44:66", "pneth1", false},
+		{"permanent match wins", "00:11:22:33:44:66", "02:aa:bb:cc:dd:ee", "pneth1", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, f := newNMSharingFixture(t)
+			f.mu.Lock()
+			f.props["/device/2"][nm+".Device"]["HwAddress"] = dbus.MakeVariant(test.current)
+			f.props["/device/2"][nm+".Device.Wired"] = map[string]dbus.Variant{"PermHwAddress": dbus.MakeVariant(test.permanent)}
+			f.mu.Unlock()
+			g := nmGroup{Profiles: map[string]string{"pneth1": "legacy"}, Identities: map[string]string{"pneth1": test.identity}}
+			profiles := map[string]nmProfile{"legacy": {Settings: settings{"connection": {"type": dbus.MakeVariant("802-3-ethernet")}, "802-3-ethernet": {"mac-address": dbus.MakeVariant([]byte{0, 17, 34, 51, 68, 102})}}}}
+			match, e := a.matchesNMAdapter(g, "pneth1", profiles)
+			if e != nil || match != test.want {
+				t.Fatal("legacy identity match", match, e)
+			}
+		})
+	}
+}

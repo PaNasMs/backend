@@ -210,6 +210,13 @@ func (a *adapter) matchesNMAdapter(g nmGroup, name string, saved map[string]nmPr
 				return false, e
 			}
 			mac := str(hardware["PermHwAddress"])
+			if mac == "" && num(props["DeviceType"]) == 1 {
+				c, e := physicalNM(name)
+				if e != nil || c.Identity != g.Identities[name] {
+					return false, e
+				}
+				mac = str(props["HwAddress"])
+			}
 			return strings.EqualFold(fmt.Sprintf("%x", bound), strings.ReplaceAll(mac, ":", "")), nil
 		}
 	}

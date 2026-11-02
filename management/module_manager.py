@@ -637,35 +637,6 @@ def execute(action, p, user):
         }
 
 
-class NativeOperations:
-    def __init__(self, executable, actions):
-        self.executable = executable
-        self.ACTIONS = actions
-
-    def invoke(self, mode, user, body):
-        control = os.environ.get("PANASMS_CONTROL_FD")
-        result = subprocess.run(
-            [str(self.executable), "operations", mode, user],
-            input=json.dumps(body), text=True, stdout=subprocess.PIPE,
-            pass_fds=(int(control),) if control is not None else (),
-        )
-        require(result.returncode == 0, "Native module worker failed")
-        value = json.loads(result.stdout)
-        if value.get("cancelled"):
-            import job_control
-            raise job_control.Cancelled()
-        require(not value.get("error"), value.get("error", "Native operation failed"))
-        return value
-
-    def query(self, user, target):
-        return self.invoke("query", user, {"target": target})
-
-    def plan(self, action, params, user):
-        return self.invoke("plan", user, {"action": action, "params": params})
-
-    def execute(self, action, params, user):
-        return self.invoke("execute", user, {"action": action, "params": params})
-
 
 def load_operations(kind, name):
     installed = registry()
@@ -678,8 +649,7 @@ def load_operations(kind, name):
         ):
             continue
         if m.get("operations") == "bin/server" and "bin/server" in m.get("files", {}):
-            result.append(NativeOperations(ROOT / mid / "bin/server", m.get("actions", [])))
-            continue
+            raise Rejected("Native module operations are managed by the native handler")
         import importlib.util
 
         path = ROOT / mid / "backend/operations.py"

@@ -5,6 +5,7 @@ import grp
 import ipaddress
 import pwd
 import account_policy
+import sharing_compat
 
 ACTIONS = {'share.save', 'share.remove', 'share.account', 'share.recover', 'share.disconnect'}
 STATE = Path('/etc/panasms/sharing.json')
@@ -20,6 +21,7 @@ def locked():
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     with LOCK.open('a') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        sharing_compat.resume_check()
         yield
 
 
@@ -379,6 +381,7 @@ def folders(target, user=None):
 
 if __name__ == '__main__':
     try:
+        sharing_compat.resume_check()
         if len(sys.argv) == 3 and sys.argv[1] == '--check':
             s = next(s for s in read()['shares'] if s['name'] == sys.argv[2])
             require(volume(s['path']) == s['volume'], 'Shared volume unavailable')

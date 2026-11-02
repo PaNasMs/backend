@@ -254,26 +254,29 @@ def export_plan(action, p):
 
 
 def export_execute(action, p):
-    target = str(export_path(p["target"]))
-    conf = Path("/etc/exports.d/panasms.exports")
-    rows = conf.read_text().splitlines() if conf.exists() else []
-    rows = [line for line in rows if not line.startswith(target + " ")]
-    if action == "nfs.export":
-        rows.append(
-            target
-            + " "
-            + " ".join(
-                c.strip()
-                + "("
-                + ("ro" if p.get("readOnly") else "rw")
-                + ",sync,no_subtree_check,root_squash)"
-                for c in p["clients"].split(",")
+    import sharing
+
+    with sharing.locked():
+        target = str(export_path(p["target"]))
+        conf = Path("/etc/exports.d/panasms.exports")
+        rows = conf.read_text().splitlines() if conf.exists() else []
+        rows = [line for line in rows if not line.startswith(target + " ")]
+        if action == "nfs.export":
+            rows.append(
+                target
+                + " "
+                + " ".join(
+                    c.strip()
+                    + "("
+                    + ("ro" if p.get("readOnly") else "rw")
+                    + ",sync,no_subtree_check,root_squash)"
+                    for c in p["clients"].split(",")
+                )
             )
-        )
-    atomic(conf, "\n".join(rows) + "\n", 0o644)
-    command(["systemctl", "enable", "--now", "nfs-kernel-server"])
-    command(["exportfs", "-ra"])
-    return {"message": 'NFS share updated'}
+        atomic(conf, "\n".join(rows) + "\n", 0o644)
+        command(["systemctl", "enable", "--now", "nfs-kernel-server"])
+        command(["exportfs", "-ra"])
+        return {"message": 'NFS share updated'}
 
 
 def export_query():

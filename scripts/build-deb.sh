@@ -41,6 +41,9 @@ install -m 0644 packaging/pam "$stage/etc/pam.d/panasms"
 install -d "$stage/usr/lib/udev/rules.d"
 install -m 0644 packaging/*.rules "$stage/usr/lib/udev/rules.d/"
 install -m 0644 packaging/*.service packaging/*.timer "$stage/usr/lib/systemd/system/"
+for unit in smbd nfs-server; do
+ install -D -m 0644 packaging/panasms-sharing-restore.conf "$stage/usr/lib/systemd/system/$unit.service.d/panasms-sharing-restore.conf"
+done
 install -D -m 0644 packaging/panasms-mdns.conf "$stage/usr/lib/systemd/system/avahi-daemon.service.d/panasms-mdns.conf"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
 sed -i "s/@PANASMS_PACKAGE_VERSION@/$version/g" "$stage/DEBIAN/preinst"

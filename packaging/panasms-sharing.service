@@ -3,6 +3,7 @@ Description=PaNasMs SMB account access reconciliation
 After=local-fs.target
 
 [Service]
+ExecStartPre=/usr/bin/python3 /usr/lib/panasms/management/sharing_compat.py resume-check
 Type=oneshot
 ExecStart=/usr/lib/panasms/panasms-system-helper sharing reconcile
 TimeoutStartSec=60

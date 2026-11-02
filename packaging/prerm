@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
-case "${1:-}" in remove|upgrade|deconfigure)
+case "${1:-}" in failed-upgrade)
+ echo 'The installed package refused removal; preserving its failure and recovery state.' >&2
+ exit 1
+ ;;
+ remove|upgrade|deconfigure)
  if [ "$1" = upgrade ] && [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
   echo 'Package replacement requires exclusive maintenance. Use the panel updater or panasms-maintenance.' >&2
   exit 1
@@ -27,6 +31,9 @@ CHECK
   python3 /usr/lib/panasms/management/storage_reshape.py --check-removal
   systemctl disable --now panasms-network-access.service
   /usr/lib/panasms/panasms-system-helper network-access remove
+ fi
+ if [ "$1" = upgrade ]; then
+  python3 /usr/lib/panasms/management/sharing_compat.py package-stop "$2"
  fi
  systemctl stop panasms-oled.service || true
  if [ "$1" = remove ]; then systemctl disable panasms-oled.service || true; fi

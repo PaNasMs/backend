@@ -12,11 +12,12 @@ import (
 )
 
 type homeJournalUser struct {
-	Name string `json:"name"`
-	Old  string `json:"old"`
-	New  string `json:"new"`
-	UID  *int   `json:"uid,omitempty"`
-	GID  *int   `json:"gid,omitempty"`
+	Name        string   `json:"name"`
+	Old         string   `json:"old"`
+	New         string   `json:"new"`
+	UID         *int     `json:"uid,omitempty"`
+	GID         *int     `json:"gid,omitempty"`
+	NewIdentity []uint64 `json:"newIdentity,omitempty"`
 }
 
 type homeJournal struct {
@@ -99,6 +100,9 @@ func (s *homeService) validateJournal(state *homeJournal) error {
 	}
 	seen := map[string]bool{}
 	for _, u := range state.Users {
+		if (len(u.NewIdentity) != 0 && len(u.NewIdentity) != 2) || (state.Phase == "committed" && (u.UID != nil || u.GID != nil) && len(u.NewIdentity) != 2) {
+			return reject("Invalid home-move recovery identity; data was preserved")
+		}
 		if _, err := systemops.CleanPath(u.Old); err != nil {
 			return err
 		}
@@ -269,7 +273,8 @@ func (s *homeService) recover(ctx context.Context, r *systemops.Reporter) (json.
 					return nil, err
 				}
 				relative, _ := filepath.Rel(state.Target, u.New)
-				if _, err := homeIdentity(filepath.Join(homePinnedPath(target), relative)); err != nil {
+				identity, err := homeIdentity(filepath.Join(homePinnedPath(target), relative))
+				if err != nil || (len(u.NewIdentity) != 0 && !slices.Equal(identity, u.NewIdentity)) {
 					return nil, reject("Home volume changed or is unavailable; data was preserved")
 				}
 			}

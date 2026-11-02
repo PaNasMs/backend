@@ -35,6 +35,7 @@ func newHomeFixture(t *testing.T, phase string) *homeFixture {
 	f.state.BackupIdentity, _ = homeIdentity(f.state.Backup)
 	uid, gid := 15000, 15000
 	f.state.Users = []homeJournalUser{{Name: "alice", Old: f.state.Source + "/alice", New: f.state.Target + "/alice", UID: &uid, GID: &gid}}
+	f.state.Users[0].NewIdentity, _ = homeIdentity(f.state.Users[0].New)
 	f.current = passwdUser{Name: "alice", UID: uid, GID: gid, Dir: f.state.Users[0].New}
 	f.s = &homeService{defaults: filepath.Join(f.root, "useradd"), passwd: filepath.Join(f.root, "passwd"), journal: filepath.Join(f.root, "journal"), nologin: filepath.Join(f.root, "nologin"), proc: filepath.Join(f.root, "proc"), lock: filepath.Join(f.root, "lock")}
 	f.s.users = func() ([]passwdUser, error) { return []passwdUser{f.current}, nil }
@@ -82,6 +83,7 @@ func TestHomesLegacySwitchingRecoveryRetainsBothCopies(t *testing.T) {
 	f := newHomeFixture(t, "switching")
 	f.state.SourceIdentity, f.state.TargetIdentity, f.state.BackupIdentity = nil, nil, nil
 	f.state.Users[0].UID, f.state.Users[0].GID = nil, nil
+	f.state.Users[0].NewIdentity = nil
 	f.save(t)
 	if _, err := f.s.recover(context.Background(), nil); err != nil {
 		t.Fatal(err)
@@ -430,5 +432,34 @@ func TestHomesInitialJournalUsesReaderValidation(t *testing.T) {
 	f.state.Backup = filepath.Dir(f.state.Source) + "/.panasms-home-" + strings.Repeat("x", 1024)
 	if err := f.s.validateJournal(&f.state); err == nil || !systemops.IsRejected(err) {
 		t.Fatal("unreadable generated journal accepted", err)
+	}
+}
+
+func TestHomesCommittedRecoveryPreservesOriginalWhenUserCopyReplaced(t *testing.T) {
+	f := newHomeFixture(t, "committed")
+	if err := os.Rename(f.state.Users[0].New, f.state.Target+"/saved-alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(f.state.Users[0].New, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.recover(context.Background(), nil); err == nil {
+		t.Fatal("replacement destination home accepted for destructive cleanup")
+	}
+	assertHomeFile(t, f.state.Backup+"/previous/original", "original")
+	if _, err := os.Stat(f.s.journal); err != nil {
+		t.Fatal("recovery evidence removed", err)
+	}
+}
+
+func TestHomesNewCommittedJournalRequiresCopiedUserIdentity(t *testing.T) {
+	f := newHomeFixture(t, "committed")
+	f.state.Users[0].NewIdentity = nil
+	if err := f.s.validateJournal(&f.state); err == nil {
+		t.Fatal("missing new-journal copy identity accepted")
+	}
+	f.state.Users[0].UID, f.state.Users[0].GID = nil, nil
+	if err := f.s.validateJournal(&f.state); err != nil {
+		t.Fatal("legacy Python journal rejected", err)
 	}
 }

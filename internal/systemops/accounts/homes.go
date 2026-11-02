@@ -511,6 +511,14 @@ func (s *homeService) move(ctx context.Context, state *homeJournal, users []pass
 	if _, err := systemops.Copying(ctx, r, append(args, sourcePath, targetPath), 0); err != nil {
 		return err
 	}
+	for i, u := range state.Users {
+		relative, _ := filepath.Rel(state.Target, u.New)
+		identity, err := homeIdentity(filepath.Join(homePinnedPath(target), relative))
+		if err != nil {
+			return err
+		}
+		state.Users[i].NewIdentity = identity
+	}
 	verify := append([]string{}, args...)
 	verify = append(verify, "--dry-run", "--checksum", "--itemize-changes", "--delete", sourcePath, targetPath)
 	changes, err := systemops.Copying(ctx, r, verify, 0)
@@ -535,6 +543,11 @@ func (s *homeService) move(ctx context.Context, state *homeJournal, users []pass
 	}
 	if err := homeCheckIdentity(state.Target, state.TargetIdentity); err != nil {
 		return err
+	}
+	for _, u := range state.Users {
+		if err := homeCheckIdentity(u.New, u.NewIdentity); err != nil {
+			return err
+		}
 	}
 	state.Phase = "switching"
 	if err := s.save(state); err != nil {

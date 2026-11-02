@@ -90,6 +90,7 @@ if name=='rsync':stage='copy-verified' if '--dry-run' in args else 'target-creat
 if name=='usermod':
  stage='one-user-switched' if args[-1]=='bob' else 'journal-switching'
 if name=='umount' and state.get('phase')=='committed':stage='journal-committed'
+if name=='sync' and state.get('phase')=='copying':stage='copy-synced'
 if name=='sync' and state.get('phase')=='committed' and not Path(state['source']).exists():stage='old-tree-renamed'
 def barrier(label):
  if label and pause==label:
@@ -202,7 +203,7 @@ def invoke(mode, body):
 
 def reset():
     assert not JOURNAL.exists(), JOURNAL.read_text() if JOURNAL.exists() else ''
-    for path in ('/home', '/home-original', TARGET, '/srv/data/pending', '/srv/data/previous-parent'):
+    for path in ('/home', '/home-original', TARGET, '/srv/data/pending', '/srv/data/previous-parent', '/srv/data/preserved-alice'):
         if Path(path).exists():
             shutil.rmtree(path)
     Path('/home').mkdir(mode=0o755)
@@ -266,7 +267,7 @@ def recover():
     assert not JOURNAL.exists() and not Path('/run/nologin').exists()
 
 
-def interrupted(stage, expected, legacy=False, missing_home=False):
+def interrupted(stage, expected, legacy=False, missing_home=False, replaced_home=False):
     request = plan()
     Path('/fixture/pause').write_text(stage)
     process = subprocess.Popen([HELPER, 'execute', 'admin'], stdin=subprocess.PIPE,
@@ -294,15 +295,24 @@ def interrupted(stage, expected, legacy=False, missing_home=False):
         for user in state['users']:
             user.pop('uid', None)
             user.pop('gid', None)
+            user.pop('newIdentity', None)
         JOURNAL.write_text(json.dumps(state))
-    if missing_home:
-        shutil.rmtree(Path(TARGET) / 'alice')
+    if missing_home or replaced_home:
+        preserved = Path('/srv/data/preserved-alice')
+        (Path(TARGET) / 'alice').rename(preserved)
+        if replaced_home:
+            (Path(TARGET) / 'alice').mkdir()
+            (Path(TARGET) / 'alice/unrelated').write_text('unrelated replacement')
         failed = subprocess.run([HELPER, 'homes', 'recover'], capture_output=True, text=True)
         assert failed.returncode != 0 and JOURNAL.exists(), failed.stdout
         state = json.loads(JOURNAL.read_text())
         original = str(Path(state['backup']) / 'previous') if (Path(state['backup']) / 'previous').exists() else '/home'
         assert snapshot(original) == expected
-        command('/usr/bin/rsync', '-aHAXS', '--numeric-ids', original + '/alice', TARGET + '/')
+        if replaced_home:
+            assert (Path(TARGET) / 'alice/unrelated').read_text() == 'unrelated replacement'
+            (Path(TARGET) / 'alice/unrelated').unlink()
+            (Path(TARGET) / 'alice').rmdir()
+        preserved.rename(Path(TARGET) / 'alice')
     recover()
     committed = stage in ('journal-committed', 'old-tree-renamed')
     base = TARGET if committed else '/home'
@@ -313,7 +323,7 @@ def interrupted(stage, expected, legacy=False, missing_home=False):
         assert command('/usr/bin/getent', 'passwd', name).split(':')[5] == base + '/' + name
     if committed:
         assert not Path('/home').exists()
-    print('PASS interrupted', stage, 'legacy' if legacy else 'native', 'missing-home protected' if missing_home else '', flush=True)
+    print('PASS interrupted', stage, 'legacy' if legacy else 'native', 'missing-home protected' if missing_home else ('replaced-home protected' if replaced_home else ''), flush=True)
 
 
 def cancelled_copy(expected):
@@ -352,6 +362,41 @@ def cancelled_copy(expected):
     print('PASS cancellation restores source and reaps copy worker', flush=True)
 
 
+def replaced_after_verification(expected):
+    request = plan()
+    Path('/fixture/pause').write_text('copy-synced')
+    process = subprocess.Popen([HELPER, 'execute', 'admin'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    event = None
+    try:
+        process.stdin.write(json.dumps(request))
+        process.stdin.close()
+        deadline = time.monotonic() + 30
+        while not Path('/fixture/event').exists() and time.monotonic() < deadline and process.poll() is None:
+            time.sleep(0.02)
+        assert Path('/fixture/event').exists(), 'Copy never reached post-verification boundary'
+        event = json.loads(Path('/fixture/event').read_text())
+        (Path(TARGET) / 'alice').rename('/srv/data/preserved-alice')
+        (Path(TARGET) / 'alice').mkdir()
+        (Path(TARGET) / 'alice/unrelated').write_text('keep replacement')
+        os.kill(event['pid'], signal.SIGCONT)
+        process.wait(timeout=30)
+        result = json.loads(process.stdout.read())
+        assert result.get('error') and not JOURNAL.exists() and not Path('/run/nologin').exists(), result
+        assert snapshot('/home') == expected and (Path(TARGET) / 'alice/unrelated').read_text() == 'keep replacement'
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if event:
+            try:
+                os.kill(event['pid'], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        Path('/fixture/pause').unlink(missing_ok=True)
+    print('PASS user copy replacement after verification rejected before switching', flush=True)
+
+
 def scenarios():
     assert os.getpid() == 1
     assert Path('/fixture/nonce').read_text() == os.environ.get('PANASMS_HOMES_NONCE')
@@ -376,6 +421,10 @@ def scenarios():
     print('PASS existing NSS account name moves and committed cleanup completes', flush=True)
     reset()
     interrupted('journal-committed', snapshot('/home'), missing_home=True)
+    reset()
+    interrupted('journal-committed', snapshot('/home'), replaced_home=True)
+    reset()
+    replaced_after_verification(snapshot('/home'))
     reset()
     for duplicate in ('inside', 'outside'):
         original = snapshot('/home')

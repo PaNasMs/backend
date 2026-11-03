@@ -3,6 +3,7 @@ package storagebase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,15 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/storagequery"
 )
+
+// A sound record can become impossible to apply without changing foreign state.
+// Keep these refusals distinct from gaps in evidence, invalid records and I/O failures.
+type configConflict struct{ cause error }
+
+func (e *configConflict) Error() string       { return e.cause.Error() }
+func (e *configConflict) Unwrap() error       { return e.cause }
+func conflict(message string) error           { return &configConflict{reject(message)} }
+func IsConfigRecoveryConflict(err error) bool { var c *configConflict; return errors.As(err, &c) }
 
 type configRecord struct {
 	TransactionEnvelope
@@ -184,7 +194,7 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 		return nil, err
 	}
 	if Hash(current) != record.FstabBefore && current != record.FstabDesired {
-		return nil, reject("Storage configuration changed; review recovery before modifying it")
+		return nil, conflict("Storage configuration changed; review recovery before modifying it")
 	}
 	p, err := s.preflight(ctx)
 	if err != nil {
@@ -211,17 +221,17 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 	for _, d := range witness.Devices {
 		before, ok := original[d.Path]
 		if !ok || !sameHardware(before, d) {
-			return nil, reject("Storage recovery identity changed")
+			return nil, conflict("Storage recovery identity changed")
 		}
 		if p.Inventory.Rows[d.Path] == nil {
-			return nil, reject("Storage recovery identity changed")
+			return nil, conflict("Storage recovery identity changed")
 		}
 		now, e := s.identity(p, d.Path)
 		if e != nil {
 			return nil, e
 		}
 		if now.BootID != witness.BootID {
-			return nil, reject("Storage recovery identity changed")
+			return nil, conflict("Storage recovery identity changed")
 		}
 		for _, live := range now.Devices {
 			known := false
@@ -232,25 +242,25 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 				}
 			}
 			if !known {
-				return nil, reject("Storage recovery identity changed")
+				return nil, conflict("Storage recovery identity changed")
 			}
 		}
 		found := false
 		for _, live := range now.Devices {
 			if live.Path == d.Path {
 				if !sameHardware(d, live) {
-					return nil, reject("Storage recovery identity changed")
+					return nil, conflict("Storage recovery identity changed")
 				}
 				observed.Devices = append(observed.Devices, live)
 				found = true
 			}
 		}
 		if !found {
-			return nil, reject("Storage recovery identity changed")
+			return nil, conflict("Storage recovery identity changed")
 		}
 	}
 	if !targetPresent && (!record.ConfigOnlyRemaining || record.Action != "partition.delete") {
-		return nil, reject("Storage recovery identity changed")
+		return nil, conflict("Storage recovery identity changed")
 	}
 	if err = checkPendingRoots(s.roots, s.owner, record.Domain, target, observed); err != nil {
 		return nil, err
@@ -291,13 +301,13 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 	resolution, desired := "desired", record.FstabDesired
 	if anyLive {
 		if record.ConfigOnlyRemaining || Hash(current) != record.FstabBefore {
-			return nil, reject("The original file system is still present; preserve its configuration")
+			return nil, conflict("The original file system is still present; preserve its configuration")
 		}
 		for _, d := range record.Identity.Devices {
 			if removed[d.UUID] {
 				row := p.Inventory.Rows[d.Path]
 				if row == nil || row["uuid"] != d.UUID {
-					return nil, reject("Storage recovery identity changed")
+					return nil, conflict("Storage recovery identity changed")
 				}
 			}
 		}
@@ -372,7 +382,7 @@ func (s *configRecoveryService) execute(ctx context.Context, plan *configRecover
 		return nil, err
 	}
 	if current != plan.desired {
-		return nil, reject("Storage configuration changed; review recovery before modifying it")
+		return nil, conflict("Storage configuration changed; review recovery before modifying it")
 	}
 	put := func(key string, value any) { data, _ := json.Marshal(value); plan.fields[key] = data }
 	put("configReconciled", true)

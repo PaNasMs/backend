@@ -37,9 +37,12 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 			return nil, err
 		}
 		next = state["recoveryAction"]
+		if partitionfs.ArchiveAvailable(ctx, target) {
+			next = "storage.archive-journal"
+		}
 		delete(state, "recoveryAction")
 		add("Storage operation", state)
-	case partitionfs.IsAction(req.Action):
+	case partitionfs.IsAction(req.Action) || req.Action == "storage.archive-journal":
 		route = "/storage"
 		raw, err := partitionfs.Recovery(target)
 		if err != nil {
@@ -51,6 +54,9 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		}
 		if journal, ok := state["journal"].(map[string]any); ok && journal["configurationPending"] == true {
 			next = "storage.recover"
+		}
+		if state["journal"] != nil && partitionfs.ArchiveAvailable(ctx, target) {
+			next = "storage.archive-journal"
 		}
 		add("Storage operation", state)
 		message = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."

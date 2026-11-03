@@ -195,6 +195,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if action == "storage.archive-journal" {
+		return partitionfs.ArchivePlan(ctx, p)
+	}
 	if action == "storage.recover" {
 		return storagebase.ConfigRecoveryPlan(ctx, p)
 	}
@@ -231,6 +234,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if action == "storage.archive-journal" {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return partitionfs.ArchiveExecute(ctx, p, expected)
+	}
 	if action == "storage.recover" {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return storagebase.ConfigRecoveryExecute(ctx, p, expected, r)

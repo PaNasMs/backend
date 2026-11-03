@@ -74,6 +74,7 @@ var queryViews = map[string]impl{
 // dynamically from installed module registrations.
 var actionModules = map[string]impl{
 	"storage.recover":             goNative,
+	"storage.archive-journal":     goNative,
 	"disk.eject":                  legacy,
 	"disk.prepare":                legacy,
 	"disk.sleep":                  legacy,

@@ -42,41 +42,45 @@ func (s *service) journalPath(target string) string {
 	return filepath.Join(s.root, journalKey(target)+".json")
 }
 func (s *service) load(target string) (*transaction, error) {
+	state, _, err := s.loadWithDigest(target)
+	return state, err
+}
+func (s *service) loadWithDigest(target string) (*transaction, string, error) {
 	if err := storagebase.SecureDirectory(s.root, s.owner, false); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, "", nil
 		}
-		return nil, err
+		return nil, "", err
 	}
 	fd, err := unix.Open(s.journalPath(target), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, "", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	f := os.NewFile(uintptr(fd), target)
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	raw := st.Sys().(*syscall.Stat_t)
 	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || int(raw.Uid) != s.owner || raw.Nlink != 1 {
-		return nil, reject("Storage recovery record permissions are unsafe")
+		return nil, "", reject("Storage recovery record permissions are unsafe")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 2*1024*1024+1))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(data) > 2*1024*1024 {
-		return nil, reject("Storage recovery record is invalid")
+		return nil, "", reject("Storage recovery record is invalid")
 	}
 	var state transaction
 	if err = systemops.Decode(data, &state); err != nil || state.Schema != 1 || state.Domain != "partitionfs" || (state.Phase != "pending" && state.Phase != "complete") || (state.Complete != (state.Phase == "complete")) || state.Target != target || !IsAction(state.Action) || len(state.Fingerprint) != 64 || state.Identity.BootID == "" || len(state.Identity.Devices) == 0 {
-		return nil, reject("Storage recovery record is invalid")
+		return nil, "", reject("Storage recovery record is invalid")
 	}
-	return &state, nil
+	return &state, storagebase.Hash(string(data)), nil
 }
 func (s *service) save(state *transaction) error {
 	if err := storagebase.SecureDirectory(s.root, s.owner, true); err != nil {
@@ -130,6 +134,7 @@ func hardwareEqual(a, b storagequery.StorageIdentity) bool {
 	}
 	return true
 }
+
 const interruptedInspection = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."
 
 func Recovery(target string) (json.RawMessage, error) {

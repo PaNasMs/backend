@@ -315,7 +315,13 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 	if err != nil {
 		return nil, err
 	}
-	plan.raw, err = json.Marshal(map[string]any{"action": "storage.recover", "target": target, "fingerprint": plan.fingerprint, "confirmation": target, "details": map[string]any{"operation": record.Action, "configurationResolution": resolution, "diskStepsRepeated": false}})
+	details := []string{"Only saved mount configuration will be reconciled. Partition and file-system writes will not be repeated."}
+	if resolution == "before" {
+		details = append(details, "The original file system is still present. Keep its existing mount configuration and reload it.")
+	} else {
+		details = append(details, "Apply the saved mount configuration and reload it, including when it is already written.")
+	}
+	plan.raw, err = json.Marshal(map[string]any{"target": target, "fingerprint": plan.fingerprint, "confirmation": target, "details": details})
 	return plan, err
 }
 func configCanComplete(r configRecord) bool {

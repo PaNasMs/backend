@@ -267,3 +267,23 @@ func TestConfigRecoveryRejectsAddedAncestorAndEpochMismatch(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigRecoveryPlanKeepsSharedPlanSchema(t *testing.T) {
+	s, r, _, _, _ := recoveryFixture(t)
+	p, e := s.prepare(context.Background(), r.Target)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var plan struct {
+		Target       string   `json:"target"`
+		Fingerprint  string   `json:"fingerprint"`
+		Confirmation string   `json:"confirmation"`
+		Details      []string `json:"details"`
+	}
+	if e = json.Unmarshal(p.raw, &plan); e != nil {
+		t.Fatal(e)
+	}
+	if plan.Target != r.Target || plan.Confirmation != r.Target || len(plan.Fingerprint) != 64 || len(plan.Details) != 2 {
+		t.Fatalf("invalid plan: %+v", plan)
+	}
+}

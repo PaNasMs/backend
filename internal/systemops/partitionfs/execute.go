@@ -307,7 +307,7 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 				}
 			}
 			if fs == "btrfs" {
-				if e = verifyBtrfsMount(dir, target, text(plan.row, "uuid")); e != nil {
+				if e = storagebase.VerifyBtrfsMount(dir, target, text(plan.row, "uuid")); e != nil {
 					return nil, e
 				}
 				found = true

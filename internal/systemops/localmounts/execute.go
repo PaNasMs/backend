@@ -218,6 +218,9 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		if text(fresh.Inventory.Rows[v.target], "uuid") != "" || len(fresh.Inventory.Descendants(v.target)) != 1 {
 			return nil, reject("Prepared disk metadata has not settled; inspect recovery before continuing")
 		}
+		if err = verifyConfigOwners(fresh, state.ConfigRemovedUUIDs, func(string) bool { return false }); err != nil {
+			return nil, err
+		}
 		state.ConfigIdentity = now
 		state.ConfigOnlyRemaining = true
 		if err = save(state); err != nil {

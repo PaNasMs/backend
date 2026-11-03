@@ -122,6 +122,18 @@ func MountOptions(p map[string]any) (string, error) {
 func within(path, point string) bool {
 	return path == point || strings.HasPrefix(path, strings.TrimRight(point, "/")+"/")
 }
+func verifyConfigOwners(pf *storagequery.Preflight, uuids []string, allowed func(string) bool) error {
+	if len(uuids) == 0 {
+		return nil
+	}
+	for path, row := range pf.Inventory.Rows {
+		if !allowed(path) && slices.Contains(uuids, text(row, "uuid")) {
+			return reject("This file system UUID is present on another device. Review the mount configuration.")
+		}
+	}
+	return nil
+}
+
 func (s *service) prepare(ctx context.Context, action string, p map[string]any, actor string) (*plan, error) {
 	if !IsAction(action) {
 		return nil, reject("Unknown storage operation")
@@ -209,6 +221,14 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	})
 	switch action {
 	case "disk.prepare":
+		desired, err := desiredFstab(action, v)
+		if err != nil {
+			return nil, err
+		}
+		removed := storagebase.RemovedFstabUUIDs(v.conf, desired)
+		if err = verifyConfigOwners(pf, removed, func(path string) bool { _, selected := v.identities[path]; return selected }); err != nil {
+			return nil, err
+		}
 		if err = pf.Unused(target, true); err != nil {
 			return nil, err
 		}
@@ -313,6 +333,11 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 		}
 		if text(row, "uuid") == "" {
 			return nil, reject("A UUID is required for mounting")
+		}
+		if action != "mount.open" || text(p, "mode") != "repair-only" {
+			if err = verifyConfigOwners(pf, []string{text(row, "uuid")}, func(path string) bool { return path == target }); err != nil {
+				return nil, err
+			}
 		}
 		policy, err := MountPolicy(p)
 		if err != nil {

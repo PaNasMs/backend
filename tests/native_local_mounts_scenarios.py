@@ -126,6 +126,28 @@ def main():
         assert digest(payload) == original_hash
     finally:
         busy.terminate(); busy.wait(timeout=5)
+    cloned = Path('/fixture/cloned-fd-ready')
+    private_reader = """
+import os,sys,time
+from pathlib import Path
+with open(sys.argv[1], 'rb') as data:
+    info = Path('/proc/self/fdinfo',str(data.fileno())).read_text()
+    Path('/fixture/cloned-fd-ready').write_text(next(line.split()[1] for line in info.splitlines() if line.startswith('mnt_id:')))
+    time.sleep(90)
+"""
+    reader = subprocess.Popen(['unshare','--mount','--propagation','private','--','/usr/bin/python3','-c',private_reader,str(payload)])
+    try:
+        for _ in range(100):
+            if cloned.exists() and cloned.read_text(): break
+            assert reader.poll() is None
+            time.sleep(.05)
+        assert cloned.read_text()!=rows[0].split()[0], 'fixture must exercise a different mount ID'
+        result = denied('plan','mount.detach',{'target':target})
+        assert str(reader.pid) in result['error'] and digest(payload)==original_hash, result
+    finally:
+        if reader.poll() is None: reader.terminate()
+        reader.wait(timeout=5)
+    print('PASS cloned mount namespace file descriptor blocks detachment',flush=True)
     ready = Path('/fixture/mapped-ready')
     mapping_script = """
 import ctypes, mmap, os, sys, time

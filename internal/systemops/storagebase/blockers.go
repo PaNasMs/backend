@@ -81,6 +81,16 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 			}
 			key := fmt.Sprintf("%02x:%02x", major, minor)
 			mappedDevices[key] = append(mappedDevices[key], m.Target)
+			if m.FSType == "btrfs" {
+				var st unix.Statx_t
+				if err := unix.Statx(unix.AT_FDCWD, m.Target, unix.AT_STATX_DONT_SYNC, unix.STATX_MNT_ID, &st); err != nil || st.Mnt_id != m.ID {
+					return reject("Could not verify process mount identity")
+				}
+				rootKey := fmt.Sprintf("%02x:%02x", st.Dev_major, st.Dev_minor)
+				if rootKey != key {
+					mappedDevices[rootKey] = append(mappedDevices[rootKey], m.Target)
+				}
+			}
 		}
 	}
 	problems := []string{}
@@ -132,17 +142,27 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 		}
 		root := filepath.Join(proc, entry.Name())
 		busy := map[string]bool{}
-		for _, link := range []string{"cwd", "root"} {
+		// Cloned namespaces can assign another mount ID to the same filesystem.
+		recordUse := func(path string) error {
 			var st unix.Statx_t
-			err = unix.Statx(unix.AT_FDCWD, filepath.Join(root, link), 0, unix.STATX_MNT_ID, &st)
+			err := unix.Statx(unix.AT_FDCWD, path, unix.AT_STATX_DONT_SYNC|unix.AT_NO_AUTOMOUNT, unix.STATX_MNT_ID, &st)
+			if processGone(err) {
+				return nil
+			}
 			if err != nil {
-				if processGone(err) {
-					continue
-				}
 				return reject("Could not check which processes use the volume. No unmount has started.")
 			}
 			if point := ids[st.Mnt_id]; point != "" {
 				busy[point] = true
+			}
+			for _, point := range mappedDevices[fmt.Sprintf("%02x:%02x", st.Dev_major, st.Dev_minor)] {
+				busy[point] = true
+			}
+			return nil
+		}
+		for _, link := range []string{"cwd", "root"} {
+			if err := recordUse(filepath.Join(root, link)); err != nil {
+				return err
 			}
 		}
 		descriptors, err := os.ReadDir(filepath.Join(root, "fdinfo"))
@@ -159,6 +179,11 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 					continue
 				}
 				return reject("Could not check which processes use the volume. No unmount has started.")
+			}
+			if len(mappedDevices) > 0 {
+				if err := recordUse(filepath.Join(root, "fd", fd.Name())); err != nil {
+					return err
+				}
 			}
 			for _, line := range strings.Split(string(data), "\n") {
 				if strings.HasPrefix(line, "mnt_id:") {

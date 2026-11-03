@@ -16,6 +16,7 @@ import (
 
 type runner func(context.Context, []string, systemops.CommandOptions) ([]byte, error)
 type service struct {
+	preflight   func(context.Context) (*storagequery.Preflight, error)
 	revalidate  func(context.Context, string, *transaction) error
 	writeConfig func(context.Context, string, string, *systemops.Reporter) error
 	root        string

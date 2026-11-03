@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -197,7 +199,7 @@ func updatedTable(p *prepared) []byte {
 
 func TestFailedSuccessorJournalDoesNotHideUnresolvedEvidence(t *testing.T) {
 	s, p := executionFixture(t)
-	old := &transaction{Schema: 1, Domain: "partitionfs", Phase: "pending", Action: "partition.resize", Target: p.target, Fingerprint: p.fingerprint, Identity: p.identity, Steps: []step{{Name: "resize-partition"}}, FstabDesired: p.config}
+	old := &transaction{Schema: 1, Domain: "partitionfs", Phase: "pending", Action: "partition.resize", Target: p.target, Fingerprint: p.fingerprint, Identity: p.identity, Steps: []step{{Name: "resize-partition"}}, FstabBefore: storagebase.Hash(p.config), FstabDesired: p.config}
 	if err := s.save(old); err != nil {
 		t.Fatal(err)
 	}
@@ -217,5 +219,48 @@ func TestFailedSuccessorJournalDoesNotHideUnresolvedEvidence(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(s.root, "*.history-*"))
 	if err != nil || len(files) != 1 {
 		t.Fatalf("%v %v", files, err)
+	}
+}
+
+func TestFormatConfigFailureRetainsIdentityAndRequiresRecovery(t *testing.T) {
+	for _, afterWrite := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterWrite), func(t *testing.T) {
+			s, p := executionFixture(t)
+			p.config = "UUID=old /data ext4 defaults 0 2\n"
+			p.row["uuid"] = "old"
+			p.identity.Devices[0].UUID = "old"
+			s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+				if args[0] == "mkfs.ext4" {
+					p.row["uuid"] = "new"
+				}
+				return nil, nil
+			}
+			config := p.config
+			s.writeConfig = func(_ context.Context, _ string, desired string, _ *systemops.Reporter) error {
+				if afterWrite {
+					config = desired
+				}
+				return errors.New("injected configuration failure")
+			}
+			if _, err := s.executePrepared(context.Background(), "filesystem.format", map[string]any{"format": "ext4"}, p, nil); err == nil {
+				t.Fatal("failure hidden")
+			}
+			state, err := s.load(p.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !state.ConfigOnlyRemaining || state.ConfigIdentity.BootID != state.Identity.BootID || state.ConfigReconciled || state.Complete || !reflect.DeepEqual(state.ConfigRemovedUUIDs, []string{"old"}) {
+				t.Fatalf("missing durable recovery proof: %+v", state)
+			}
+			p.previous = state
+			p.config = config
+			s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+				t.Fatal("destructive replay before config acknowledgement")
+				return nil, nil
+			}
+			if _, err = s.executePrepared(context.Background(), "filesystem.format", map[string]any{"format": "ext4"}, p, nil); err == nil {
+				t.Fatal("unacknowledged intent superseded")
+			}
+		})
 	}
 }

@@ -39,7 +39,7 @@ type prepared struct {
 }
 
 func defaultService() *service {
-	return &service{revalidate: revalidate, writeConfig: storagebase.WriteFstab, root: "/var/lib/panasms-agent/storage", owner: 0, write: systemops.AtomicWrite, sys: "/sys/class/block", run: systemops.Command, identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
+	return &service{preflight: storagequery.LoadPreflight, revalidate: revalidate, writeConfig: storagebase.WriteFstab, root: "/var/lib/panasms-agent/storage", owner: 0, write: systemops.AtomicWrite, sys: "/sys/class/block", run: systemops.Command, identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 		return p.Identity(target)
 	}, config: storagebase.ReadFstab, find: exec.LookPath}
 }

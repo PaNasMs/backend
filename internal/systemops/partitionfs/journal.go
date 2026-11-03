@@ -21,6 +21,7 @@ type step struct {
 	Completed bool   `json:"completed"`
 }
 type transaction struct {
+	storagebase.ConfigRecovery
 	Domain       string                       `json:"domain"`
 	Phase        string                       `json:"phase"`
 	Schema       int                          `json:"schema"`
@@ -141,7 +142,7 @@ func Recovery(target string) (json.RawMessage, error) {
 	}
 	var summary any
 	if state != nil {
-		summary = map[string]any{"action": state.Action, "target": state.Target, "phase": state.Phase, "steps": state.Steps, "complete": state.Complete, "configurationPending": !state.Complete && state.FstabDesired != ""}
+		summary = map[string]any{"action": state.Action, "target": state.Target, "phase": state.Phase, "steps": state.Steps, "complete": state.Complete, "configurationPending": !state.Complete && !state.ConfigReconciled && state.FstabBefore != storagebase.Hash(state.FstabDesired)}
 	}
 	return json.Marshal(map[string]any{"target": target, "journal": summary, "automaticReplay": false, "message": "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."})
 }

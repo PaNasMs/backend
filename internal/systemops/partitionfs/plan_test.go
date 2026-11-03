@@ -15,6 +15,7 @@ func planningFixture(t *testing.T) (*service, *storagequery.Preflight) {
 		t.Fatal(err)
 	}
 	s.owner = os.Getuid()
+	s.preflight = func(context.Context) (*storagequery.Preflight, error) { return p, nil }
 	s.identity = func(_ *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 		return storagequery.StorageIdentity{BootID: "12345678-1234-1234-1234-123456789abc", Devices: []storagequery.DeviceIdentity{{Path: target, DeviceNumber: "8:1", DiskSequence: "42"}}}, nil
 	}

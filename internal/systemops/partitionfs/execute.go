@@ -100,7 +100,7 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 	if err := ctx.Err(); err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
-	if plan.previous != nil && !plan.previous.Complete && plan.previous.FstabDesired != "" && plan.config != plan.previous.FstabDesired {
+	if plan.previous != nil && !plan.previous.Complete && plan.previous.FstabBefore != storagebase.Hash(plan.previous.FstabDesired) && !plan.previous.Acknowledged(plan.config, plan.previous.FstabBefore, plan.previous.FstabDesired) {
 		return nil, systemops.BeforeMutation(reject("Storage configuration recovery is required before another operation"))
 	}
 	desired := plan.config
@@ -116,6 +116,7 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		return nil, systemops.BeforeMutation(err)
 	}
 	state := &transaction{Schema: 1, Domain: "partitionfs", Phase: "pending", Action: action, Target: plan.target, Fingerprint: plan.fingerprint, Identity: plan.identity, FstabBefore: storagebase.Hash(plan.config), FstabDesired: desired, Steps: []step{}}
+	state.ConfigRemovedUUIDs = storagebase.RemovedFstabUUIDs(plan.config, desired)
 	if err := s.save(state); err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
@@ -339,6 +340,40 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		}
 	}
 	if desired != plan.config {
+		fresh, e := s.preflight(context.WithoutCancel(ctx))
+		if e != nil {
+			return nil, e
+		}
+		identityTarget := target
+		if action == "partition.delete" {
+			identityTarget = plan.parent
+		}
+		state.ConfigIdentity, e = s.identity(fresh, identityTarget)
+		if e != nil {
+			return nil, e
+		}
+		if state.ConfigIdentity.BootID != state.Identity.BootID {
+			return nil, reject("Storage recovery identity changed")
+		}
+		for _, now := range state.ConfigIdentity.Devices {
+			found := false
+			for _, before := range state.Identity.Devices {
+				if hardwareEqual(storagequery.StorageIdentity{BootID: state.Identity.BootID, Devices: []storagequery.DeviceIdentity{before}}, storagequery.StorageIdentity{BootID: state.ConfigIdentity.BootID, Devices: []storagequery.DeviceIdentity{now}}) {
+					found = true
+				}
+			}
+			if !found {
+				return nil, reject("Storage recovery identity changed")
+			}
+		}
+		for _, row := range fresh.Inventory.Rows {
+			for _, removed := range state.ConfigRemovedUUIDs {
+				if text(row, "uuid") == removed {
+					return nil, reject("The original file system is still present; preserve its configuration")
+				}
+			}
+		}
+		state.ConfigOnlyRemaining = true
 		state.Steps = append(state.Steps, step{Name: "update-fstab"})
 		if err = s.save(state); err != nil {
 			return nil, err
@@ -347,6 +382,9 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 			return nil, err
 		}
 		state.Steps[len(state.Steps)-1].Completed = true
+		state.ConfigReconciled = true
+		state.ConfigResolution = "desired"
+		state.ConfigWitness = storagebase.Hash(desired)
 	}
 	state.Complete = true
 	state.Phase = "complete"

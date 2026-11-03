@@ -1,11 +1,56 @@
 package management
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestLifecycleOwnsMaintenanceWhileOtherJobsKeepSharedBarrier(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "maintenance.lock")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PANASMS_MAINTENANCE_LOCK", path)
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	defer func() { close(m.queue); <-m.finished }()
+	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover", "module.catalog-install", "module.source-add", "module.custom", "group.create"} {
+		t.Run(action, func(t *testing.T) {
+			if _, err := m.db.Exec("INSERT INTO jobs VALUES(?, 'alice', ?, 'target', 'queued', 'Waiting', 'now', 'now', '{}')", action, action); err != nil {
+				t.Fatal(err)
+			}
+			called := false
+			m.run = func(context.Context, string, string, any) (json.RawMessage, error) {
+				called = true
+				file, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer file.Close()
+				err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+				owns := action == "module.install" || action == "module.enable" || action == "module.disable" || action == "module.remove" || action == "module.recover" || action == "module.catalog-install"
+				if owns && err != nil || !owns && !errors.Is(err, unix.EWOULDBLOCK) {
+					t.Fatal("wrong maintenance ownership", action, err)
+				}
+				return json.RawMessage(`{}`), nil
+			}
+			m.execute(work{Job: Job{ID: action, User: "alice", Action: action}, Request: Request{Action: action}})
+			if !called {
+				t.Fatal("job never ran")
+			}
+		})
+	}
+}
 
 func TestMissingInitializedJobJournalStopsAgent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")

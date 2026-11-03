@@ -32,6 +32,47 @@ func request() *systemops.Request {
 func reporter() *systemops.Reporter {
 	return systemops.NewReporter(io.Discard, func(string) string { return "" })
 }
+
+func TestModuleExecutionKeepsOriginalIdentityRecheckAfterSlowStages(t *testing.T) {
+	d, _ := setup()
+	checks := 0
+	authorize := d.Authorize
+	d.Authorize = func(user string) (auth.Identity, error) {
+		id, err := authorize(user)
+		checks++
+		if checks >= 3 {
+			id.Epoch = "revoked-after-internal-planning"
+		}
+		return id, err
+	}
+	d.Execute = func(ctx context.Context, _ string, _ map[string]any, _ *systemops.Reporter) (json.RawMessage, error) {
+		callback, ok := ctx.Value(moduleAuthorizationKey{}).(func() error)
+		if !ok {
+			t.Fatal("original authorization callback missing")
+		}
+		return nil, callback()
+	}
+	req := request()
+	req.Action = "module.install"
+	if _, err := d.Handle(systemops.ModeExecute, "admin", req, reporter()); err == nil || checks != 3 {
+		t.Fatal(checks, err)
+	}
+}
+
+func TestMemberModuleQueryPreservesTargetAndFilterContext(t *testing.T) {
+	d, _ := setup()
+	d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+	d.Query = func(ctx context.Context, view, target, user string) (json.RawMessage, error) {
+		member, _ := ctx.Value(moduleMemberKey{}).(bool)
+		if view != "modules" || target != "" || user != "alice" || !member {
+			t.Fatal(view, target, user, member)
+		}
+		return json.RawMessage(`{"installed":[]}`), nil
+	}
+	if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: "modules"}, reporter()); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestRejectedBeforeMutation(t *testing.T) {
 	for _, reason := range []string{"denied", "ordinary", "updater", "stale", "confirmation", "identity", "reauthorization"} {
 		t.Run(reason, func(t *testing.T) {

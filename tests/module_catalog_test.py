@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -79,3 +80,25 @@ class Catalog(unittest.TestCase):
     def test_private_redirect_rejected(self):
         with self.assertRaisesRegex(Rejected, 'redirect'):
             c.Redirects().redirect_request(None, None, 302, '', {}, 'http://192.168.1.100/')
+
+    def test_native_install_preserves_original_actor_plan_and_control_pipe(self):
+        actor = {'uid': 1000, 'principal': 'original', 'epoch': 'first'}
+        plan = {'fingerprint': 'verified', 'confirmation': 'files'}
+        with patch.dict(os.environ, {'PANASMS_CONTROL_FD': '47'}), patch.object(c.subprocess, 'run') as execute:
+            execute.return_value.returncode = 0
+            execute.return_value.stdout = '{"message":"done"}'
+            self.assertEqual(c.native_install('execute', {'upload': 'token'}, 'alice', actor, plan), {'message': 'done'})
+            arguments, options = execute.call_args
+            self.assertEqual(arguments[0], ['/usr/lib/panasms/panasms-system-helper', 'execute', 'alice'])
+            self.assertEqual(options['pass_fds'], (47,))
+            self.assertEqual(json.loads(options['input']), {'action': 'module.install', 'params': {'upload': 'token'}, 'actor': actor, **plan})
+            self.assertIs(options['stderr'], c.sys.stderr)
+
+    def test_native_install_error_never_falls_back_to_python_mutation(self):
+        with patch.object(c.subprocess, 'run') as execute, patch.object(c.manager, 'execute') as legacy:
+            execute.return_value.returncode = 0
+            execute.return_value.stdout = '{"error":"Recovery required"}'
+            with self.assertRaisesRegex(Rejected, 'Recovery required'):
+                c.native_install('execute', {'upload': 'token'}, 'alice')
+            execute.assert_called_once()
+            legacy.assert_not_called()

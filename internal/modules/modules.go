@@ -30,12 +30,20 @@ type Manifest struct {
 }
 
 func Read() map[string]Manifest {
+	if Pending() {
+		return map[string]Manifest{}
+	}
 	raw, err := os.ReadFile(filepath.Join(Root, "registry.json"))
 	result := map[string]Manifest{}
 	if err != nil || json.Unmarshal(raw, &result) != nil {
 		return map[string]Manifest{}
 	}
 	return result
+}
+
+func Pending() bool {
+	_, err := os.Lstat(filepath.Join(Root, ".transaction"))
+	return !os.IsNotExist(err)
 }
 func Enabled(id string) bool { m, ok := Read()[id]; return ok && m.Enabled && ID.MatchString(id) }
 func Client(id string) (*http.Client, error) {

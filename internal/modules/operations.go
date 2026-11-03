@@ -17,6 +17,9 @@ import (
 // The root-owned registry is the installed receipt of signature verification.
 // Package installation does not retain the signed manifest or signature.
 func Operation(kind, name string, reserved func(string, string) bool) (*Manifest, error) {
+	if Pending() {
+		return nil, errors.New("Recover the recorded module transaction before using installed modules")
+	}
 	file, err := os.Open(filepath.Join(Root, "registry.json"))
 	if os.IsNotExist(err) {
 		return nil, nil

@@ -8,6 +8,7 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
+	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
@@ -24,6 +25,23 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case modulelifecycle.IsAction(req.Action):
+		route = "/modules"
+		raw, err := modulelifecycle.Inspect()
+		if err != nil {
+			return nil, err
+		}
+		var state struct {
+			Pending bool `json:"pending"`
+		}
+		if err = json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		add("Module transaction", raw)
+		if state.Pending {
+			next = "module.recover"
+		}
+		message = "Review the installed modules and recover the recorded transaction before retrying. The interrupted operation has not been repeated."
 	case networkmounts.IsAction(req.Action):
 		route = "/storage/mounts"
 		point := target

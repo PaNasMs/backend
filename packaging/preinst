@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+if [ -e /var/lib/panasms-modules/.transaction ] || [ -L /var/lib/panasms-modules/.transaction ]; then
+ echo 'Recover pending module transactions with the installed version before package changes.' >&2
+ exit 1
+fi
 if [ "${1:-}" = upgrade ] && [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
  echo 'Use Settings > System updates, or panasms-maintenance apt-get install ./package.deb. Package replacement requires exclusive maintenance.' >&2
  exit 1

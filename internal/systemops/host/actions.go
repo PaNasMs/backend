@@ -47,7 +47,7 @@ func Plan(ctx context.Context, action string, params map[string]any) (json.RawMe
 		state = strings.TrimSpace(string(bootID))
 		details = []any{action}
 	case strings.HasPrefix(action, "service."):
-		unit, err := service(ctx, target)
+		unit, err := service(ctx, target, action)
 		if err != nil {
 			return nil, err
 		}

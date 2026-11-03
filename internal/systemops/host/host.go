@@ -30,17 +30,25 @@ var protectedPrefixes = []string{"panasms-", "ssh", "systemd-", "dbus", "network
 // packageLine matches "Inst "/"Remv " lines emitted by apt-get --simulate.
 var packageLine = regexp.MustCompile(`^(Inst|Remv) (\S+)(?: \[([^\]]+)\])?(?: \((\S+) (.*)\))?`)
 
-// service validates and returns a systemd unit name, reproducing host.service():
-// it must look like a *.service unit, must not be a protected unit, and must be
-// loaded. It runs systemctl to confirm the load state.
-func service(ctx context.Context, value string) (string, error) {
+// Only stopping a module service bypasses the protected PaNasMs prefix.
+// Starting or changing boot intent must still go through the module lifecycle.
+var moduleServiceUnit = regexp.MustCompile(`^panasms-module-[a-z][a-z0-9-]{1,39}\.service$`)
+
+func serviceAccess(action, value string) error {
 	if !serviceUnit.MatchString(value) {
-		return "", reject("Select a systemd service")
+		return reject("Select a systemd service")
 	}
 	for _, p := range protectedPrefixes {
-		if strings.HasPrefix(value, p) {
-			return "", reject("This service is protected from changes through the panel")
+		if strings.HasPrefix(value, p) && !(action == "service.stop" && moduleServiceUnit.MatchString(value)) {
+			return reject("This service is protected from changes through the panel")
 		}
+	}
+	return nil
+}
+
+func service(ctx context.Context, value, action string) (string, error) {
+	if err := serviceAccess(action, value); err != nil {
+		return "", err
 	}
 	out, err := systemops.Command(ctx, []string{"systemctl", "show", "--property=LoadState", "--value", value}, systemops.CommandOptions{})
 	if err != nil {

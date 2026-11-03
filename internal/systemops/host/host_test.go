@@ -1,7 +1,12 @@
 package host
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"panasms.local/backend/internal/systemops"
@@ -109,5 +114,53 @@ func TestExecuteRejectsUnknownAction(t *testing.T) {
 func TestQueryRejectsUnknownView(t *testing.T) {
 	if _, err := Query(nil, "totally-unknown", ""); !systemops.IsRejected(err) {
 		t.Fatalf("unknown view: got %v, want rejection", err)
+	}
+}
+
+func TestModuleServiceStopIsNarrowAndCannotBypassLifecycleOrCoreProtection(t *testing.T) {
+	for _, unit := range []string{"panasms-module-files.service", "panasms-module-go14-app.service", "panasms-module-" + strings.Repeat("a", 40) + ".service"} {
+		if err := serviceAccess("service.stop", unit); err != nil {
+			t.Fatal(unit, err)
+		}
+		for _, action := range []string{"service.start", "service.restart", "service.enable", "service.disable"} {
+			if err := serviceAccess(action, unit); err == nil {
+				t.Fatal("module start/intent bypass", action, unit)
+			}
+		}
+	}
+	for _, unit := range []string{"panasms-core.service", "panasms-agent.service", "panasms-networkd.service", "panasms-module-.service", "panasms-module-a.service", "panasms-module-../../core.service", "panasms-module-foo@bar.service", "panasms-module-" + strings.Repeat("a", 41) + ".service", "ssh.service"} {
+		if err := serviceAccess("service.stop", unit); err == nil {
+			t.Fatal("protected/malformed stop allowed", unit)
+		}
+	}
+	if err := serviceAccess("service.start", "ordinary.service"); err != nil {
+		t.Fatal("unrelated service policy changed", err)
+	}
+}
+
+func TestModuleStopPanelPlanUsesExemptionButCoreStillHasNoPlan(t *testing.T) {
+	tools := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tools, "systemctl"), []byte("#!/bin/sh\nprintf 'loaded\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools)
+	target := "panasms-module-legacy-example.service"
+	raw, err := Plan(context.Background(), "service.stop", map[string]any{"target": target})
+	if err != nil {
+		t.Fatal("advertised panel stop path rejected", err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(raw, &plan); err != nil || plan["target"] != target || plan["confirmation"] != target || plan["fingerprint"] == "" {
+		t.Fatal(string(raw), err)
+	}
+	for _, unit := range []string{"panasms-core.service", "panasms-agent.service"} {
+		if _, err := Plan(context.Background(), "service.stop", map[string]any{"target": unit}); err == nil {
+			t.Fatal("core stop plan allowed", unit)
+		}
+	}
+	for _, action := range []string{"service.start", "service.restart", "service.enable", "service.disable"} {
+		if _, err := Plan(context.Background(), action, map[string]any{"target": target}); err == nil {
+			t.Fatal("lifecycle bypass plan allowed", action)
+		}
 	}
 }

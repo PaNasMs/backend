@@ -331,9 +331,26 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 			return nil, reject("No module transaction needs recovery")
 		}
 		if state.requiresBarrier() {
-			if err = lease.critical(); err != nil {
+			if err = lease.waitCritical(ctx, reporter); err != nil {
 				return nil, err
 			}
+			fresh, verifyErr := s.prepare(ctx, action, p, name)
+			if verifyErr != nil {
+				return nil, verifyErr
+			}
+			if fresh.fingerprint != expected {
+				return nil, reject("State has changed. Review a new operation plan.")
+			}
+			state, err = s.loadTransaction()
+			if err != nil {
+				return nil, err
+			}
+			if state == nil {
+				return nil, reject("State has changed. Review a new operation plan.")
+			}
+		}
+		if err = authorize(); err != nil {
+			return nil, err
 		}
 		if err = s.recovery().restore(ctx, state, reporter); err != nil {
 			mutated = !systemops.Unchanged(err)

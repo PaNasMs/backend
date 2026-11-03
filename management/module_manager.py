@@ -383,7 +383,7 @@ def plan(action, p, user):
         require(not pending.exists() and not pending.is_symlink(), 'Module recovery is incomplete. Recover the recorded transaction before changing modules.')
     if action == 'module.recover':
         journal = transaction_path() / 'journal.json'
-        require(journal.exists(), 'No module transaction needs recovery')
+        require(journal.exists(), 'Module recovery is incomplete. Recover the recorded transaction before changing modules.' if pending.exists() or pending.is_symlink() else 'No module transaction needs recovery')
         state = json.loads(journal.read_text())
         require(not pending.is_symlink() and isinstance(state, dict) and 'schema' not in state and 'phase' not in state,
                 'Module recovery is incomplete. Recover the recorded transaction before changing modules.')

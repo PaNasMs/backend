@@ -100,7 +100,7 @@ func openMaintenance(path string, owner uint32) (*maintenanceLease, error) {
 	}
 	if err != nil {
 		file.Close()
-		return nil, reject("System maintenance in progress; retry after the update")
+		return nil, err
 	}
 	return &maintenanceLease{file: file, path: path, owner: owner}, nil
 }

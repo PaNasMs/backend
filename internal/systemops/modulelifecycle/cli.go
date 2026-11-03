@@ -106,9 +106,17 @@ func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
 		return err
 	}
 	if state.requiresBarrier() {
-		if err = lease.critical(); err != nil {
+		if err = lease.waitCritical(ctx, nil); err != nil {
 			return err
 		}
+	}
+	requiredBarrier := state.requiresBarrier()
+	state, err = s.loadTransaction()
+	if err != nil || state == nil {
+		return err
+	}
+	if state.requiresBarrier() && !requiredBarrier {
+		return reject(incompleteRecovery)
 	}
 	restoring = true
 	if err = s.recovery().restore(ctx, state, nil); err != nil && !systemops.Unchanged(err) {
@@ -204,9 +212,14 @@ func (s lifecycle) resume(ctx context.Context) error {
 		return reject(incompleteRecovery)
 	}
 	if !borrowed {
-		if err = lease.critical(); err != nil {
+		if err = lease.waitCritical(ctx, nil); err != nil {
 			return err
 		}
+	}
+	if state, err := s.loadTransaction(); err != nil {
+		return err
+	} else if state != nil {
+		return reject(incompleteRecovery)
 	}
 	if err = s.refreshCore(); err != nil {
 		return err

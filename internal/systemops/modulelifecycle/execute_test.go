@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -652,5 +653,55 @@ func TestCriticalRetryRejectsCoreChangeAcrossDroppedSharedLease(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.root, "example")); !os.IsNotExist(err) {
 		t.Fatal("core drift activated module", err)
+	}
+}
+
+func TestRecoveryRetryRechecksOriginalAuthorizationBeforeRestoration(t *testing.T) {
+	r, _ := recoveryFixture(t, true)
+	s := executionFixture(t)
+	s.store, s.units, s.health, s.mounts = r.store, r.units, r.health, r.mounts
+	s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+		t.Fatal("revoked recovery mutated services")
+		return nil, nil
+	}
+	before, err := os.ReadFile(filepath.Join(s.root, ".transaction/journal.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := executionPlan(t, s, "module.recover", map[string]any{})
+	reader, err := os.Open(s.maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := unix.Flock(int(reader.Fd()), unix.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	var revoked atomic.Bool
+	done := make(chan error, 1)
+	calls := 0
+	_, err = s.execute(context.Background(), "module.recover", map[string]any{}, "alice", fp, nil, func() error {
+		calls++
+		if revoked.Load() {
+			return reject("revoked")
+		}
+		if calls == 3 {
+			go func() {
+				time.Sleep(40 * time.Millisecond)
+				revoked.Store(true)
+				done <- unix.Flock(int(reader.Fd()), unix.LOCK_UN)
+			}()
+		}
+		return nil
+	})
+	if calls != 4 || err == nil || err.Error() != "revoked" || !systemops.Unchanged(err) {
+		t.Fatal(calls, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(s.root, ".transaction/journal.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("refused recovery changed journal", err)
 	}
 }

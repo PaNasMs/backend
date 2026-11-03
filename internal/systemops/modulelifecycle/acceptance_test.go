@@ -77,6 +77,25 @@ func acceptanceGuard(t *testing.T) (lifecycle, []byte, string) {
 	if baseline == "" || strings.TrimSpace(string(run("dpkg-query", "-W", "-f=${db:Status-Status} ${Version}", "panasms-prototype"))) != "installed "+baseline {
 		t.Fatal("installed baseline refused")
 	}
+	updates, err := trustedDirectory("/var/lib/panasms-updates", 0)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err == nil {
+		raw, err := readOwnedAt(updates, "state.json", 0, 1<<20)
+		updates.Close()
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err == nil {
+			var update struct {
+				Phase string `json:"phase"`
+			}
+			if systemops.Decode(raw, &update) != nil || !contains([]string{"", "idle", "complete", "failed", "checked", "downloaded", "rolled-back"}, update.Phase) {
+				t.Fatal("pending system update refused")
+			}
+		}
+	}
 	server := os.Getenv("PANASMS_MODULE_FIXTURE_SERVER")
 	expected := os.Getenv("PANASMS_MODULE_FIXTURE_SERVER_SHA256")
 	if !digestPattern.MatchString(expected) {
@@ -107,7 +126,7 @@ func acceptanceBundle(t *testing.T, s lifecycle, server []byte, private ed25519.
 	t.Helper()
 	entries := map[string][]byte{"bundle.json": []byte(`{"root":"go14-app"}`)}
 	for _, id := range []string{"go14-base", "go14-app"} {
-		files := map[string][]byte{"ui/index.js": []byte("export default 'fixture';"), "bin/server": server, "backend/revision": []byte(behavior)}
+		files := map[string][]byte{"ui/index.js": []byte("export default 'fixture';"), "bin/server": server, "backend/revision": []byte(behavior), "backend/version": []byte(version)}
 		manifest := Manifest{"id": id, "version": version, "api": 1, "core": ">=0.2.0,<1.0.0", "architecture": "all", "title": "Lifecycle fixture", "service": "bin/server", "signer": "go14fixture"}
 		if id == "go14-app" {
 			manifest["dependencies"] = map[string]any{"go14-base": ">=1.0.0"}
@@ -367,6 +386,7 @@ func TestIsolatedModuleLifecycleAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("PASS critical EX rejects SDK auto-retry before service replacement")
+	acceptanceInterruptions(t, s, server, private)
 	before, err = s.registry()
 	if err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
+	"panasms.local/backend/internal/systemops/volumeaccess"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -174,6 +175,15 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		if err != nil {
 			return nil, err
 		}
+		if err = perform("refresh-storage-metadata", func() error {
+			if err := pin.Verify(); err != nil {
+				return err
+			}
+			_, err := s.run(ctx, []string{"udevadm", "trigger", "--action=change", "--settle", v.target}, systemops.CommandOptions{Operation: true, Reporter: r})
+			return err
+		}); err != nil {
+			return nil, err
+		}
 	case "mount.settings":
 		if err = perform("create-mountpoint", func() error {
 			f, err := storagebase.CreateTarget(v.point, v.witness)
@@ -187,6 +197,11 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	}
 	if desired != v.conf {
 		if err = perform("fstab", func() error { return storagebase.WriteFstab(ctx, state.FstabBefore, state.FstabDesired, r) }); err != nil {
+			return nil, err
+		}
+	}
+	if action == "mount.settings" && !strings.HasPrefix(v.options, "ro,") {
+		if err = perform("volume-access", func() error { return volumeaccess.ApplyMounted(v.point) }); err != nil {
 			return nil, err
 		}
 	}

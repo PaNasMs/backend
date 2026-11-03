@@ -370,7 +370,10 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 			v.options += ",noload"
 		}
 		descriptions := map[string]string{"manual": "Manual mounting; remember this mount point without mounting at startup.", "boot": "Mount at startup; a missing device will not block boot.", "on-demand": "Mount on first access after startup; unmount after 10 idle minutes when not busy."}
-		v.details = []string{target, v.point, descriptions[policy], "Changes to automatic mounting take effect at the next startup. The current mount is unchanged."}
+		v.details = []string{target, v.point, descriptions[policy]}
+		if action == "mount.settings" {
+			v.details = append(v.details, "Changes to automatic mounting take effect at the next startup. The current mount is unchanged.")
+		}
 	}
 	if prior != nil && prior.Phase == "pending" {
 		v.details = append(v.details, "A previous operation is unfinished. This new confirmed plan preserves its evidence in history and does not replay its destructive steps.")

@@ -558,6 +558,7 @@ func (m *Manager) serve(w http.ResponseWriter, r *http.Request, id auth.Identity
 	if target == "" {
 		target, _ = req.Params["name"].(string)
 	}
+	target = storedOperationTarget(req, target)
 	if len(target) > 512 {
 		reply(w, 400, map[string]string{"error": "Target is too long"})
 		return

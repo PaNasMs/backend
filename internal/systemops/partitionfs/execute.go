@@ -81,6 +81,9 @@ func Execute(ctx context.Context, action string, params map[string]any, expected
 	if expected == "" || plan.fingerprint != expected || !reflect.DeepEqual(identity, plan.identity) {
 		return nil, systemops.BeforeMutation(reject("State has changed. Review a new operation plan."))
 	}
+	if err = storagebase.CheckPendingRoots("partitionfs", target, plan.identity); err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
 	return s.executePrepared(ctx, action, params, plan, r)
 }
 func (s *service) executePrepared(ctx context.Context, action string, params map[string]any, plan *prepared, r *systemops.Reporter) (json.RawMessage, error) {

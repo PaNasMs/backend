@@ -44,6 +44,11 @@ func defaultService() *service {
 	}, config: storagebase.ReadFstab, find: exec.LookPath}
 }
 func Plan(ctx context.Context, action string, params map[string]any) (json.RawMessage, error) {
+	domain, err := storagebase.DomainLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer domain.Close()
 	p, err := storagequery.LoadPreflight(ctx)
 	if err != nil {
 		return nil, err
@@ -51,6 +56,9 @@ func Plan(ctx context.Context, action string, params map[string]any) (json.RawMe
 	s := defaultService()
 	result, err := s.prepare(ctx, action, params, p)
 	if err != nil {
+		return nil, err
+	}
+	if err = storagebase.CheckPendingRoots("partitionfs", result.target, result.identity); err != nil {
 		return nil, err
 	}
 	return result.raw, nil
@@ -260,6 +268,11 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 	}
 	if len(details) == 0 {
 		details = []string{target}
+	}
+	for i, value := range details {
+		if row := p.Inventory.Rows[value]; row != nil && strings.HasPrefix(text(row, "kname"), "dm-") && text(row, "name") != "" {
+			details[i] = "/dev/mapper/" + text(row, "name")
+		}
 	}
 	out.identity, err = s.identity(p, target)
 	if err != nil {

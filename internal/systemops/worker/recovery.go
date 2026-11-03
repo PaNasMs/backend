@@ -11,7 +11,6 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
-	"panasms.local/backend/internal/systemops/partitionfs"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
 	"time"
@@ -25,18 +24,6 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
-	case partitionfs.IsAction(req.Action):
-		route = "/storage"
-		raw, err := partitionfs.Recovery(target)
-		if err != nil {
-			return nil, err
-		}
-		var state any
-		if err = json.Unmarshal(raw, &state); err != nil {
-			return nil, err
-		}
-		add("Storage operation", state)
-		message = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."
 	case networkmounts.IsAction(req.Action):
 		route = "/storage/mounts"
 		point := target

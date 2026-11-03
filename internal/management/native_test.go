@@ -39,7 +39,11 @@ func TestMigratedAndLegacyDomainsDispatchExactlyOnce(t *testing.T) {
 	}
 	for action, dst := range actionModules {
 		for _, mode := range []string{"plan", "execute", "recover"} {
-			check(mode, Request{Action: action}, dst)
+			want := dst
+			if mode == "recover" && action == "module.catalog-install" {
+				want = goNative
+			}
+			check(mode, Request{Action: action}, want)
 		}
 	}
 	for _, action := range []string{"folder.permissions", "smb.mount", "smb.unmount", "nfs.mount", "nfs.unmount", "user.create", "user.home", "user.security", "group.edit", "homes.move", "homes.recover", "share.save", "share.remove", "share.recover", "share.account", "share.disconnect", "nfs.export", "nfs.export-remove", "system.web-port", "updates.repair", "system.reboot"} {

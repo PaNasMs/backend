@@ -184,42 +184,6 @@ def interrupted_copy(args, before, token):
         process.stdin.close()
         process.stdout.close()
         process.stderr.close()
-
-
-def cancelled_copy(args, before, token):
-    params = {'upload': token}
-    plan = helper(args, 'plan', {'action': 'module.install', 'params': params})
-    require(not plan.get('error'), 'Cancellable install plan rejected')
-    body = {'action': 'module.install', 'params': params,
-            'fingerprint': plan['fingerprint'], 'confirmation': plan['confirmation']}
-    control, request = os.pipe()
-    os.set_blocking(control, False)
-    process = subprocess.Popen([str(HELPER), 'execute', args.actor], stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                               env={**os.environ, 'PANASMS_CONTROL_FD': str(control)}, pass_fds=(control,))
-    try:
-        process.stdin.write(json.dumps(body))
-        process.stdin.close()
-        process.stdin = None
-        path = MODULES / '.transaction/.new' / ID / 'ui/blob'
-        deadline = time.monotonic() + 45
-        while True:
-            require(process.poll() is None, 'Helper finished before the cancellation boundary')
-            require(time.monotonic() < deadline, 'Cancellation boundary timed out')
-            if path.exists() and 0 < owned(path).st_size < 64 << 20:
-                break
-            time.sleep(.001)
-        os.write(request, b'cancel')
-        stdout, _ = process.communicate()
-        require(process.returncode == 0 and json.loads(stdout).get('cancelled'), 'Native helper did not cancel at staging')
-        require(registry() == before and not (MODULES / '.transaction').exists() and not (MODULES / ID).exists(),
-                'Cancelled staging changed installed modules')
-    finally:
-        os.close(control)
-        os.close(request)
-        if process.poll() is None:
-            # Cancellation may have missed the critical boundary; let mutations finish.
-            process.communicate()
         raise
     waited = False
     try:
@@ -245,6 +209,9 @@ def cancelled_copy(args, before, token):
         require(state['before'] == before and state['affected'] == [ID] and state.get('phase') == 'staging'
                 and not state['committed'], 'Helper missed the required staging death boundary')
         require(registry() == before and not (MODULES / ID).exists(), 'Interrupted staging published code')
+        inspection = helper(args, 'recover', {'action': 'module.catalog-install', 'params': {}})
+        require(inspection.get('recoveryAction') == 'module.recover' and inspection.get('route') == '/modules',
+                'Catalog interruption did not inspect the native transaction')
         execute(args, 'module.recover', {})
         require(registry() == before and not (MODULES / '.transaction').exists(), 'Actual helper recovery changed baseline')
     finally:
@@ -255,8 +222,51 @@ def cancelled_copy(args, before, token):
                 pass
             process.wait(timeout=15)
         os.close(pidfd)
+        process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+
+
+def cancelled_copy(args, before, token):
+    params = {'upload': token}
+    plan = helper(args, 'plan', {'action': 'module.install', 'params': params})
+    require(not plan.get('error'), 'Cancellable install plan rejected')
+    body = {'action': 'module.install', 'params': params,
+            'fingerprint': plan['fingerprint'], 'confirmation': plan['confirmation']}
+    control, request = os.pipe()
+    os.set_blocking(control, False)
+    process = None
+    try:
+        process = subprocess.Popen([str(HELPER), 'execute', args.actor], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env={**os.environ, 'PANASMS_CONTROL_FD': str(control)}, pass_fds=(control,))
+        process.stdin.write(json.dumps(body))
+        process.stdin.close()
+        process.stdin = None
+        path = MODULES / '.transaction/.new' / ID / 'ui/blob'
+        deadline = time.monotonic() + 45
+        while True:
+            require(process.poll() is None, 'Helper finished before the cancellation boundary')
+            require(time.monotonic() < deadline, 'Cancellation boundary timed out')
+            if path.exists() and 0 < owned(path).st_size < 64 << 20:
+                break
+            time.sleep(.001)
+        os.write(request, b'cancel')
+        stdout, _ = process.communicate()
+        require(process.returncode == 0 and json.loads(stdout).get('cancelled'), 'Native helper did not cancel at staging')
+        require(registry() == before and not (MODULES / '.transaction').exists() and not (MODULES / ID).exists(),
+                'Cancelled staging changed installed modules')
+    finally:
+        os.close(control)
+        os.close(request)
+        if process is not None:
+            if process.poll() is None:
+                # Cancellation may have missed the critical boundary; let mutations finish.
+                process.communicate()
+            if process.stdin is not None:
+                process.stdin.close()
+            process.stdout.close()
+            process.stderr.close()
 
 
 def main():

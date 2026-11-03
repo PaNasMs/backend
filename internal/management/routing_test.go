@@ -154,3 +154,16 @@ func TestFolderQueriesNeverFallbackToPython(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogRecoveryNeverFallsBackToLegacyMutations(t *testing.T) {
+	var hit bool
+	r := route(func(context.Context, string, string, any) (json.RawMessage, error) {
+		return nil, errors.New("native inspection failed")
+	}, recordingRunner(&hit))
+	if _, err := r(context.Background(), "recover", "admin", Request{Action: "module.catalog-install"}); err == nil || hit {
+		t.Fatal(err, hit)
+	}
+	if actionModules["module.catalog-install"] != legacy {
+		t.Fatal("catalog selection/download route changed")
+	}
+}

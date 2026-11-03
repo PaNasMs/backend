@@ -292,6 +292,9 @@ func destination(mode string, body any) (impl, error) {
 		return routeQuery(view)
 	case "plan", "execute", "recover":
 		action := bodyString(body, "action")
+		if mode == "recover" && action == "module.catalog-install" {
+			return goNative, nil
+		}
 		if dst, ok := actionModules[action]; ok {
 			return dst, nil
 		}

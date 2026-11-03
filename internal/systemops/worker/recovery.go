@@ -25,7 +25,7 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
-	case modulelifecycle.IsAction(req.Action):
+	case modulelifecycle.IsAction(req.Action) || req.Action == "module.catalog-install":
 		route = "/modules"
 		raw, err := modulelifecycle.Inspect()
 		if err != nil {

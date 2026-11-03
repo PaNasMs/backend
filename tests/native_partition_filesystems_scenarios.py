@@ -39,9 +39,13 @@ def main():
  assert re.fullmatch(r'/dev/loop[0-9]+',disk)
  for point in ('neighbor','data'):Path('/mnt/'+point).mkdir()
  base_config=Path('/etc/fstab').read_text()
+ # These files belong to the scaffold's synthetic NSS and panel configuration.
+ for filename,row in [('passwd','member:x:15001:15001:Member:/srv/member:/bin/sh'),('group','member:x:15001:'),('shadow','member:!:1:0:99999:7:::')]:
+  with (Path('/etc')/filename).open('a') as stream:stream.write(row+'\n')
+ with Path('/etc/panasms/accounts.json').open('x') as stream:json.dump({'member':{'uid':15001,'panel':True}},stream)
  for action in ('partition.create','partition.delete','partition.resize','filesystem.format','filesystem.remove','filesystem.resize','storage.recover'):
   for mode in ('plan','execute','recover'):
-   result=invoke(mode,action,{'target':disk},user='nobody');assert not result['ok'],(action,mode,result)
+   result=invoke(mode,action,{'target':disk},user='member');assert result['error']=='Administrator permissions required',(action,mode,result)
  unconfirmed=plan('partition.create',{'target':disk,'startMiB':1,'endMiB':97})
  result=invoke('execute','partition.create',{'target':disk,'startMiB':1,'endMiB':97},{**unconfirmed,'confirmation':'wrong-device'})
  assert not result['ok'] and not Path('/sys/class/block/'+Path(first).name).exists()

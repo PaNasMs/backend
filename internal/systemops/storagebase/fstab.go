@@ -54,10 +54,14 @@ func readFstab(path string, owner int) (string, error) {
 	return string(data), nil
 }
 
+func FstabLock(ctx context.Context) (*os.File, error) {
+	return Lock(ctx, "/run/panasms-storage", "fstab.lock", 0)
+}
+
 // Callers retain their durable intent until this returns successfully. Retrying
 // an already written value still reloads generators after a previous reload failure.
 func WriteFstab(ctx context.Context, beforeHash, desired string, r *systemops.Reporter) error {
-	lock, err := Lock(ctx, "/run/panasms-storage", "fstab.lock", 0)
+	lock, err := FstabLock(ctx)
 	if err != nil {
 		return err
 	}

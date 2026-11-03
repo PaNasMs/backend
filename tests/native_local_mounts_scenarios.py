@@ -41,6 +41,27 @@ def denied(mode, action, params, **kwargs):
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+def verify_member_denial(target):
+    passwd = Path('/etc/passwd')
+    entries = {row.split(':', 1)[0] for row in passwd.read_text().splitlines()}
+    assert entries == {'root', 'admin', 'nobody'}
+    assert '/fixture/child.py' in Path('/proc/1/cmdline').read_bytes().decode().split('\x00')
+    policy = Path('/etc/panasms/accounts.json')
+    assert not policy.exists()
+    with passwd.open('a') as file:
+        file.write('fixture-member:x:15001:100:Fixture Member:/nonexistent:/bin/bash\n')
+    with Path('/etc/shadow').open('a') as file:
+        file.write('fixture-member:!:1:0:99999:7:::\n')
+    with policy.open('x') as file:
+        json.dump({'fixture-member': {'uid': 15001, 'panel': True}}, file)
+    policy.chmod(0o600)
+    for action in ('mount.attach', 'mount.detach', 'mount.open', 'mount.settings', 'disk.prepare', 'disk.eject'):
+        for mode in ('plan', 'execute', 'recover'):
+            dummy = {'fingerprint': '0' * 64, 'confirmation': target} if mode == 'execute' else None
+            result = invoke(mode, action, {'target': target}, user='fixture-member', plan=dummy)
+            assert result.get('error') == 'Administrator permissions required', (action, mode, result)
+    print('PASS panel-authorized member denied all six administrative actions before planning or execution', flush=True)
+
 def main():
     require_namespace()
     devices = json.loads(Path('/fixture/devices.json').read_text())
@@ -48,6 +69,7 @@ def main():
     assert disk.startswith('/dev/loop') and target.startswith(disk + 'p')
     helper = Path('/usr/lib/panasms/panasms-system-helper')
     assert digest(helper) == os.environ['PANASMS_GO09_HELPER_SHA256']
+    verify_member_denial(target)
     stage = Path('/var/lib/panasms-agent/local-mounts')
     point = Path('/mnt/go09b-data')
     params = {'target': target, 'point': str(point), 'mountPolicy': 'manual'}
@@ -71,6 +93,8 @@ def main():
     config.write_bytes(custom)
     try:
         denied('plan', 'mount.attach', params)
+        rejected = denied('plan', 'disk.prepare', {'target': target})
+        assert 'managed outside the panel' in rejected['error'], rejected
         assert config.read_bytes() == custom
     finally:
         config.write_bytes(original)

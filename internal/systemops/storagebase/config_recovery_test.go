@@ -349,3 +349,22 @@ func TestRecoveryTargetResolvesAliasesAndRetainsMissingCanonical(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoveryOfLocalDiskPreparationPreservesExternalMountEntries(t *testing.T) {
+	s, r, current, _, save := recoveryFixture(t)
+	s.roots[0].Domain = "localmounts"
+	r.Domain = "localmounts"
+	r.Action = "disk.prepare"
+	r.Steps[0].Name = "remove-signatures"
+	save()
+	_, err := s.prepare(context.Background(), r.Target)
+	if err == nil || !strings.Contains(err.Error(), "managed outside the panel") {
+		t.Fatalf("foreign entry accepted: %v", err)
+	}
+	*current = strings.Replace(*current, "defaults", "x-systemd.device-timeout=30s", 1)
+	r.FstabBefore = Hash(*current)
+	save()
+	if _, err = s.prepare(context.Background(), r.Target); err != nil {
+		t.Fatal(err)
+	}
+}

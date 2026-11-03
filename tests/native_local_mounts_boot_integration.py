@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Persistent mount policy acceptance in a disposable VM.
 
-Set PANASMS_ACCEPTANCE_VM_UUID, verify a preserved snapshot, run setup, reboot,
+Set PANASMS_ACCEPTANCE_VM_UUID and PANASMS_ACCEPTANCE_SNAPSHOT, independently verify
+that preserved snapshot, run setup, reboot,
 run check, then restore that snapshot with the VM stopped. setup configures
 four owned loop images and a fixture service in this VM.
 """
@@ -43,7 +44,11 @@ def invoke(helper,actor,action,params):
  body={'action':action,'params':params};plan=request('plan',body)
  body.update(fingerprint=plan['fingerprint'],confirmation=plan['confirmation']);return request('execute',body)
 def setup(helper_path,expected):
- guard();helper_source=Path(helper_path);fd=os.open(helper_source,os.O_RDONLY|os.O_NOFOLLOW)
+ guard()
+ snapshot=os.environ.get('PANASMS_ACCEPTANCE_SNAPSHOT','')
+ assert re.fullmatch(r'[A-Za-z0-9_-]{1,80}',snapshot),'set the independently verified snapshot name'
+ assert run('findmnt','-n','-o','ID','--target',str(ROOT.parent))==run('findmnt','-n','-o','ID','--target','/'),'early boot fixture requires /var/tmp on the root mount'
+ helper_source=Path(helper_path);fd=os.open(helper_source,os.O_RDONLY|os.O_NOFOLLOW)
  with os.fdopen(fd,'rb') as f:
   st=os.fstat(f.fileno());assert stat.S_ISREG(st.st_mode) and st.st_uid==0 and not st.st_mode&0o022
   data=f.read(128*1024*1024+1)
@@ -52,7 +57,7 @@ def setup(helper_path,expected):
  members=grp.getgrnam('sudo').gr_mem;users=[u for u in pwd.getpwall() if 1000<=u.pw_uid<65534 and u.pw_name in members];assert users
  actor=sorted(users,key=lambda x:x.pw_uid)[0].pw_name
  original=Path('/etc/fstab').read_bytes();(ROOT/'fstab-before').write_bytes(original);(ROOT/'fstab-before').chmod(0o600)
- config={'schema':1,'bootBefore':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'helperSHA256':expected,'actor':actor,'volumes':[],'services':{}}
+ config={'schema':1,'snapshot':snapshot,'bootBefore':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'helperSHA256':expected,'actor':actor,'volumes':[],'services':{}}
  for name in ('panasms-agent.service','panasms-core.service','smbd.service','nfs-server.service'):
   r=subprocess.run(['systemctl','is-active',name],capture_output=True,text=True);config['services'][name]=r.stdout.strip()
  write_json(ROOT/'state.json',config)

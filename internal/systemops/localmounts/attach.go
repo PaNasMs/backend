@@ -51,16 +51,16 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	if err = os.Mkdir(state.Stage, 0700); err != nil {
 		return err
 	}
-	var commandErr error
+	var commandErr, verificationErr error
 	if err = step(state, "stage-mount", save, func() error {
-		if err := pin.Verify(); err != nil {
-			return err
+		if verificationErr = pin.Verify(); verificationErr != nil {
+			return verificationErr
 		}
 		// The kernel retains this source in mountinfo after the worker exits.
 		_, commandErr = s.run(ctx, []string{"mount", "--no-canonicalize", "-t", v.fs, "-o", v.options, "--", v.target, state.Stage}, systemops.CommandOptions{Operation: true, Reporter: r})
 		return commandErr
 	}); err != nil {
-		if commandErr == nil {
+		if commandErr == nil && verificationErr == nil {
 			return err
 		}
 		if cleanupErr := s.cleanupPrivateStage(v, state); cleanupErr != nil {
@@ -68,6 +68,9 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 		}
 		if saveErr := save(state); saveErr != nil {
 			return errors.Join(err, saveErr)
+		}
+		if verificationErr != nil {
+			return verificationErr
 		}
 		return &mountCommandFailure{commandErr}
 	}

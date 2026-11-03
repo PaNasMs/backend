@@ -290,6 +290,7 @@ func desiredFstab(action string, v *plan) (string, error) {
 				remove[uuid] = true
 			}
 		}
+		return storagebase.RemoveManagedFstabRows(v.conf, remove)
 	} else {
 		uuid := text(v.preflight.Inventory.Rows[v.target], "uuid")
 		if strings.ContainsAny(uuid, "/ \t\r\n") {

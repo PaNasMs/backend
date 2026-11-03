@@ -53,7 +53,7 @@ func TestForeignMountConfigurationBlocksReassignmentButAllowsOfflineRepair(t *te
 	s := fixtureService(t)
 	s.fstab = func() (string, error) { return "UUID=test-uuid /srv/custom ext4 ro,nodev 0 2\n", nil }
 	params := map[string]any{"target": "/dev/sda", "point": "/mnt/planned"}
-	for _, action := range []string{"mount.attach", "mount.settings", "mount.open"} {
+	for _, action := range []string{"mount.attach", "mount.settings", "mount.open", "disk.prepare"} {
 		if _, err := s.prepare(context.Background(), action, params, "admin"); err == nil {
 			t.Fatal(action + " accepted foreign configuration")
 		}

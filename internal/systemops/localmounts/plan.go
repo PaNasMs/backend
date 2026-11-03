@@ -280,8 +280,14 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 			}
 			if prior.MountID != 0 && prior.Identity.BootID == boot {
 				for _, live := range all {
-					if live.ID == prior.MountID {
-						return nil, reject("The mount changed; review a new operation plan")
+					if live.ID != prior.MountID {
+						continue
+					}
+					// Mount IDs can be reused. Only retain evidence of the recorded volume.
+					for _, device := range prior.Identity.Devices {
+						if device.Path == prior.Target && (live.Device == device.DeviceNumber || (live.FSType == "btrfs" && live.Source == device.Path)) {
+							return nil, reject("The mount changed; review a new operation plan")
+						}
 					}
 				}
 			}

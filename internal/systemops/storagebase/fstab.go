@@ -96,6 +96,17 @@ func managedFstabRow(fields []string) bool {
 	return false
 }
 
+// Local disk preparation never assumes ownership of an administrator's boot entries.
+func RemoveManagedFstabRows(current string, uuids map[string]bool) (string, error) {
+	for _, line := range strings.Split(current, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "UUID=") && uuids[strings.TrimPrefix(fields[0], "UUID=")] && !managedFstabRow(fields) {
+			return "", reject("This disk has a mount entry managed outside the panel. Review it before preparing the disk.")
+		}
+	}
+	return EditFstab(current, uuids, "", nil)
+}
+
 // Preserve comments and unrelated rows; only a vanished panel-managed UUID may
 // be superseded at the selected destination, matching existing installed fstab.
 func EditFstab(current string, removeUUIDs map[string]bool, line string, missing func(string) (bool, error)) (string, error) {

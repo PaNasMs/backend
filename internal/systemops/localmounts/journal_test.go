@@ -91,8 +91,15 @@ func TestDetachClearsInterruptedMountAfterItDisappears(t *testing.T) {
 	s.mounts = func() ([]folders.LiveMount, error) {
 		return []folders.LiveMount{{ID: 101, Device: "8:97", Target: "/mnt/changed", Root: "/"}}, nil
 	}
+	if plan, err := s.prepare(context.Background(), "mount.detach", params, "admin"); err != nil || len(plan.selected) != 0 {
+		t.Fatalf("unrelated reused mount ID blocked cleanup: %v", err)
+	}
+	state.Identity.Devices[0].DeviceNumber = "8:97"
+	if err := writeJournal(s.root, s.owner, state); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.prepare(context.Background(), "mount.detach", params, "admin"); err == nil {
-		t.Fatal("live unaccounted mount id ignored")
+		t.Fatal("the recorded volume is still mounted")
 	}
 	state.Identity.BootID = "older-boot"
 	if err := writeJournal(s.root, s.owner, state); err != nil {

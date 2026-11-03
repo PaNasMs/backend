@@ -287,7 +287,11 @@ func (s *configRecoveryService) prepare(ctx context.Context, target string) (*co
 		expected := current
 		if len(removed) > 0 {
 			var e error
-			expected, e = EditFstab(current, removed, "", nil)
+			if record.Domain == "localmounts" && record.Action == "disk.prepare" {
+				expected, e = RemoveManagedFstabRows(current, removed)
+			} else {
+				expected, e = EditFstab(current, removed, "", nil)
+			}
 			if e != nil {
 				return nil, e
 			}

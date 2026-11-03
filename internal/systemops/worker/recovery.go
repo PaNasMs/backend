@@ -8,6 +8,7 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
+	"panasms.local/backend/internal/systemops/localmounts"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
@@ -26,6 +27,15 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case localmounts.IsAction(req.Action):
+		route = "/storage"
+		state, err := localmounts.Recovery(target)
+		if err != nil {
+			return nil, err
+		}
+		next = state["recoveryAction"]
+		delete(state, "recoveryAction")
+		add("Local storage", state)
 	case req.Action == "storage.recover":
 		route = "/storage"
 		raw, err := storagebase.ConfigRecoveryReport(target)

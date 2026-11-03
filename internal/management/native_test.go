@@ -47,7 +47,7 @@ func TestMigratedAndLegacyDomainsDispatchExactlyOnce(t *testing.T) {
 			t.Fatal("migrated route missing", action)
 		}
 	}
-	for _, action := range []string{"mount.attach", "mount.detach", "raid.create", "system.update.install"} {
+	for _, action := range []string{"raid.create", "system.update.install"} {
 		if actionModules[action] != legacy {
 			t.Fatal("unmigrated route activated", action)
 		}

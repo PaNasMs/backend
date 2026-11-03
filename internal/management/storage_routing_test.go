@@ -25,8 +25,9 @@ func TestStorageReadViewsUseNativeWithoutLegacyFallback(t *testing.T) {
 	}
 }
 
-func TestPartitionFilesystemMutationsUseNativeWithoutFallback(t *testing.T) {
-	for _, action := range []string{"storage.recover", "storage.archive-journal", "partition.create", "partition.delete", "partition.resize", "filesystem.format", "filesystem.remove", "filesystem.resize"} {
+func TestStorageMutationsUseNativeWithoutFallback(t *testing.T) {
+	for _, action := range []string{"storage.recover", "storage.archive-journal", "partition.create", "partition.delete", "partition.resize", "filesystem.format", "filesystem.remove", "filesystem.resize",
+		"disk.prepare", "disk.eject", "mount.attach", "mount.detach", "mount.open", "mount.settings"} {
 		for _, mode := range []string{"plan", "execute", "recover"} {
 			nativeHit, legacyHit := false, false
 			native := func(_ context.Context, gotMode, _ string, _ any) (json.RawMessage, error) {

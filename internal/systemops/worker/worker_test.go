@@ -233,3 +233,22 @@ func TestNetworkRecoveryInspectionRequiresAdministrator(t *testing.T) {
 		t.Fatal("member reached admin recovery inspection", err)
 	}
 }
+
+func TestLocalStorageModesRequireAdministrator(t *testing.T) {
+	for _, action := range []string{"disk.prepare", "disk.eject", "mount.attach", "mount.detach", "mount.open", "mount.settings"} {
+		for _, mode := range []systemops.Mode{systemops.ModePlan, systemops.ModeExecute, systemops.ModeRecover} {
+			d, calls := setup()
+			d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+			invoked := false
+			d.Plan = func(context.Context, string, map[string]any, string) (json.RawMessage, error) {
+				invoked = true
+				return nil, nil
+			}
+			d.Recover = func(context.Context, *systemops.Request) (json.RawMessage, error) { invoked = true; return nil, nil }
+			_, err := d.Handle(mode, "member", &systemops.Request{Action: action, Params: map[string]any{"target": "/dev/sda"}}, reporter())
+			if err == nil || invoked || *calls != 0 {
+				t.Fatalf("%s %s: %v", action, mode, err)
+			}
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,8 @@ func acceptanceGuard(t *testing.T) (lifecycle, []byte, string) {
 		t.Fatal("acceptance requires isolated guest root")
 	}
 	raw, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
-	if err != nil || strings.ToLower(strings.TrimSpace(string(raw))) != "c37154d3-9ce3-4440-bae7-507700ae8108" {
+	expectedUUID := strings.ToLower(os.Getenv("PANASMS_MODULE_VM_UUID"))
+	if err != nil || !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(expectedUUID) || strings.ToLower(strings.TrimSpace(string(raw))) != expectedUUID {
 		t.Fatal("VM identity refused", err)
 	}
 	run := func(argv ...string) []byte {
@@ -386,13 +388,45 @@ func TestIsolatedModuleLifecycleAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("PASS critical EX rejects SDK auto-retry before service replacement")
+	acceptanceLegacy(t, s)
 	acceptanceInterruptions(t, s, server, private)
 	before, err = s.registry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := install("1.2.0", "fail-start", authorize); err == nil {
-		t.Fatal("failed service start was accepted")
+	actualHealth := s.health
+	actualRun := s.run
+	failedExitObserved := false
+	watchFailure := func(ctx context.Context, id string) {
+		if id != "go14-base" {
+			return
+		}
+		revision, readErr := os.ReadFile(filepath.Join(s.root, id, "backend/revision"))
+		if readErr == nil && string(revision) == "fail-start" {
+			status, probeErr := actualRun(ctx, []string{"systemctl", "show", "--property=ExecMainStatus", "--value", unit(id)}, systemops.CommandOptions{})
+			if probeErr == nil && strings.TrimSpace(string(status)) == "17" {
+				failedExitObserved = true
+			}
+		}
+	}
+	s.run = func(ctx context.Context, argv []string, options systemops.CommandOptions) ([]byte, error) {
+		raw, err := actualRun(ctx, argv, options)
+		if err != nil && len(argv) == 4 && argv[1] == "enable" && argv[3] == unit("go14-base") {
+			watchFailure(ctx, "go14-base")
+		}
+		return raw, err
+	}
+	s.health = func(ctx context.Context, id string) (map[string]any, error) {
+		state, err := actualHealth(ctx, id)
+		if err != nil {
+			watchFailure(ctx, id)
+		}
+		return state, err
+	}
+	installErr := install("1.2.0", "fail-start", authorize)
+	s.health, s.run = actualHealth, actualRun
+	if installErr == nil || !failedExitObserved {
+		t.Fatal("actual fixture exit17/start failure was not observed", installErr)
 	}
 	current, err = s.registry()
 	if err != nil || !registryEqual(before, current) {

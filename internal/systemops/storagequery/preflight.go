@@ -1,6 +1,7 @@
 package storagequery
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"panasms.local/backend/internal/systemops"
@@ -117,4 +118,8 @@ func (p *Preflight) Layout(path string) error {
 
 func rejectf(format string, args ...any) error {
 	return &systemops.Rejected{Message: fmt.Sprintf(format, args...)}
+}
+
+func LoadPreflight(ctx context.Context) (*Preflight, error) {
+	return defaultService().preflight(ctx)
 }

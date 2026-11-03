@@ -94,3 +94,48 @@ func TestIdentityRejectsMissingSlavesWithoutPartitionMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPersistentIdentitySeparatesBootsAndRejectsUncertainEpoch(t *testing.T) {
+	inv := fixtureInventory(t, `[{"path":"/dev/sda","kname":"sda","type":"disk"}]`)
+	sys := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sys, "sda/slaves"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"dev": "8:0", "diskseq": "42"} {
+		if err := os.WriteFile(filepath.Join(sys, "sda", name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &Preflight{Inventory: inv}
+	a, b := "12345678-1234-1234-1234-123456789abc", "87654321-1234-1234-1234-123456789abc"
+	fixed := func(value string) func() (string, error) { return func() (string, error) { return value, nil } }
+	first, err := p.identity("/dev/sda", sys, fixed(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.identity("/dev/sda", sys, fixed(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(first, second) || !reflect.DeepEqual(first.Devices, second.Devices) {
+		t.Fatal("reused boot-local incarnation not distinguished")
+	}
+	for _, bad := range []string{"", "old-boot", a + "junk"} {
+		if _, err := p.identity("/dev/sda", sys, fixed(bad)); err == nil {
+			t.Fatalf("accepted invalid boot %q", bad)
+		}
+	}
+	calls := 0
+	if _, err := p.identity("/dev/sda", sys, func() (string, error) {
+		calls++
+		if calls == 1 {
+			return a, nil
+		}
+		return b, nil
+	}); err == nil {
+		t.Fatal("accepted changed boot during observation")
+	}
+	if _, err := p.identity("/dev/sda", sys, func() (string, error) { return "", os.ErrPermission }); err == nil {
+		t.Fatal("accepted unreadable boot")
+	}
+}

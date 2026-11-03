@@ -17,6 +17,7 @@ import (
 	"panasms.local/backend/internal/database"
 	"panasms.local/backend/internal/maintenance"
 	"panasms.local/backend/internal/systemops"
+	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"strings"
 	"sync"
 	"time"
@@ -232,7 +233,12 @@ func (m *Manager) execute(w work) {
 		}
 	})
 	var result json.RawMessage
-	release, err := maintenance.Acquire()
+	release, err := func() (func(), error) {
+		if modulelifecycle.IsAction(w.Request.Action) && actionModules[w.Request.Action] == goNative || w.Request.Action == "module.catalog-install" {
+			return func() {}, nil
+		}
+		return maintenance.Acquire()
+	}()
 	if err == nil {
 		defer release()
 		result, err = m.run(ctx, "execute", w.Job.User, w.Request)

@@ -14,7 +14,7 @@ systemctl enable panasms-network-sharing.service panasms-network-recovery.servic
 systemctl restart panasms-network-sharing.service
 systemctl restart panasms-agent.service panasms-core.service
 # Modules kept from a removed installation are still registered as enabled.
-python3 -B /usr/lib/panasms/management/module_manager.py --resume || true
+/usr/lib/panasms/panasms-system-helper modules resume || true
 scheme=http
 [ ! -f /etc/panasms/https.enabled ] || scheme=https
 printf 'PaNasMs: %s://%s.local:%s/ . Authentication policy is read from /etc/panasms/panasms.env.\n' "$scheme" "$(hostname)" "$port"

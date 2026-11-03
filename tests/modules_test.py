@@ -14,6 +14,32 @@ from common import Rejected
 
 
 class Modules(unittest.TestCase):
+    def test_legacy_recovery_refuses_native_or_unknown_pending_evidence(self):
+        for fields in ({'schema': 1}, {'phase': 'staging'}, {'schema': 0}):
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); stage = root / '.transaction'; stage.mkdir(mode=0o700)
+                raw = json.dumps({'before': {}, 'affected': [], 'committed': False, **fields})
+                journal = stage / 'journal.json'; journal.write_text(raw)
+                with patch.object(m, 'ROOT', root), patch.object(m, 'command') as command, patch.object(m, 'atomic') as atomic:
+                    with self.assertRaisesRegex(Rejected, 'Module recovery is incomplete'):
+                        m.recover()
+                    with self.assertRaisesRegex(Rejected, 'Module recovery is incomplete'):
+                        m.plan('module.recover', {}, 'alice')
+                    self.assertEqual(journal.read_text(), raw)
+                    command.assert_not_called(); atomic.assert_not_called()
+        for linked in (False, True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); stage = root / '.transaction'
+                stage.symlink_to('unknown') if linked else stage.mkdir(mode=0o700)
+                with patch.object(m, 'ROOT', root), patch.object(m, 'command') as command:
+                    with self.assertRaisesRegex(Rejected, 'Module recovery is incomplete'):
+                        m.recover()
+                    for action in ['module.install', 'module.enable', 'module.disable', 'module.remove']:
+                        with self.assertRaisesRegex(Rejected, 'Module recovery is incomplete'):
+                            m.plan(action, {}, 'alice')
+                    self.assertTrue(stage.is_symlink() if linked else stage.is_dir())
+                    command.assert_not_called()
+
     def test_core_handler_identifiers_are_rejected_before_install(self):
         for identifier in ('user', 'service', 'disk', 'updates', 'hostname', 'account-details', 'personal-folders', 'job', 'file'):
             with self.subTest(identifier=identifier), self.assertRaisesRegex(Rejected, 'belongs to the core'):

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"panasms.local/backend/internal/systemops/localmounts"
+	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
@@ -24,6 +25,8 @@ import (
 
 type networkUserKey struct{}
 type validatedPlanKey struct{}
+type moduleAuthorizationKey struct{}
+type moduleMemberKey struct{}
 
 type Dispatcher struct {
 	Authorize func(string) (auth.Identity, error)
@@ -56,10 +59,10 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	}
 	if id.Role != "admin" {
 		if mode == systemops.ModeQuery {
-			if req.View != "account-sessions" && req.View != "account-details" && req.View != "storage-options" && req.View != "personal-folders" {
+			if req.View != "account-sessions" && req.View != "account-details" && req.View != "storage-options" && req.View != "personal-folders" && req.View != "modules" {
 				return nil, deny("Administrator permissions required")
 			}
-			if req.View != "storage-options" && req.View != "personal-folders" {
+			if req.View != "storage-options" && req.View != "personal-folders" && req.View != "modules" {
 				req.Target = user
 			}
 		} else if req.Action != "user.session.end" || req.Params["target"] != user {
@@ -67,7 +70,8 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		}
 	}
 	if mode == systemops.ModeQuery {
-		result, err := d.Query(context.Background(), req.View, req.Target, user)
+		ctx := context.WithValue(context.Background(), moduleMemberKey{}, id.Role != "admin")
+		result, err := d.Query(ctx, req.View, req.Target, user)
 		if err == nil && id.Role != "admin" && req.View == "storage-options" {
 			return storagequery.Redact(result)
 		}
@@ -138,6 +142,23 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	mutated = true
 	ctx := context.WithValue(context.Background(), networkUserKey{}, user)
 	ctx = context.WithValue(ctx, validatedPlanKey{}, p.Fingerprint)
+	ctx = context.WithValue(ctx, moduleAuthorizationKey{}, func() error {
+		fresh, err := d.Authorize(user)
+		if err != nil {
+			return err
+		}
+		if fresh != id {
+			return deny("Account identity or access has changed; request a new operation plan")
+		}
+		active, err := d.Changing()
+		if err != nil {
+			return err
+		}
+		if active {
+			return deny("A system update is in progress; wait for the panel to reconnect")
+		}
+		return nil
+	})
 	return d.Execute(ctx, req.Action, req.Params, r)
 }
 
@@ -166,6 +187,9 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "modules":
+		member, _ := ctx.Value(moduleMemberKey{}).(bool)
+		return modulelifecycle.Query(member)
 	case "storage-options", "raid-candidates":
 		return storagequery.Query(ctx, view, target)
 	case "home-folders", "data-folders", "mount-folders":
@@ -196,6 +220,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if modulelifecycle.IsAction(action) {
+		return modulelifecycle.Plan(ctx, action, p, user)
+	}
 	if localmounts.IsAction(action) {
 		return localmounts.Plan(ctx, action, p, user)
 	}
@@ -238,6 +265,12 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if modulelifecycle.IsAction(action) {
+		user, _ := ctx.Value(networkUserKey{}).(string)
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
+		return modulelifecycle.Execute(ctx, action, p, user, expected, r, authorize)
+	}
 	if localmounts.IsAction(action) {
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)

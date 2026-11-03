@@ -5,6 +5,10 @@ case "${1:-}" in failed-upgrade)
  exit 1
  ;;
  remove|upgrade|deconfigure)
+ if [ -e /var/lib/panasms-modules/.transaction ] || [ -L /var/lib/panasms-modules/.transaction ]; then
+  echo 'Recover pending module transactions with the installed version before package changes.' >&2
+  exit 1
+ fi
  if [ "$1" = upgrade ] && [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
   echo 'Package replacement requires exclusive maintenance. Use the panel updater or panasms-maintenance.' >&2
   exit 1

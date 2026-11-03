@@ -182,7 +182,24 @@ def plan(action, p, user):
             'fingerprint': fingerprint(action, p, [chosen, installed])}
 
 
-def execute(action, p, user):
+def native_install(mode, params, user, actor=None, plan=None):
+    request = {'action': 'module.install', 'params': params}
+    if actor is not None:
+        request['actor'] = actor
+    if plan is not None:
+        request.update({key: plan[key] for key in ('fingerprint', 'confirmation')})
+    descriptor = os.environ.get('PANASMS_CONTROL_FD')
+    inherited = () if descriptor is None else (int(descriptor),)
+    process = subprocess.run(['/usr/lib/panasms/panasms-system-helper', mode, user],
+                             input=json.dumps(request), text=True, stdout=subprocess.PIPE,
+                             stderr=sys.stderr, pass_fds=inherited)
+    require(process.returncode == 0 and len(process.stdout) <= 1048576, 'Native module lifecycle failed; inspect the recorded transaction')
+    result = json.loads(process.stdout)
+    require(isinstance(result, dict), 'Invalid native module lifecycle response')
+    return result
+
+
+def execute(action, p, user, actor=None):
     job_control.capability(True)
     job_control.checkpoint()
     chosen, _ = selection(p)
@@ -210,10 +227,12 @@ def execute(action, p, user):
                                 if name != 'bundle.json':
                                     merged.writestr(name, source.read(name))
         params = {'upload': token}
-        manager.plan('module.install', params, user)
+        plan = native_install('plan', params, user, actor)
+        if plan.get('error') or plan.get('cancelled'):
+            return plan
         job_control.capability(False)
         job_control.checkpoint()
-        return manager.execute('module.install', params, user)
+        return native_install('execute', params, user, actor, plan)
     finally:
         job_control.capability(False)
         bundle.unlink(missing_ok=True)

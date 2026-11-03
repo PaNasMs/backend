@@ -128,6 +128,8 @@ def dispatch(mode, user, request):
     job_control.checkpoint()
     os.environ["PANASMS_OPERATION"] = "1"
     mutation_started = True
+    if module == module_catalog:
+        return module.execute(action, params, user, request.get('actor'))
     return (
         module.execute(action, params, user)
         if module != accounts

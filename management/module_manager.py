@@ -378,9 +378,15 @@ def list_modules():
 
 
 def plan(action, p, user):
+    pending = transaction_path()
+    if action != 'module.recover':
+        require(not pending.exists() and not pending.is_symlink(), 'Module recovery is incomplete. Recover the recorded transaction before changing modules.')
     if action == 'module.recover':
         journal = transaction_path() / 'journal.json'
-        require(journal.exists(), 'No module transaction needs recovery')
+        require(journal.exists(), 'Module recovery is incomplete. Recover the recorded transaction before changing modules.' if pending.exists() or pending.is_symlink() else 'No module transaction needs recovery')
+        state = json.loads(journal.read_text())
+        require(not pending.is_symlink() and isinstance(state, dict) and 'schema' not in state and 'phase' not in state,
+                'Module recovery is incomplete. Recover the recorded transaction before changing modules.')
         return {'target': 'modules', 'confirmation': 'modules',
                 'details': ['Recover the recorded module transaction; installed OS dependencies are retained'],
                 'fingerprint': fingerprint(action, p, journal.read_text())}
@@ -500,11 +506,13 @@ def write_transaction(data):
 def recover():
     staging = transaction_path()
     journal = staging / "journal.json"
+    message = 'Module recovery is incomplete. Recover the recorded transaction before changing modules.'
+    require(not staging.is_symlink(), message)
     if not journal.exists():
-        if staging.exists():
-            shutil.rmtree(staging)
+        require(not staging.exists(), message)
         return
     state = json.loads(journal.read_text())
+    require(isinstance(state, dict) and 'schema' not in state and 'phase' not in state, message)
     if not state.get("committed"):
         before = state["before"]
         for mid in reversed(state["affected"]):

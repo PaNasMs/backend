@@ -27,6 +27,7 @@ func IsAction(action string) bool {
 }
 
 type prepared struct {
+	previous            *transaction
 	target, parent      string
 	row                 map[string]any
 	table               map[string]any
@@ -38,7 +39,7 @@ type prepared struct {
 }
 
 func defaultService() *service {
-	return &service{sys: "/sys/class/block", run: systemops.Command, identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
+	return &service{revalidate: revalidate, writeConfig: storagebase.WriteFstab, root: "/var/lib/panasms-agent/storage", owner: 0, write: systemops.AtomicWrite, sys: "/sys/class/block", run: systemops.Command, identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 		return p.Identity(target)
 	}, config: storagebase.ReadFstab, find: exec.LookPath}
 }
@@ -103,7 +104,11 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 	if err != nil {
 		return nil, err
 	}
-	out := &prepared{target: target, row: row, paths: []string{target}}
+	previous, err := s.load(target)
+	if err != nil {
+		return nil, err
+	}
+	out := &prepared{previous: previous, target: target, row: row, paths: []string{target}}
 	fs := text(row, "fstype")
 	details := []string{}
 	switch action {
@@ -271,7 +276,7 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 		}
 	}
 	sort.Strings(out.paths)
-	data, err := json.Marshal(map[string]any{"devices": state, "identity": out.identity, "table": out.table, "fstab": out.config})
+	data, err := json.Marshal(map[string]any{"devices": state, "identity": out.identity, "table": out.table, "fstab": out.config, "previous": previous})
 	if err != nil {
 		return nil, err
 	}

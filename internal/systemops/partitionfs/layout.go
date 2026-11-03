@@ -16,11 +16,16 @@ import (
 
 type runner func(context.Context, []string, systemops.CommandOptions) ([]byte, error)
 type service struct {
-	sys      string
-	run      runner
-	identity func(*storagequery.Preflight, string) (storagequery.StorageIdentity, error)
-	config   func() (string, error)
-	find     func(string) (string, error)
+	revalidate  func(context.Context, string, *transaction) error
+	writeConfig func(context.Context, string, string, *systemops.Reporter) error
+	root        string
+	owner       int
+	write       func(string, string, os.FileMode) error
+	sys         string
+	run         runner
+	identity    func(*storagequery.Preflight, string) (storagequery.StorageIdentity, error)
+	config      func() (string, error)
+	find        func(string) (string, error)
 }
 
 func reject(message string) error                { return &systemops.Rejected{Message: message} }

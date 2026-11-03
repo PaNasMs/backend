@@ -3,12 +3,18 @@ package partitionfs
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"panasms.local/backend/internal/systemops/storagequery"
 	"testing"
 )
 
 func planningFixture(t *testing.T) (*service, *storagequery.Preflight) {
 	s, p := fixture(t, `{"signatures":[{"type":"gpt"}]}`, validTable)
+	s.root = t.TempDir()
+	if err := os.Chmod(s.root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s.owner = os.Getuid()
 	s.identity = func(_ *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 		return storagequery.StorageIdentity{BootID: "12345678-1234-1234-1234-123456789abc", Devices: []storagequery.DeviceIdentity{{Path: target, DeviceNumber: "8:1", DiskSequence: "42"}}}, nil
 	}

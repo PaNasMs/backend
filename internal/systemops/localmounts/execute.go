@@ -80,6 +80,10 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	if action != "mount.detach" && prior != nil && prior.Phase == "pending" && (prior.StageIntent || prior.MountID != 0) {
 		return nil, systemops.BeforeMutation(reject("A mount operation needs recovery before a new operation can start."))
 	}
+	priorReload, err := pendingConfiguration(prior, v.conf)
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
 	device := storagequery.DeviceIdentity{}
 	for _, entry := range identity.Devices {
 		if entry.Path == v.target {
@@ -96,6 +100,9 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		return nil, systemops.BeforeMutation(err)
 	}
 	state := &transaction{TransactionEnvelope: storagebase.TransactionEnvelope{Schema: 1, Domain: "localmounts", Action: action, Target: v.target, Identity: identity, Phase: "pending"}, Fingerprint: v.fingerprint, Point: v.point, FSType: v.fs, FstabBefore: storagebase.Hash(v.conf), FstabDesired: desired}
+	if action == "disk.prepare" {
+		state.ConfigRemovedUUIDs = removedConfigUUIDs(v)
+	}
 	if action == "mount.detach" && prior != nil && prior.Phase == "pending" {
 		state.Stage = prior.Stage
 		state.StageIntent = prior.StageIntent
@@ -195,7 +202,29 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 			return nil, err
 		}
 	}
-	if desired != v.conf {
+	state.FstabDesired = desired
+	if action == "disk.prepare" {
+		fresh, err := s.load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		now, err := s.identity(fresh, v.target)
+		if err != nil {
+			return nil, err
+		}
+		if !hardwareIdentityEqual(v.identities[v.target], now) {
+			return nil, reject("Storage identity changed; inspect recovery before continuing")
+		}
+		if text(fresh.Inventory.Rows[v.target], "uuid") != "" || len(fresh.Inventory.Descendants(v.target)) != 1 {
+			return nil, reject("Prepared disk metadata has not settled; inspect recovery before continuing")
+		}
+		state.ConfigIdentity = now
+		state.ConfigOnlyRemaining = true
+		if err = save(state); err != nil {
+			return nil, err
+		}
+	}
+	if desired != v.conf || priorReload {
 		if err = perform("fstab", func() error { return storagebase.WriteFstab(ctx, state.FstabBefore, state.FstabDesired, r) }); err != nil {
 			return nil, err
 		}
@@ -205,6 +234,9 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 			return nil, err
 		}
 	}
+	state.ConfigReconciled = true
+	state.ConfigResolution = "desired"
+	state.ConfigWitness = storagebase.Hash(desired)
 	state.FstabDesired = desired
 	state.Phase = "complete"
 	if err = save(state); err != nil {
@@ -260,4 +292,65 @@ func desiredFstab(action string, v *plan) (string, error) {
 		}
 		return false, err
 	})
+}
+
+func hardwareIdentityEqual(a, b storagequery.StorageIdentity) bool {
+	if a.BootID != b.BootID || len(a.Devices) != len(b.Devices) {
+		return false
+	}
+	for i, x := range a.Devices {
+		y := b.Devices[i]
+		x.UUID = ""
+		x.PartUUID = ""
+		y.UUID = ""
+		y.PartUUID = ""
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+func removedConfigUUIDs(v *plan) []string {
+	owned := map[string]bool{}
+	for path := range v.identities {
+		if uuid := text(v.preflight.Inventory.Rows[path], "uuid"); uuid != "" {
+			owned[uuid] = true
+		}
+	}
+	removed := map[string]bool{}
+	for _, line := range strings.Split(v.conf, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && strings.HasPrefix(fields[0], "UUID=") {
+			uuid := strings.TrimPrefix(fields[0], "UUID=")
+			if owned[uuid] {
+				removed[uuid] = true
+			}
+		}
+	}
+	result := []string{}
+	for uuid := range removed {
+		result = append(result, uuid)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func pendingConfiguration(prior *transaction, conf string) (bool, error) {
+	if prior == nil || prior.Phase != "pending" || prior.FstabBefore == storagebase.Hash(prior.FstabDesired) {
+		return false, nil
+	}
+	if prior.ConfigReconciled {
+		if prior.ConfigWitness != storagebase.Hash(conf) || (prior.ConfigResolution != "before" && prior.ConfigResolution != "desired") {
+			return false, reject("Storage configuration changed after recovery; inspect it before continuing")
+		}
+		return false, nil
+	}
+	if prior.Action == "disk.prepare" {
+		return false, reject("Storage configuration recovery is required before another operation")
+	}
+	if storagebase.Hash(conf) != prior.FstabBefore && conf != prior.FstabDesired {
+		return false, reject("Storage configuration changed; inspect recovery before continuing")
+	}
+	return true, nil
 }

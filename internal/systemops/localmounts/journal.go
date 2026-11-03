@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"panasms.local/backend/internal/systemops/storagebase"
+	"panasms.local/backend/internal/systemops/storagequery"
 	"path/filepath"
 	"syscall"
 )
@@ -16,6 +17,12 @@ type operationStep struct {
 	Completed bool   `json:"completed"`
 }
 type transaction struct {
+	ConfigRemovedUUIDs  []string                     `json:"configRemovedUUIDs,omitempty"`
+	ConfigIdentity      storagequery.StorageIdentity `json:"configIdentity,omitempty"`
+	ConfigResolution    string                       `json:"configResolution,omitempty"`
+	ConfigWitness       string                       `json:"configWitness,omitempty"`
+	ConfigReconciled    bool                         `json:"configReconciled,omitempty"`
+	ConfigOnlyRemaining bool                         `json:"configOnlyRemaining,omitempty"`
 	storagebase.TransactionEnvelope
 	Fingerprint  string          `json:"fingerprint"`
 	Point        string          `json:"point,omitempty"`

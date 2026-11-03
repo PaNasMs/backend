@@ -2,6 +2,7 @@ package localmounts
 
 import (
 	"panasms.local/backend/internal/systemops/folders"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"path/filepath"
 	"strings"
 )
@@ -43,6 +44,9 @@ func (s *service) recovery(target string) (map[string]any, error) {
 		}
 	}
 	report["mounts"] = selected
+	if state.Phase == "pending" && state.Action == "disk.prepare" && !state.ConfigReconciled && state.FstabBefore != storagebase.Hash(state.FstabDesired) {
+		report["recoveryAction"] = "storage.recover"
+	}
 	report["message"] = "Inspect the current device and completed steps. Destructive operations are never replayed automatically; a new operation requires a fresh plan and confirmation."
 	return report, nil
 }

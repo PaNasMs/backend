@@ -185,7 +185,14 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 		}
 	}
 	for _, m := range all {
-		if numbers[m.Device] {
+		selected := numbers[m.Device]
+		if !selected && v.fs == "btrfs" && m.FSType == "btrfs" && mountedPoint(row, m.Target) {
+			if err = verifyBtrfsPoint(m.Target, target, text(row, "uuid")); err != nil {
+				return nil, err
+			}
+			selected = true
+		}
+		if selected {
 			if err = folders.MountPath(m.Target); err != nil {
 				if action != "mount.detach" || prior == nil || prior.Phase != "pending" || !prior.StageIntent || m.Target != s.privateStage(target) || prior.Stage != m.Target {
 					return nil, err
@@ -268,7 +275,9 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 			if m.Target == v.point {
 				occupied = true
 				occupiedMount = m
-				ours = numbers[m.Device]
+				for _, selected := range v.selected {
+					ours = ours || selected.ID == m.ID
+				}
 			}
 		}
 		if occupied && !ours {

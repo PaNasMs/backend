@@ -62,7 +62,7 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	verified := false
 	for _, m := range mounts {
 		if m.Target == state.Stage {
-			if m.Device != pin.Identity.DeviceNumber || m.Root != "/" {
+			if (v.fs != "btrfs" && m.Device != pin.Identity.DeviceNumber) || m.Root != "/" {
 				return reject("The staged mount changed")
 			}
 			verified = true
@@ -70,6 +70,11 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	}
 	if !verified {
 		return reject("The staged mount is unavailable")
+	}
+	if v.fs == "btrfs" {
+		if err = verifyBtrfsPoint(state.Stage, v.target, pin.Identity.UUID); err != nil {
+			return err
+		}
 	}
 	if err = storagebase.SameDirectory(target, v.point); err != nil {
 		return err
@@ -91,12 +96,17 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	}
 	verified = false
 	for _, m := range mounts {
-		if m.Target == v.point && m.ID == state.MountID && m.Device == pin.Identity.DeviceNumber {
+		if m.Target == v.point && m.ID == state.MountID && (v.fs == "btrfs" || m.Device == pin.Identity.DeviceNumber) {
 			verified = true
 		}
 	}
 	if !verified {
 		return reject("The mounted volume changed; inspect recovery")
+	}
+	if v.fs == "btrfs" {
+		if err = verifyBtrfsPoint(v.point, v.target, pin.Identity.UUID); err != nil {
+			return err
+		}
 	}
 	if err = os.Remove(state.Stage); err != nil {
 		return err

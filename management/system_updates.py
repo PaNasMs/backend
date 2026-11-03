@@ -217,9 +217,10 @@ def fetch(url,limit):
 def check():
     phase('checking')
     channel=config()['channel']
+    feed = 'current/stable' if channel == 'stable' else channel
     with tempfile.TemporaryDirectory(dir=ROOT) as folder:
-        p=Path(folder)/'catalog.json';p.write_bytes(fetch(BASE+f'channels/{channel}.json',2*1024*1024))
-        sig=p.with_suffix('.asc');sig.write_bytes(fetch(BASE+f'channels/{channel}.json.asc',16384))
+        p=Path(folder)/'catalog.json';p.write_bytes(fetch(BASE+f'channels/{feed}.json',2*1024*1024))
+        sig=p.with_suffix('.asc');sig.write_bytes(fetch(BASE+f'channels/{feed}.json.asc',16384))
         run(['gpgv','--keyring',str(KEY),str(sig),str(p)],timeout=30)
         data=json.loads(p.read_text())
     require(data.get('schemaVersion')==1 and data.get('channel')==channel,'Unsupported update catalog')

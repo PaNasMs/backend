@@ -4,6 +4,12 @@ if [ "${1:-}" = upgrade ] && [ "${PANASMS_MAINTENANCE:-}" != 1 ]; then
  echo 'Use Settings > System updates, or panasms-maintenance apt-get install ./package.deb. Package replacement requires exclusive maintenance.' >&2
  exit 1
 fi
+# A native Testing installation must upgrade forward; rollback has its own verified guard.
+if [ "${1:-}" = upgrade ] && [ -f /var/lib/panasms-installer/sharing-native-v1.json ] &&
+   dpkg --compare-versions '@PANASMS_PACKAGE_VERSION@' gt "$2"; then
+ echo 'This installation already uses native sharing. Update Testing before switching to Stable.' >&2
+ exit 1
+fi
 for journal in /var/lib/panasms-agent/sharing-transaction.json /var/lib/panasms-agent/sharing-legacy-nfs-transaction.json; do
  if [ -e "$journal" ] || [ -L "$journal" ]; then
   echo 'Recover pending sharing transactions with the installed version before package changes.' >&2

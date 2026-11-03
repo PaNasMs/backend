@@ -47,6 +47,7 @@ for unit in smbd nfs-server; do
 done
 install -D -m 0644 packaging/panasms-mdns.conf "$stage/usr/lib/systemd/system/avahi-daemon.service.d/panasms-mdns.conf"
 for script in preinst postinst prerm postrm; do install -m 0755 "packaging/$script" "$stage/DEBIAN/$script"; done
+sed -i "s|@PANASMS_PACKAGE_VERSION@|$version|g" "$stage/DEBIAN/preinst"
 printf '/etc/pam.d/panasms\n' > "$stage/DEBIAN/conffiles"
 mkdir -p "$stage/debian"
 printf 'Source: panasms-prototype\nSection: admin\nPriority: optional\nMaintainer: PaNasMs\n\nPackage: panasms-prototype\nArchitecture: any\nDescription: PaNasMs\n' > "$stage/debian/control"

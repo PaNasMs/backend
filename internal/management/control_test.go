@@ -156,3 +156,30 @@ func TestInspectionDoesNotHoldManagerMutex(t *testing.T) {
 		t.Fatal("guard not released")
 	}
 }
+
+func TestInspectPartitionJournalUsesStoredCanonicalTarget(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	defer func() { close(m.queue); <-m.finished }()
+	_, err = m.db.Exec("INSERT INTO jobs VALUES('missing','alice','partition.delete','/dev/loop9p1','interrupted','stage','now','now','{}')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.db.Exec("INSERT INTO job_context VALUES('missing',?)", `{"target":"/dev/disk/by-id/vanished"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.run = func(_ context.Context, mode, user string, details any) (json.RawMessage, error) {
+		p := details.(map[string]any)["params"].(map[string]string)
+		if mode != "recover" || p["target"] != "/dev/loop9p1" {
+			t.Fatalf("wrong inspection target: %+v", p)
+		}
+		return json.RawMessage(`{"message":"Inspect","checks":[],"route":"/storage"}`), nil
+	}
+	if _, err = m.inspect(context.Background(), "missing", "alice"); err != nil {
+		t.Fatal(err)
+	}
+}

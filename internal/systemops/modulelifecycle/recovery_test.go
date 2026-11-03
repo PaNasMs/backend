@@ -277,6 +277,38 @@ func TestCommittedAndStagingCleanupNeverRollBackOrStartServices(t *testing.T) {
 	}
 }
 
+func TestFinalCleanupRefusalCannotEraseLiveRestoreMutation(t *testing.T) {
+	r, state := recoveryFixture(t, true)
+	reloaded, checksAfterReload := false, 0
+	r.run = func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {
+		if argv[1] == "daemon-reload" {
+			reloaded = true
+		}
+		return nil, nil
+	}
+	r.mounts = func() ([]string, error) {
+		if reloaded {
+			checksAfterReload++
+			if checksAfterReload == 2 {
+				return []string{filepath.Join(r.root, ".transaction/mounted")}, nil
+			}
+		}
+		return nil, nil
+	}
+	err := r.restore(context.Background(), state, nil)
+	if err == nil || systemops.Unchanged(err) || !strings.Contains(err.Error(), "mounted data") {
+		t.Fatal("post-restoration cleanup refusal classified as unchanged", err)
+	}
+	current, readErr := r.registry()
+	if readErr != nil || !registryEqual(current, state.Before) || !reloaded {
+		t.Fatal("test did not reach the live-restored state", readErr)
+	}
+	assertOldPayloads(t, r, state)
+	if _, err := os.Stat(filepath.Join(r.root, ".transaction/journal.json")); err != nil {
+		t.Fatal("final cleanup refusal discarded evidence", err)
+	}
+}
+
 func TestLegacyRecoveryRestoresRetainedJournalAndDisabledModule(t *testing.T) {
 	r, state := recoveryFixture(t, false)
 	state.Schema = 0

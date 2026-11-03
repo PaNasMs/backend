@@ -529,7 +529,7 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		return nil, err
 	}
 	rollback = false
-	if err = s.recovery().cleanup(state); err != nil {
+	if err = s.recovery().cleanup(state, true); err != nil {
 		return nil, err
 	}
 	s.removeUpload(plan)

@@ -246,7 +246,7 @@ func (r recovery) restore(ctx context.Context, state *transaction, reporter *sys
 			return reject("Module transaction changed; recorded files were preserved")
 		}
 		mutated = true
-		return r.cleanup(state)
+		return r.cleanup(state, false)
 	}
 	if err := state.validate(r.owner); err != nil {
 		return err
@@ -257,11 +257,11 @@ func (r recovery) restore(ctx context.Context, state *transaction, reporter *sys
 			return err
 		}
 		mutated = true
-		return r.cleanup(state)
+		return r.cleanup(state, false)
 	}
 	if state.Committed {
 		mutated = true
-		return r.cleanup(state)
+		return r.cleanup(state, false)
 	}
 	order, err := recoveryOrder(state.Before, state.Affected)
 	if err != nil {
@@ -353,11 +353,11 @@ func (r recovery) restore(ctx context.Context, state *transaction, reporter *sys
 	if err = r.noMounts(stagingPath); err != nil {
 		return err
 	}
-	return r.cleanup(state)
+	return r.cleanup(state, true)
 }
 
-func (r recovery) cleanup(state *transaction) (err error) {
-	mutated := false
+func (r recovery) cleanup(state *transaction, priorMutation bool) (err error) {
+	mutated := priorMutation
 	defer func() {
 		if err != nil && !mutated {
 			err = systemops.BeforeMutation(err)

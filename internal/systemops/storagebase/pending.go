@@ -49,7 +49,8 @@ func checkPendingRoots(roots []PendingRoot, owner int, domain, target string, id
 			if strings.Contains(entry.Name(), ".history-") {
 				continue
 			}
-			if !strings.HasSuffix(entry.Name(), ".json") {
+			temporary := strings.HasPrefix(entry.Name(), ".journal-") || strings.HasPrefix(entry.Name(), ".panasms-")
+			if !temporary && !strings.HasSuffix(entry.Name(), ".json") {
 				return reject("Unknown storage transaction evidence. Inspect it before continuing.")
 			}
 			fd, err := unix.Open(filepath.Join(root.Path, entry.Name()), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
@@ -66,6 +67,10 @@ func checkPendingRoots(roots []PendingRoot, owner int, domain, target string, id
 			if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || int(raw.Uid) != owner || raw.Nlink != 1 {
 				f.Close()
 				return reject("Storage transaction permissions are unsafe")
+			}
+			if temporary {
+				f.Close()
+				continue
 			}
 			data, err := io.ReadAll(io.LimitReader(f, (2<<20)+1))
 			f.Close()

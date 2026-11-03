@@ -10,6 +10,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/folders"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
@@ -88,6 +89,37 @@ func EscapeFstab(path string) string {
 	return strings.NewReplacer(`\`, `\134`, " ", `\040`, "\t", `\011`).Replace(path)
 }
 
+func managedFstabRow(fields []string) bool {
+	if len(fields) < 4 {
+		return false
+	}
+	for _, option := range strings.Split(fields[3], ",") {
+		if option == "x-systemd.device-timeout=30s" {
+			return true
+		}
+	}
+	return false
+}
+
+// Older panel versions did not emit a dedicated owner tag. For a destructive
+// disk operation, recognize only rows matching the complete generated format.
+var panelMountOptions = regexp.MustCompile(`^(rw|ro),noatime,nofail,x-systemd\.device-timeout=30s(,noauto|,x-systemd\.automount,x-systemd\.idle-timeout=10min)?(,uid=[0-9]+,gid=[0-9]+,fmask=0113,dmask=0002|,noload)?$`)
+
+func generatedMountRow(fields []string) bool {
+	return len(fields) == 6 && fields[4] == "0" && fields[5] == "0" && panelMountOptions.MatchString(fields[3])
+}
+
+// Local disk preparation never assumes ownership of an administrator's boot entries.
+func RemoveManagedFstabRows(current string, uuids map[string]bool) (string, error) {
+	for _, line := range strings.Split(current, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "UUID=") && uuids[strings.TrimPrefix(fields[0], "UUID=")] && !generatedMountRow(fields) {
+			return "", reject("This disk has a mount entry managed outside the panel. Review it before preparing the disk.")
+		}
+	}
+	return EditFstab(current, uuids, "", nil)
+}
+
 // Preserve comments and unrelated rows; only a vanished panel-managed UUID may
 // be superseded at the selected destination, matching existing installed fstab.
 func EditFstab(current string, removeUUIDs map[string]bool, line string, missing func(string) (bool, error)) (string, error) {
@@ -108,15 +140,14 @@ func EditFstab(current string, removeUUIDs map[string]bool, line string, missing
 			continue
 		}
 		if strings.HasPrefix(fields[0], "UUID=") && removeUUIDs[strings.TrimPrefix(fields[0], "UUID=")] {
+			if line != "" && (len(fields) < 2 || fields[1] != point) && !managedFstabRow(fields) {
+				return "", reject("This volume has an existing mount configuration at another location. Review it before continuing.")
+			}
 			removed = true
 			continue
 		}
 		if point != "" && len(fields) >= 4 && fields[1] == point {
-			managed := false
-			for _, opt := range strings.Split(fields[3], ",") {
-				managed = managed || opt == "x-systemd.device-timeout=30s"
-			}
-			if !strings.HasPrefix(fields[0], "UUID=") || !managed || missing == nil {
+			if !strings.HasPrefix(fields[0], "UUID=") || !managedFstabRow(fields) || missing == nil {
 				return "", reject("The mount point is already used by another volume")
 			}
 			absent, err := missing(strings.TrimPrefix(fields[0], "UUID="))

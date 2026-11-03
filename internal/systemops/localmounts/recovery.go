@@ -1,0 +1,53 @@
+package localmounts
+
+import (
+	"panasms.local/backend/internal/systemops/folders"
+	"panasms.local/backend/internal/systemops/storagebase"
+	"path/filepath"
+)
+
+func Recovery(target string) (map[string]any, error) { return defaultService().recovery(target) }
+func (s *service) recovery(target string) (map[string]any, error) {
+	resolved, err := storagebase.RecoveryTarget(target)
+	if err != nil || filepath.Dir(resolved) != "/dev" {
+		return nil, reject("Select a block device")
+	}
+	target = resolved
+	state, revision, err := readJournal(s.root, target, s.owner)
+	if err != nil {
+		return nil, err
+	}
+	mounts, err := s.mounts()
+	if err != nil {
+		return nil, err
+	}
+	report := map[string]any{"target": target, "pendingJournal": false, "phase": "No pending journal", "recoveryAction": nil, "mounts": []folders.LiveMount{}}
+	if state == nil {
+		return report, nil
+	}
+	report["pendingJournal"] = state.Phase == "pending"
+	report["phase"] = state.Phase
+	report["action"] = state.Action
+	report["steps"] = state.Steps
+	report["journalRevision"] = revision
+	report["recordedIdentity"] = state.Identity
+	if state.Phase == "pending" && (state.StageIntent || state.MountID != 0) {
+		report["recoveryAction"] = "mount.detach"
+	}
+	selected := []folders.LiveMount{}
+	for _, mount := range mounts {
+		matches := mount.Target == state.Point || mount.Target == state.Stage
+		for _, device := range state.Identity.Devices {
+			matches = matches || device.DeviceNumber == mount.Device
+		}
+		if matches {
+			selected = append(selected, mount)
+		}
+	}
+	report["mounts"] = selected
+	if state.Phase == "pending" && state.Action == "disk.prepare" && !state.ConfigReconciled && state.FstabBefore != storagebase.Hash(state.FstabDesired) {
+		report["recoveryAction"] = "storage.recover"
+	}
+	report["message"] = "Inspect the current device and completed steps. Destructive operations are never replayed automatically; a new operation requires a fresh plan and confirmation."
+	return report, nil
+}

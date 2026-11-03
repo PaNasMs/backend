@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"panasms.local/backend/internal/systemops/localmounts"
 	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
@@ -222,6 +223,9 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	if modulelifecycle.IsAction(action) {
 		return modulelifecycle.Plan(ctx, action, p, user)
 	}
+	if localmounts.IsAction(action) {
+		return localmounts.Plan(ctx, action, p, user)
+	}
 	if action == "storage.archive-journal" {
 		return partitionfs.ArchivePlan(ctx, p)
 	}
@@ -266,6 +270,11 @@ func execute(ctx context.Context, action string, p map[string]any, r *systemops.
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
 		return modulelifecycle.Execute(ctx, action, p, user, expected, r, authorize)
+	}
+	if localmounts.IsAction(action) {
+		user, _ := ctx.Value(networkUserKey{}).(string)
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return localmounts.Execute(ctx, action, p, user, expected, r)
 	}
 	if action == "storage.archive-journal" {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)

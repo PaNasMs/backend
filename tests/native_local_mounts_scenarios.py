@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Private-chroot GO09B scenarios; outer VM/loop isolation is mandatory."""
+import errno, hashlib, json, os, signal, subprocess, time
+from pathlib import Path
+
+def command(*args):
+    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
+
+def require_namespace():
+    nonce = os.environ.get('PANASMS_GO09_NONCE', '')
+    assert os.geteuid() == 0 and os.getpid() == 1
+    assert len(nonce) == 32 and Path('/fixture/nonce').read_text() == nonce
+    expected = os.environ.get('PANASMS_ACCEPTANCE_VM_UUID', '')
+    assert expected and Path('/sys/class/dmi/id/product_uuid').read_text().strip().lower() == expected.lower()
+    assert not json.loads(command('ip', '-j', 'route'))
+    assert not json.loads(command('ip', '-6', '-j', 'route'))
+    assert Path('/fixture/devices.json').stat().st_uid == 0
+
+def invoke(mode, action, params, user='admin', plan=None):
+    body = {'action': action, 'params': params}
+    if mode == 'execute':
+        if plan is None:
+            plan = invoke('plan', action, params, user)
+        assert not plan.get('error'), plan
+        body.update(fingerprint=plan['fingerprint'], confirmation=plan['confirmation'])
+    result = subprocess.run(['/usr/lib/panasms/panasms-system-helper', mode, user],
+                            input=json.dumps(body), text=True, capture_output=True, timeout=180)
+    assert result.returncode == 0, result.stderr[-4000:]
+    return json.loads(result.stdout)
+
+def operation(action, params):
+    result = invoke('execute', action, params)
+    assert not result.get('error'), result
+    return result
+
+def denied(mode, action, params, **kwargs):
+    result = invoke(mode, action, params, **kwargs)
+    assert result.get('error'), result
+    return result
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def verify_member_denial(target):
+    passwd = Path('/etc/passwd')
+    entries = {row.split(':', 1)[0] for row in passwd.read_text().splitlines()}
+    assert entries == {'root', 'admin', 'nobody'}
+    assert '/fixture/child.py' in Path('/proc/1/cmdline').read_bytes().decode().split('\x00')
+    policy = Path('/etc/panasms/accounts.json')
+    assert not policy.exists()
+    with passwd.open('a') as file:
+        file.write('fixture-member:x:15001:100:Fixture Member:/nonexistent:/bin/bash\n')
+    with Path('/etc/shadow').open('a') as file:
+        file.write('fixture-member:!:1:0:99999:7:::\n')
+    with policy.open('x') as file:
+        json.dump({'fixture-member': {'uid': 15001, 'panel': True}}, file)
+    policy.chmod(0o600)
+    for action in ('mount.attach', 'mount.detach', 'mount.open', 'mount.settings', 'disk.prepare', 'disk.eject'):
+        for mode in ('plan', 'execute', 'recover'):
+            dummy = {'fingerprint': '0' * 64, 'confirmation': target} if mode == 'execute' else None
+            result = invoke(mode, action, {'target': target}, user='fixture-member', plan=dummy)
+            assert result.get('error') == 'Administrator permissions required', (action, mode, result)
+    print('PASS panel-authorized member denied all six administrative actions before planning or execution', flush=True)
+
+def main():
+    require_namespace()
+    devices = json.loads(Path('/fixture/devices.json').read_text())
+    disk, target = devices['disk'], devices['partition']
+    assert disk.startswith('/dev/loop') and target.startswith(disk + 'p')
+    helper = Path('/usr/lib/panasms/panasms-system-helper')
+    assert digest(helper) == os.environ['PANASMS_GO09_HELPER_SHA256']
+    verify_member_denial(target)
+    stage = Path('/var/lib/panasms-agent/local-mounts')
+    point = Path('/mnt/go09b-data')
+    params = {'target': target, 'point': str(point), 'mountPolicy': 'manual'}
+    for mode in ('plan', 'recover'):
+        denied(mode, 'mount.attach', params, user='nobody')
+    foreign = Path('/mnt/foreign-tmpfs')
+    foreign.mkdir()
+    command('mount', '-t', 'tmpfs', '--no-canonicalize', '/dev/panasms-absent-fixture', str(foreign))
+    try:
+        marker = foreign / 'retained'
+        marker.write_text('foreign mount')
+        denied('plan', 'mount.open', {**params, 'point': str(foreign), 'mode': 'readonly'})
+        assert marker.read_text() == 'foreign mount'
+    finally:
+        command('umount', str(foreign))
+    print('PASS foreign tmpfs with a missing device label is preserved', flush=True)
+    config = Path('/etc/fstab')
+    original = config.read_bytes()
+    volume_uuid = command('blkid', '-s', 'UUID', '-o', 'value', target)
+    custom = original + f'UUID={volume_uuid} /mnt/custom ext4 ro,nosuid,nodev 0 2\n'.encode()
+    config.write_bytes(custom)
+    try:
+        denied('plan', 'mount.attach', params)
+        rejected = denied('plan', 'disk.prepare', {'target': target})
+        assert 'managed outside the panel' in rejected['error'], rejected
+        assert config.read_bytes() == custom
+        for source in (target, 'PARTUUID=' + command('blkid', '-s', 'PARTUUID', '-o', 'value', target)):
+            alias_row = original + f'{source} /mnt/custom ext4 defaults 0 2\n'.encode()
+            config.write_bytes(alias_row)
+            rejected = denied('plan', 'disk.prepare', {'target': target})
+            assert 'managed outside the panel' in rejected['error'] and config.read_bytes() == alias_row, rejected
+    finally:
+        config.write_bytes(original)
+    operation('mount.attach', params)
+    rows = [line for line in Path('/proc/self/mountinfo').read_text().splitlines() if line.split()[4] == str(point)]
+    assert len(rows) == 1 and rows[0].split(' - ',1)[1].split()[1] == target, rows
+    payload = point / 'payload'
+    payload.write_bytes(b'GO09B retained data\n' * 8192)
+    original_hash = digest(payload)
+    assert 'noauto' in Path('/etc/fstab').read_text()
+    denied('plan', 'mount.attach', params)
+    print('PASS actual attach, retained data, duplicate refusal and member denial', flush=True)
+    for policy in ('boot', 'on-demand', 'manual'):
+        operation('mount.settings', {**params, 'mountPolicy': policy})
+        text = Path('/etc/fstab').read_text()
+        assert ('x-systemd.automount' in text) == (policy == 'on-demand')
+        assert ('noauto' in text) == (policy == 'manual')
+        assert digest(payload) == original_hash
+    print('PASS actual persistent policy edits preserve mounted data', flush=True)
+    busy = subprocess.Popen(['/usr/bin/python3', '-c', 'import time; time.sleep(120)'], cwd=point)
+    try:
+        result = denied('plan', 'mount.detach', {'target': target})
+        assert str(busy.pid) in result['error'], result
+        assert digest(payload) == original_hash
+    finally:
+        busy.terminate(); busy.wait(timeout=5)
+    cloned = Path('/fixture/cloned-fd-ready')
+    private_reader = """
+import os,sys,time
+from pathlib import Path
+with open(sys.argv[1], 'rb') as data:
+    info = Path('/proc/self/fdinfo',str(data.fileno())).read_text()
+    Path('/fixture/cloned-fd-ready').write_text(next(line.split()[1] for line in info.splitlines() if line.startswith('mnt_id:')))
+    time.sleep(90)
+"""
+    # The outer namespace is already recursively private; the chroot root need not be a mountpoint.
+    reader = subprocess.Popen(['unshare','--mount','--propagation','unchanged','--','/usr/bin/python3','-c',private_reader,str(payload)])
+    try:
+        for _ in range(100):
+            if cloned.exists() and cloned.read_text(): break
+            assert reader.poll() is None
+            time.sleep(.05)
+        assert cloned.read_text()!=rows[0].split()[0], 'fixture must exercise a different mount ID'
+        result = denied('plan','mount.detach',{'target':target})
+        assert str(reader.pid) in result['error'] and digest(payload)==original_hash, result
+    finally:
+        if reader.poll() is None: reader.terminate()
+        reader.wait(timeout=5)
+    print('PASS cloned mount namespace file descriptor blocks detachment',flush=True)
+    ready = Path('/fixture/mapped-ready')
+    mapping_script = """
+import ctypes, mmap, os, sys, time
+from pathlib import Path
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mmap.restype = ctypes.c_void_p
+libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+with open(sys.argv[1], 'rb') as data:
+    address = libc.mmap(None, os.fstat(data.fileno()).st_size, mmap.PROT_READ, mmap.MAP_PRIVATE, data.fileno(), 0)
+    assert address != ctypes.c_void_p(-1).value, ctypes.get_errno()
+assert all(os.path.realpath('/proc/self/fd/' + fd) != sys.argv[1] for fd in os.listdir('/proc/self/fd'))
+Path('/fixture/mapped-ready').touch()
+time.sleep(120)
+"""
+    reader = subprocess.Popen(['/usr/bin/python3', '-c', mapping_script, str(payload)])
+    try:
+        for _ in range(100):
+            if ready.exists():
+                break
+            assert reader.poll() is None
+            time.sleep(.05)
+        assert ready.exists()
+        result = denied('plan', 'mount.detach', {'target': target})
+        assert str(reader.pid) in result['error'] and digest(payload) == original_hash, result
+    finally:
+        reader.terminate()
+        reader.wait(timeout=5)
+    print('PASS a closed-descriptor file mapping reports the busy process', flush=True)
+    nested = point / 'nested'
+    nested.mkdir()
+    command('mount', '-t', 'tmpfs', 'tmpfs', str(nested))
+    try:
+        denied('plan', 'mount.detach', {'target': target})
+        assert digest(payload) == original_hash
+    finally:
+        command('umount', str(nested)); nested.rmdir()
+    print('PASS concrete busy process and nested mount refusal', flush=True)
+    shared = point / 'shared'; shared.mkdir()
+    share_path = Path('/etc/panasms/sharing.json')
+    original_sharing = share_path.read_bytes()
+    share_path.write_text(json.dumps({'shares': [{'name': 'Fixture', 'path': str(shared),
+                          'mountpoint': str(point), 'volume': 'fixture-volume', 'smb': True,
+                          'nfs': False, 'readOnly': False, 'readers': [], 'writers': [], 'clients': []}], 'accounts': {}}))
+    try:
+        result = denied('plan', 'mount.detach', {'target': target})
+        assert 'Fixture' in result['error']
+    finally:
+        share_path.write_bytes(original_sharing)
+    print('PASS configured share blocks unmount without service mutations', flush=True)
+    plan = invoke('plan', 'mount.settings', params)
+    fstab = Path('/etc/fstab'); original_config = fstab.read_bytes()
+    fstab.write_bytes(original_config + b'# foreign edit\n')
+    try:
+        denied('execute', 'mount.settings', params, plan=plan)
+        assert fstab.read_bytes().endswith(b'# foreign edit\n')
+    finally:
+        fstab.write_bytes(original_config)
+    result = operation('mount.open', {**params, 'mode': 'readonly'})
+    assert result.get('readOnly') is True and digest(payload) == original_hash, result
+    try:
+        (point / 'must-not-write').write_text('no')
+        raise AssertionError('read-only filesystem accepted write')
+    except OSError as error:
+        assert error.errno == errno.EROFS, error
+    result = operation('mount.open', {**params, 'mode': 'auto'})
+    assert result.get('needsChoice') is True, result
+    operation('mount.detach', {'target': target})
+    result = operation('mount.open', {**params, 'mode': 'repair-only'})
+    assert result.get('repaired') is True, result
+    result = operation('mount.open', {**params, 'mode': 'auto'})
+    assert result.get('readOnly') is False and digest(payload) == original_hash, result
+    print('PASS readonly choice, real EROFS, repair-only check and read-write reopen', flush=True)
+    operation('mount.detach', {'target': target})
+    operation('disk.prepare', {'target': disk})
+    assert not command('wipefs', '--no-act', '--output', 'TYPE', '--noheadings', disk)
+    assert not any(line.startswith('UUID=') for line in fstab.read_text().splitlines())
+    journals = [json.loads(path.read_text()) for path in stage.glob('*.json')]
+    assert journals and all(item['phase'] == 'complete' for item in journals), journals
+    print(json.dumps({'result': 'PASS', 'helperSHA256': digest(helper), 'stages': 7,
+                      'scope': 'native helper on owned loop and private accounts/config; inventory/cache fixture boundary; no physical eject or boot proof'}), flush=True)
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        columns = 'NAME,KNAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,FSTYPE,UUID,LABEL,PARTUUID,PARTTYPE,MOUNTPOINTS,PKNAME,RO,PARTN,ROTA,TRAN,MAJ:MIN'
+        info = subprocess.run(['/usr/bin/lsblk', '--json', '--bytes', '--output', columns], user=65534, group=65534, extra_groups=[], capture_output=True, text=True)
+        print(json.dumps({'fixtureInventoryExit': info.returncode, 'fixtureInventory': info.stdout, 'fixtureInventoryError': info.stderr,
+                          'privateCache': {p.name: p.read_text() for p in Path('/run/udev/data').iterdir()}}), flush=True)
+        raise

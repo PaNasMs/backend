@@ -8,6 +8,7 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
+	"panasms.local/backend/internal/systemops/localmounts"
 	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
@@ -44,6 +45,15 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 			next = "module.recover"
 		}
 		message = "Review the installed modules and recover the recorded transaction before retrying. The interrupted operation has not been repeated."
+	case localmounts.IsAction(req.Action):
+		route = "/storage"
+		state, err := localmounts.Recovery(target)
+		if err != nil {
+			return nil, err
+		}
+		next = state["recoveryAction"]
+		delete(state, "recoveryAction")
+		add("Local storage", state)
 	case req.Action == "storage.recover":
 		route = "/storage"
 		raw, err := storagebase.ConfigRecoveryReport(target)

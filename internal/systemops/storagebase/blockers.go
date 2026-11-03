@@ -19,6 +19,45 @@ type StoragePath struct{ Name, Path string }
 func inside(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimRight(root, "/")+"/")
 }
+func configuredInside(path, root string) (bool, error) {
+	if inside(path, root) {
+		return true, nil
+	}
+	resolved, err := resolveConfigured(path, 0)
+	return err == nil && inside(resolved, root), err
+}
+func resolveConfigured(path string, depth int) (string, error) {
+	if !filepath.IsAbs(path) || depth > 64 {
+		return "", reject("Could not inspect configured storage paths")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", reject("Could not inspect configured storage paths")
+	}
+	// Keep a configured missing leaf bound to its existing symlinked ancestor.
+	if info, e := os.Lstat(path); e == nil && info.Mode()&os.ModeSymlink != 0 {
+		target, e := os.Readlink(path)
+		if e != nil {
+			return "", reject("Could not inspect configured storage paths")
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		return resolveConfigured(target, depth+1)
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", reject("Could not inspect configured storage paths")
+	}
+	resolved, err = resolveConfigured(parent, depth+1)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved, filepath.Base(path)), nil
+}
 func CheckBlockers(ctx context.Context, selected, all []folders.LiveMount, homes, shares []StoragePath, exports []string) error {
 	return checkBlockers(ctx, "/proc", selected, all, homes, shares, exports)
 }
@@ -40,17 +79,29 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 			}
 		}
 		for _, home := range homes {
-			if inside(home.Path, m.Target) {
+			used, err := configuredInside(home.Path, m.Target)
+			if err != nil {
+				return err
+			}
+			if used {
 				problems = append(problems, "User home folders on this volume: "+home.Name+": "+home.Path+". Move these homes before unmounting the volume.")
 			}
 		}
 		for _, share := range shares {
-			if inside(share.Path, m.Target) {
+			used, err := configuredInside(share.Path, m.Target)
+			if err != nil {
+				return err
+			}
+			if used {
 				problems = append(problems, "Shared folders on this volume: "+share.Name+" ("+share.Path+"). Remove their shares in Shared folders first.")
 			}
 		}
 		for _, path := range exports {
-			if inside(path, m.Target) {
+			used, err := configuredInside(path, m.Target)
+			if err != nil {
+				return err
+			}
+			if used {
 				problems = append(problems, "Folders shared via NFS: "+path+". Remove their shares in Shared folders first.")
 			}
 		}

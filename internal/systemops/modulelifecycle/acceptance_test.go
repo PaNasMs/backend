@@ -69,7 +69,7 @@ func acceptanceGuard(t *testing.T) (lifecycle, []byte, string) {
 	var mounted struct {
 		Filesystems []json.RawMessage `json:"filesystems"`
 	}
-	raw = run("findmnt", "-J", "-t", "virtiofs,9p,nfs,nfs4,cifs,fuse.sshfs")
+	raw = run("findmnt", "-J", "-t", "virtiofs,9p,nfs,nfs4,cifs,smb3,fuse.sshfs")
 	if len(bytes.TrimSpace(raw)) > 0 {
 		if err = json.Unmarshal(raw, &mounted); err != nil || len(mounted.Filesystems) != 0 {
 			t.Fatal("external mounts refused", err)
@@ -221,6 +221,10 @@ func TestIsolatedModuleLifecycleAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		if t.Failed() {
+			t.Log("Fixture evidence preserved; restore the full owner snapshot before any further acceptance")
+			return
+		}
 		current, err := os.Stat(acceptanceRoot)
 		if err != nil || !os.SameFile(identity, current) {
 			t.Error("fixture root changed; full owner snapshot restore required")

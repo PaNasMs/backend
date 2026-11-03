@@ -87,7 +87,7 @@ def prove_guest(args):
             'Connected guest refused')
     require(not json.loads(command('ip', '-4', '-j', 'route')) and not json.loads(command('ip', '-6', '-j', 'route')),
             'Guest routes refused')
-    mounts = subprocess.run(['findmnt', '-J', '-t', 'virtiofs,9p,nfs,nfs4,cifs,fuse.sshfs'],
+    mounts = subprocess.run(['findmnt', '-J', '-t', 'virtiofs,9p,nfs,nfs4,cifs,smb3,fuse.sshfs'],
                             capture_output=True, text=True, timeout=20)
     require(mounts.returncode in (0, 1) and not json.loads(mounts.stdout or '{}').get('filesystems'),
             'External mounts refused')
@@ -114,7 +114,8 @@ def registry():
 
 def helper(args, mode, body):
     result = subprocess.run([str(HELPER), mode, args.actor], input=json.dumps(body),
-                            text=True, capture_output=True)
+                            text=True, capture_output=True,
+                            timeout=45 if mode in ('query', 'plan', 'recover') else None)
     require(result.returncode == 0 and len(result.stdout) <= 4 << 20, 'Helper process failed')
     value = json.loads(result.stdout)
     require(isinstance(value, dict), 'Invalid helper result')
@@ -175,7 +176,7 @@ def interrupted_copy(args, before, token):
     body = {'action': 'module.install', 'params': params,
             'fingerprint': plan['fingerprint'], 'confirmation': plan['confirmation']}
     process = subprocess.Popen([str(HELPER), 'execute', args.actor], stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
         pidfd = os.pidfd_open(process.pid)
     except OSError:
@@ -183,7 +184,6 @@ def interrupted_copy(args, before, token):
         process.wait(timeout=15)
         process.stdin.close()
         process.stdout.close()
-        process.stderr.close()
         raise
     waited = False
     try:
@@ -224,7 +224,6 @@ def interrupted_copy(args, before, token):
         os.close(pidfd)
         process.stdin.close()
         process.stdout.close()
-        process.stderr.close()
 
 
 def cancelled_copy(args, before, token):
@@ -277,7 +276,7 @@ def main():
     parser.add_argument('--helper-sha256', required=True)
     parser.add_argument('--actor', required=True)
     args = parser.parse_args()
-    require(re.fullmatch('[a-z_][a-z0-9_-]{0,31}', args.actor), 'Invalid fixture actor')
+    require(re.fullmatch('[a-z_][a-z0-9_-]{0,30}', args.actor), 'Invalid fixture actor')
     prove_guest(args)
     for directory in (MODULES, UPLOADS, KEYS):
         if not directory.exists():
@@ -289,6 +288,7 @@ def main():
     uploads = []
     public = None
     before = registry()
+    succeeded = False
     require(ID not in before, 'Existing module receipt refused')
     try:
         query = helper(args, 'query', {'view': 'modules', 'target': ''})
@@ -342,42 +342,39 @@ def main():
         interrupted_copy(args, before, token)
         cancelled_copy(args, before, token)
         require(read(data, 1024) == b'fixture user data', 'Helper changed retained module data')
-        print(json.dumps({'result': 'PASS', 'version': args.version, 'helperSHA256': args.helper_sha256,
+        result = {'result': 'PASS', 'version': args.version, 'helperSHA256': args.helper_sha256,
                           'administratorModuleQuery': True, 'corruptPayloadRejected': True, 'stalePlanRejected': True,
                           'signedInstallDisableUpdateEnableRemove': True, 'installationIdentityPreserved': True,
                           'catalogNativeMutationBridge': True, 'freshReinstallIdentity': True,
                           'actualCopySIGKILLAndNativeRecovery': True, 'unrelatedRegistryPreserved': True,
                           'actualControlPipeCancellation': True,
-                          'moduleDataPreserved': True, 'snapshotRestoreRequired': True}, sort_keys=True))
+                          'moduleDataPreserved': True, 'snapshotRestoreRequired': True}
+        succeeded = True
     finally:
-        if (MODULES / '.transaction').exists() or (MODULES / '.transaction').is_symlink():
-            state = json.loads(read(MODULES / '.transaction/journal.json', 16 << 20))
-            require(state.get('schema') == 1 and state['before'] == before and state['affected'] == [ID],
-                    'Unowned transaction preserved; owner snapshot restore required')
-            execute(args, 'module.recover', {})
-        if ID in registry():
-            manifest = registry()[ID]
-            require(manifest.get('id') == ID and manifest.get('signer') == 'go14fixture'
-                    and manifest.get('version') == '1.0.0' and manifest.get('service') is None,
-                    'Unowned module receipt preserved; owner snapshot restore required')
-            execute(args, 'module.remove', {'target': ID})
-        require(registry() == before, 'Registry drift preserved; owner snapshot restore required')
-        if public is not None and KEY.exists():
-            require(read(KEY, 4096) == public, 'Changed signing key preserved')
-            KEY.unlink()
-        for path, previous in uploads:
-            if path.exists() or path.is_symlink():
-                current = owned(path)
-                require((current.st_dev, current.st_ino) == (previous.st_dev, previous.st_ino)
-                        and (current.st_size, current.st_mtime_ns, current.st_ctime_ns)
-                        == (previous.st_size, previous.st_mtime_ns, previous.st_ctime_ns),
-                        'Changed upload preserved')
-                path.unlink()
-        current = owned(ROOT, True)
-        require((current.st_dev, current.st_ino) == (root_identity.st_dev, root_identity.st_ino),
-                'Changed fixture root preserved')
-        no_mounts(ROOT)
-        shutil.rmtree(ROOT)
+        if not succeeded:
+            print('GO14 fixture failed; evidence preserved. Restore the full owner snapshot before retrying.', file=sys.stderr)
+        else:
+            require(not (MODULES / '.transaction').exists() and not (MODULES / '.transaction').is_symlink()
+                    and ID not in registry() and registry() == before,
+                    'Unexpected module evidence preserved; full owner snapshot restore required')
+            if public is not None and KEY.exists():
+                require(read(KEY, 4096) == public, 'Changed signing key preserved')
+                KEY.unlink()
+            for path, previous in uploads:
+                if path.exists() or path.is_symlink():
+                    current = owned(path)
+                    require((current.st_dev, current.st_ino) == (previous.st_dev, previous.st_ino)
+                            and (current.st_size, current.st_mtime_ns, current.st_ctime_ns)
+                            == (previous.st_size, previous.st_mtime_ns, previous.st_ctime_ns),
+                            'Changed upload preserved')
+                    path.unlink()
+            current = owned(ROOT, True)
+            require((current.st_dev, current.st_ino) == (root_identity.st_dev, root_identity.st_ino),
+                    'Changed fixture root preserved')
+            no_mounts(ROOT)
+            shutil.rmtree(ROOT)
+
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == '__main__':

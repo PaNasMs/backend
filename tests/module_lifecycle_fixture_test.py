@@ -3,6 +3,7 @@ import importlib.util
 import contextlib
 import hashlib
 import json
+import io
 from types import SimpleNamespace
 from pathlib import Path
 import unittest
@@ -107,7 +108,9 @@ class FixtureChildLifecycle(unittest.TestCase):
             recover.assert_called_once_with(unittest.mock.ANY, 'module.recover', {})
             close.assert_called_once_with(222)
             process.stdout.close.assert_called_once()
-            process.stderr.close.assert_called_once()
+            process.stderr.close.assert_not_called()
+            fixture.subprocess.Popen.assert_called_once()
+            self.assertEqual(fixture.subprocess.Popen.call_args.kwargs["stderr"], fixture.subprocess.DEVNULL)
             process.stdin.write.assert_called_once()
 
     def test_pidfd_failure_cannot_leave_a_waiting_helper(self):
@@ -120,7 +123,7 @@ class FixtureChildLifecycle(unittest.TestCase):
             process.wait.assert_called_once_with(timeout=15)
             process.stdin.close.assert_called_once()
             process.stdout.close.assert_called_once()
-            process.stderr.close.assert_called_once()
+            process.stderr.close.assert_not_called()
 
     def test_cancel_finishes_normally_and_closes_owned_pipes(self):
         process = self.child()
@@ -154,6 +157,41 @@ class FixtureChildLifecycle(unittest.TestCase):
             with self.assertRaisesRegex(OSError, 'spawn failed'):
                 fixture.cancelled_copy(SimpleNamespace(actor='admin'), {}, 'token')
             self.assertEqual(close.call_args_list, [unittest.mock.call(333), unittest.mock.call(334)])
+
+    def test_failed_acceptance_preserves_evidence_and_original_exception(self):
+        args = argparse.Namespace(actor='admin')
+        with patch.object(fixture.argparse.ArgumentParser, 'parse_args', return_value=args), \
+                patch.object(fixture, 'prove_guest'), \
+                patch.object(fixture.Path, 'exists', return_value=True), \
+                patch.object(fixture.Path, 'mkdir'), \
+                patch.object(fixture.Path, 'unlink') as unlink, \
+                patch.object(fixture, 'owned'), \
+                patch.object(fixture, 'registry', return_value={}), \
+                patch.object(fixture, 'read', side_effect=AssertionError('failure evidence must not be read for cleanup')), \
+                patch.object(fixture, 'helper', side_effect=RuntimeError('original acceptance failure')), \
+                patch.object(fixture, 'execute') as execute, \
+                patch.object(fixture.shutil, 'rmtree') as remove, \
+                patch.object(fixture.sys, 'stderr', io.StringIO()) as output:
+            with self.assertRaisesRegex(RuntimeError, 'original acceptance failure'):
+                fixture.main()
+            self.assertIn('evidence preserved', output.getvalue())
+            execute.assert_not_called()
+            remove.assert_not_called()
+            unlink.assert_not_called()
+
+    def test_readonly_deadlines_never_force_kill_mutations(self):
+        args = argparse.Namespace(actor='admin')
+        for mode in ['query', 'plan', 'recover', 'execute']:
+            with self.subTest(mode=mode), patch.object(fixture.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='{}')) as run:
+                self.assertEqual(fixture.helper(args, mode, {}), {})
+                self.assertEqual(run.call_args.kwargs['timeout'], None if mode == 'execute' else 45)
+
+    def test_overlong_actor_is_rejected_before_guest_access(self):
+        with patch.object(fixture.argparse.ArgumentParser, 'parse_args', return_value=argparse.Namespace(actor='a' * 32)), \
+                patch.object(fixture, 'prove_guest') as prove:
+            with self.assertRaisesRegex(RuntimeError, 'Invalid fixture actor'):
+                fixture.main()
+            prove.assert_not_called()
 
 
 if __name__ == '__main__':

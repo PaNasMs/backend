@@ -7,15 +7,15 @@ import (
 	"syscall"
 )
 
-func privateStage(target string) string {
-	return filepath.Join("/run/panasms-local-mounts", storagebase.Hash(target)+".stage")
+func (s *service) privateStage(target string) string {
+	return filepath.Join(s.stageRoot, storagebase.Hash(target)+".stage")
 }
 func (s *service) cleanupPrivateStage(v *plan, state *transaction) error {
 	if !state.StageIntent {
 		state.MountID = 0
 		return nil
 	}
-	if state.Stage != privateStage(v.target) {
+	if state.Stage != s.privateStage(v.target) {
 		return reject("Private mount stage identity is invalid")
 	}
 	rows, err := s.mounts()

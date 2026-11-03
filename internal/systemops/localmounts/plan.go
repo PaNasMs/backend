@@ -25,6 +25,7 @@ func IsAction(action string) bool {
 }
 
 type service struct {
+	stageRoot string
 	sys, root string
 	owner     int
 	load      func(context.Context) (*storagequery.Preflight, error)
@@ -42,7 +43,7 @@ type service struct {
 
 func defaultService() *service {
 	return &service{
-		sys: "/sys/class/block", root: "/var/lib/panasms-agent/local-mounts", load: storagequery.LoadPreflight,
+		stageRoot: "/run/panasms-local-mounts", sys: "/sys/class/block", root: "/var/lib/panasms-agent/local-mounts", load: storagequery.LoadPreflight,
 		identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 			return p.Identity(target)
 		},
@@ -186,7 +187,7 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	for _, m := range all {
 		if numbers[m.Device] {
 			if err = folders.MountPath(m.Target); err != nil {
-				if action != "mount.detach" || prior == nil || prior.Phase != "pending" || !prior.StageIntent || m.Target != privateStage(target) || prior.Stage != m.Target {
+				if action != "mount.detach" || prior == nil || prior.Phase != "pending" || !prior.StageIntent || m.Target != s.privateStage(target) || prior.Stage != m.Target {
 					return nil, err
 				}
 			}

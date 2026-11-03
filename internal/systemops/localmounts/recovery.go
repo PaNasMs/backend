@@ -11,7 +11,7 @@ func (s *service) recovery(target string) (map[string]any, error) {
 	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target || filepath.Dir(target) != "/dev" {
 		return nil, reject("Select a block device")
 	}
-	state, revision, err := readJournal(s.root, target, 0)
+	state, revision, err := readJournal(s.root, target, s.owner)
 	if err != nil {
 		return nil, err
 	}

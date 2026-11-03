@@ -29,11 +29,11 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	if err = emptyDirectory(target); err != nil {
 		return err
 	}
-	root := "/run/panasms-local-mounts"
+	root := s.stageRoot
 	if err = storagebase.SecureDirectory(root, 0, true); err != nil {
 		return err
 	}
-	state.Stage = privateStage(v.target)
+	state.Stage = s.privateStage(v.target)
 	if _, err = os.Lstat(state.Stage); err == nil {
 		return reject("A private mount stage already exists. Inspect recovery before continuing.")
 	} else if !os.IsNotExist(err) {

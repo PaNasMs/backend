@@ -1,10 +1,12 @@
 package modulelifecycle
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,5 +151,76 @@ func TestResumeStartsOnlyCompatibleEnabledVerifiedServices(t *testing.T) {
 	b, _ := json.Marshal(current)
 	if err != nil || string(a) != string(b) {
 		t.Fatal("resume changed registry intent", current, err)
+	}
+}
+
+func TestUnchangedStartupRefusalKeepsPanelAndEvidenceAvailable(t *testing.T) {
+	s := executionFixture(t)
+	if err := os.Mkdir(filepath.Join(s.root, ".transaction"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.maintenance); err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	if err := s.startup(context.Background(), &diagnostic); err != nil || !strings.Contains(diagnostic.String(), "maintenance lock") {
+		t.Fatal(err, diagnostic.String())
+	}
+	if _, err := os.Stat(filepath.Join(s.root, ".transaction")); err != nil {
+		t.Fatal("startup discarded evidence", err)
+	}
+	if err := s.recoverStartup(context.Background()); err == nil {
+		t.Fatal("explicit recovery silently passed")
+	}
+}
+
+func TestResumeBadDependencyIsConfinedToItsDependents(t *testing.T) {
+	registry := Registry{
+		"base": {"enabled": true}, "app": {"enabled": true, "dependencies": map[string]any{"base": ">=1.0.0"}},
+		"broken":       {"enabled": true, "dependencies": map[string]any{"missing": ">=1.0.0"}},
+		"needs-broken": {"enabled": true, "dependencies": map[string]any{"broken": ">=1.0.0"}},
+		"malformed":    {"enabled": true, "dependencies": "invalid"},
+		"cycle-a":      {"enabled": true, "dependencies": map[string]any{"cycle-b": ">=1.0.0"}},
+		"cycle-b":      {"enabled": true, "dependencies": map[string]any{"cycle-a": ">=1.0.0"}},
+	}
+	for id, m := range registry {
+		m["id"], m["version"] = id, "1.0.0"
+	}
+	order, blocked := resumeOrder(registry)
+	if blocked["base"] || blocked["app"] {
+		t.Fatal(blocked)
+	}
+	for _, id := range []string{"broken", "needs-broken", "malformed", "cycle-a", "cycle-b"} {
+		if !blocked[id] {
+			t.Fatal(id, blocked)
+		}
+	}
+	joined := strings.Join(order, ",")
+	if !strings.Contains(joined, "base,app") {
+		t.Fatal(order)
+	}
+}
+
+func TestMutatingStartupRestoreFailureStillBlocksAgentStart(t *testing.T) {
+	r, _ := recoveryFixture(t, true)
+	s := executionFixture(t)
+	s.store, s.units, s.health, s.mounts = r.store, r.units, r.health, r.mounts
+	s.run = func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {
+		assertLocked(t, s.maintenance)
+		assertLocked(t, filepath.Join(s.root, ".lock"))
+		if argv[1] == "daemon-reload" {
+			return nil, errors.New("injected reload failure")
+		}
+		return nil, nil
+	}
+	var diagnostic bytes.Buffer
+	if err := s.startup(context.Background(), &diagnostic); err == nil || systemops.Unchanged(err) {
+		t.Fatal("partial restore was hidden", err)
+	}
+	if diagnostic.Len() != 0 {
+		t.Fatal("mutated failure logged as harmless")
+	}
+	if _, err := os.Stat(filepath.Join(s.root, ".transaction/journal.json")); err != nil {
+		t.Fatal("lost recovery evidence", err)
 	}
 }

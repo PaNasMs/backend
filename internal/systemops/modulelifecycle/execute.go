@@ -403,8 +403,15 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 	if err = authorize(); err != nil {
 		return nil, err
 	}
-	if err = lease.critical(); err != nil {
+	if err = lease.waitCritical(ctx, reporter); err != nil {
 		return nil, err
+	}
+	beforeCore := s.core
+	if err = s.refreshCore(); err != nil {
+		return nil, err
+	}
+	if s.core != beforeCore {
+		return nil, reject("State has changed. Review a new operation plan.")
 	}
 	for _, id := range state.Affected {
 		if err = requireIdle(ctx, state.Before[id], s.health, s.run); err != nil {
@@ -414,7 +421,7 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 	if err = authorize(); err != nil {
 		return nil, err
 	}
-	if err = s.checkArchiveTrust(plan); err != nil {
+	if err = s.checkPlanLive(plan); err != nil {
 		return nil, err
 	}
 	if err = s.recovery().checkStaging(state); err != nil {

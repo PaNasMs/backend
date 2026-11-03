@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -78,7 +80,13 @@ func maintenanceAncestor(lease *maintenanceLease) (bool, error) {
 	return false, nil
 }
 
-func (s lifecycle) recoverStartup(ctx context.Context) error {
+func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
+	restoring := false
+	defer func() {
+		if err != nil && !restoring {
+			err = systemops.BeforeMutation(err)
+		}
+	}()
 	state, err := s.loadTransaction()
 	if err != nil || state == nil {
 		return err
@@ -102,10 +110,54 @@ func (s lifecycle) recoverStartup(ctx context.Context) error {
 			return err
 		}
 	}
+	restoring = true
 	if err = s.recovery().restore(ctx, state, nil); err != nil && !systemops.Unchanged(err) {
 		_ = s.haltAffected(ctx, state, nil)
 	}
 	return err
+}
+
+func (s lifecycle) startup(ctx context.Context, diagnostics io.Writer) error {
+	err := s.recoverStartup(ctx)
+	if err != nil && systemops.Unchanged(err) {
+		_, writeErr := fmt.Fprintln(diagnostics, err)
+		return writeErr
+	}
+	return err
+}
+
+func resumeOrder(registry Registry) ([]string, map[string]bool) {
+	state, blocked := map[string]int{}, map[string]bool{}
+	order := []string{}
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if registry[id] == nil || state[id] == 1 {
+			return false
+		}
+		if state[id] == 2 {
+			return !blocked[id]
+		}
+		state[id] = 1
+		deps, err := dependencies(registry[id])
+		good := err == nil && registry[id]["enabled"] == true
+		for _, dependency := range names(deps) {
+			ready := visit(dependency)
+			match := false
+			if ready {
+				match, err = satisfies(text(registry[dependency], "version"), deps[dependency])
+			}
+			if !ready || err != nil || !match {
+				good = false
+			}
+		}
+		state[id], blocked[id] = 2, !good
+		order = append(order, id)
+		return good
+	}
+	for _, id := range names(registry) {
+		visit(id)
+	}
+	return order, blocked
 }
 
 func (s lifecycle) verifyService(manifest Manifest) error {
@@ -163,21 +215,18 @@ func (s lifecycle) resume(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	order, err := recoveryOrder(registry, names(registry))
-	if err != nil {
-		return err
-	}
+	order, blocked := resumeOrder(registry)
 	failed := []string{}
-	blocked := map[string]bool{}
 	for _, id := range order {
 		m := registry[id]
 		if m["enabled"] != true || text(m, "service") == "" {
 			continue
 		}
-		dependencies, err := dependencies(m)
-		if err != nil {
-			return err
+		if blocked[id] {
+			failed = append(failed, id)
+			continue
 		}
+		dependencies, _ := dependencies(m)
 		for dependency := range dependencies {
 			if registry[dependency]["enabled"] != true || blocked[dependency] {
 				blocked[id] = true
@@ -205,6 +254,7 @@ func (s lifecycle) resume(ctx context.Context) error {
 		}
 	}
 	if len(failed) > 0 {
+		sort.Strings(failed)
 		return reject("Modules not started: " + strings.Join(failed, ", ") + ". Open Modules to update or reinstall them.")
 	}
 	return nil
@@ -218,6 +268,8 @@ func Command(ctx context.Context, mode string, out io.Writer) error {
 	switch mode {
 	case "recover":
 		return s.recoverStartup(ctx)
+	case "startup":
+		return s.startup(ctx, os.Stderr)
 	case "resume":
 		return s.resume(ctx)
 	case "check-install":

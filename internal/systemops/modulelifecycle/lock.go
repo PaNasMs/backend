@@ -86,12 +86,12 @@ func acquireMaintenance(path string, owner uint32) (*maintenanceLease, error) {
 func openMaintenance(path string, owner uint32) (*maintenanceLease, error) {
 	directory, err := trustedDirectoryMode(filepath.Dir(path), owner, true)
 	if err != nil {
-		return nil, err
+		return nil, reject("Cannot open the system maintenance lock; check system services before retrying")
 	}
 	defer directory.Close()
 	fd, err := unix.Openat(int(directory.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, reject("Cannot open the system maintenance lock; check system services before retrying")
 	}
 	file := os.NewFile(uintptr(fd), "module system maintenance lock")
 	var stat unix.Stat_t
@@ -105,8 +105,10 @@ func openMaintenance(path string, owner uint32) (*maintenanceLease, error) {
 	return &maintenanceLease{file: file, path: path, owner: owner}, nil
 }
 
-// A failed upgrade may have released SH. Callers must abandon staging and must
-// not alter the registry, installed payloads or services unless EX succeeded.
+var errActiveMaintenance = reject("Active requests or tasks prevent module maintenance; wait and retry")
+
+// A failed conversion may release SH. Retrying callers reacquire it and must
+// revalidate live state after EX succeeds, before changing any installed files.
 func (lease *maintenanceLease) critical() error {
 	directory, err := trustedDirectoryMode(filepath.Dir(lease.path), lease.owner, true)
 	if err != nil {
@@ -124,7 +126,34 @@ func (lease *maintenanceLease) critical() error {
 		return reject("System maintenance lock changed; retry after the update")
 	}
 	if err = unix.Flock(int(lease.file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		return reject("Active requests or tasks prevent module maintenance; wait and retry")
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return errActiveMaintenance
+		}
+		return err
 	}
 	return nil
+}
+
+func (lease *maintenanceLease) waitCritical(ctx context.Context, reporter *systemops.Reporter) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := checkpoint(ctx, reporter); err != nil {
+			return err
+		}
+		if err := unix.Flock(int(lease.file.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
+			if !errors.Is(err, unix.EWOULDBLOCK) {
+				return err
+			}
+		} else if err := lease.critical(); err != errActiveMaintenance {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return errActiveMaintenance
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

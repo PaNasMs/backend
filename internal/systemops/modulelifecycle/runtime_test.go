@@ -145,3 +145,64 @@ func TestUnavailableHealthNeverBlessesActiveOrTransitioningService(t *testing.T)
 		}
 	}
 }
+
+func TestLegacyServiceHasInPanelStoppedUpgradePathWithoutWeakeningBarrier(t *testing.T) {
+	m := Manifest{"id": "example", "enabled": true, "service": "bin/server"}
+	run := func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+		return []byte("inactive"), nil
+	}
+	err := requireIdle(context.Background(), m, func(context.Context, string) (map[string]any, error) {
+		return map[string]any{"active": json.Number("0")}, nil
+	}, run)
+	if err == nil || !strings.Contains(err.Error(), "System services") {
+		t.Fatal(err)
+	}
+	if err := requireIdle(context.Background(), m, func(context.Context, string) (map[string]any, error) { return nil, os.ErrNotExist }, run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstalledArchitectureUsesDebianPackageNames(t *testing.T) {
+	for _, name := range []string{"amd64", "arm64", "armhf", "i386", "ppc64el"} {
+		got, err := packageArchitecture(context.Background(), func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {
+			if strings.Join(argv, " ") != "dpkg --print-architecture" {
+				t.Fatal(argv)
+			}
+			return []byte(name + "\n"), nil
+		})
+		if err != nil || got != name {
+			t.Fatal(got, err)
+		}
+		m := fixtureManifest(t)
+		m["architecture"] = name
+		if err := validateManifest(m, "0.2.34", got, false); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+}
+
+func TestInspectionReportsOrphanAndCommittedTransactionsWithoutCommands(t *testing.T) {
+	s := fixtureLifecycle(t)
+	raw, err := s.inspect()
+	if err != nil || string(raw) != "{\"pending\":false}" {
+		t.Fatal(string(raw), err)
+	}
+	if err := os.Mkdir(filepath.Join(s.root, ".transaction"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = s.inspect()
+	var state map[string]any
+	if err != nil || json.Unmarshal(raw, &state) != nil || state["pending"] != true {
+		t.Fatal(string(raw), err)
+	}
+	record := validTransaction(s.owner)
+	record.Committed = true
+	record.Phase = "switching"
+	if err := s.saveTransaction(record); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = s.inspect()
+	if err != nil || json.Unmarshal(raw, &state) != nil || state["committed"] != true || state["modules"].([]any)[0] != "example" {
+		t.Fatal(string(raw), err)
+	}
+}

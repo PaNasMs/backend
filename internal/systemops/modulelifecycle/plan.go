@@ -88,7 +88,7 @@ func (s lifecycle) openUpload(token, name string) (*os.File, string, error) {
 	}
 	if before.Mode&unix.S_IFMT != unix.S_IFREG || before.Uid != s.owner || before.Nlink != 1 || before.Mode&0022 != 0 || before.Size <= 0 || before.Size > maxArchive {
 		file.Close()
-		return nil, "", reject("Module archive ownership or size is unsafe")
+		return nil, "", reject("Module archive ownership or size is unsafe; upload the archive again")
 	}
 	hash := sha256.New()
 	count, err := io.Copy(hash, io.LimitReader(file, maxArchive+1))

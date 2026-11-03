@@ -137,11 +137,11 @@ func (state *transaction) validate(owner uint32) error {
 		payload, payloadExists := state.Payloads[id]
 		_, candidateExists := state.Candidates[id]
 		if !exists || !payloadExists || !candidateExists {
-			return reject("Invalid module transaction ownership")
+			return reject("Invalid module transaction ownership; preserve the journal for inspection")
 		}
 		for _, unit := range []fileSnapshot{state.Units[id], state.Candidates[id]} {
 			if len(unit.Data) > 65536 || unit.Exists && (unit.UID != owner || unit.Mode&0022 != 0 || unit.Mode&^0777 != 0) {
-				return reject("Invalid module transaction ownership")
+				return reject("Invalid module transaction ownership; preserve the journal for inspection")
 			}
 			if !unit.Exists && (len(unit.Data) != 0 || unit.Mode != 0 || unit.UID != 0 || unit.GID != 0) {
 				return reject("Invalid absent module unit")

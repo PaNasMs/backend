@@ -1,4 +1,6 @@
 import json
+import ast
+from types import SimpleNamespace
 import os
 from pathlib import Path
 import sys
@@ -98,7 +100,42 @@ class Catalog(unittest.TestCase):
         with patch.object(c.subprocess, 'run') as execute, patch.object(c.manager, 'execute') as legacy:
             execute.return_value.returncode = 0
             execute.return_value.stdout = '{"error":"Recovery required"}'
-            with self.assertRaisesRegex(Rejected, 'Recovery required'):
-                c.native_install('execute', {'upload': 'token'}, 'alice')
+            self.assertEqual(c.native_install('execute', {'upload': 'token'}, 'alice'), {'error': 'Recovery required'})
             execute.assert_called_once()
             legacy.assert_not_called()
+
+
+class CatalogDispatch(unittest.TestCase):
+    def test_native_no_change_error_and_actor_survive_catalog_dispatch(self):
+        source = Path(__file__).resolve().parents[1] / 'management/main.py'
+        function = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == 'dispatch')
+        blank = SimpleNamespace(ACTIONS=set())
+        account = SimpleNamespace(pw_gid=1000)
+        policy = SimpleNamespace(entry=lambda account: {}, expired=lambda entry: False,
+                                 shadow=lambda user: None, password_inactive=lambda entry: False)
+        accounts = SimpleNamespace(ACTIONS=set(), normal=lambda account: None, account_policy=policy)
+        names = ['storage', 'storage_snapshots', 'storage_luks', 'storage_reshape', 'host', 'web_access', 'sharing', 'network', 'module_manager', 'module_sources']
+        ns = {name: blank for name in names}
+        ns.update(accounts=accounts, module_catalog=c, system_updates=SimpleNamespace(ACTIONS=set(), changing=lambda: False),
+                  pwd=SimpleNamespace(getpwnam=lambda name: account), grp=SimpleNamespace(getgrnam=lambda name: SimpleNamespace(gr_gid=27)),
+                  os=SimpleNamespace(getgrouplist=lambda name, gid: [27], environ={}), require=c.require,
+                  job_control=SimpleNamespace(capability=lambda allowed: None, checkpoint=lambda: None))
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), 'exec'), ns)
+        actor = {'uid': 1000, 'epoch': 'original', 'principal': 'same'}
+        reply = {'error': 'State changed', 'noChanges': True}
+        with patch.object(c, 'plan', return_value={'fingerprint': 'fp', 'confirmation': 'files'}), \
+                patch.object(c, 'execute', return_value=reply) as execute:
+            result = ns['dispatch']('execute', 'alice', {'action': 'module.catalog-install', 'params': {},
+                                      'fingerprint': 'fp', 'confirmation': 'files', 'actor': actor})
+            self.assertEqual(result, reply)
+            execute.assert_called_once_with('module.catalog-install', {}, 'alice', actor)
+
+    def test_native_plan_refusal_preserves_no_change_proof_without_execution(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(c.manager, 'UPLOADS', Path(tmp)), \
+                patch.object(c, 'selection', return_value=({}, {})), \
+                patch.object(c, 'native_install', return_value={'error': 'Identity changed', 'noChanges': True}) as native:
+            result = c.execute('module.catalog-install', {'target': 'files'}, 'alice')
+            self.assertEqual(result, {'error': 'Identity changed', 'noChanges': True})
+            self.assertEqual(native.call_count, 1)
+            self.assertEqual(native.call_args.args[0], 'plan')
+            self.assertEqual(list(Path(tmp).iterdir()), [])

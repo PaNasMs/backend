@@ -1,6 +1,7 @@
 package modulelifecycle
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/systemops"
@@ -527,5 +529,128 @@ func TestInterruptedRecoveryRefusesActiveWorkWithoutChangingEvidence(t *testing.
 		if data, err := os.ReadFile(filepath.Join(s.root, id, "payload")); err != nil || string(data) != "new-"+id {
 			t.Fatal("blocked recovery changed active code", id, err)
 		}
+	}
+}
+
+func TestExecuteEnableDisableRemoveRetainsPayloadAndInstallationUntilRemoval(t *testing.T) {
+	s := executionFixture(t)
+	m := fixtureManifest(t)
+	m["enabled"], m["service"], m["installation"] = true, "bin/server", strings.Repeat("b", 32)
+	files := map[string]any{}
+	for relative, content := range map[string][]byte{"ui/index.js": []byte("fixture UI"), "bin/server": []byte("fixture server")} {
+		path := filepath.Join(s.root, "example", relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0755); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(content)
+		files[relative] = hex.EncodeToString(sum[:])
+	}
+	m["files"] = files
+	if err := s.saveRegistry(Registry{"example": m}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUnit(s.root, s.units, m, s.owner); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(filepath.Join(s.root, "example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(t.TempDir(), "user-data")
+	if err := os.WriteFile(data, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.health = func(context.Context, string) (map[string]any, error) {
+		return map[string]any{"active": json.Number("0"), "maintenanceVersion": json.Number("1")}, nil
+	}
+	s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+		assertLocked(t, s.maintenance)
+		assertLocked(t, filepath.Join(s.root, ".lock"))
+		return nil, nil
+	}
+	for _, action := range []string{"module.disable", "module.enable", "module.remove"} {
+		params := map[string]any{"target": "example"}
+		fp := executionPlan(t, s, action, params)
+		if _, err := s.execute(context.Background(), action, params, "alice", fp, nil, func() error { return nil }); err != nil {
+			t.Fatal(action, err)
+		}
+		current, err := s.registry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if action == "module.remove" {
+			if current["example"] != nil {
+				t.Fatal(current)
+			}
+			for _, path := range []string{filepath.Join(s.root, "example"), filepath.Join(s.units, unit("example"))} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatal(path, err)
+				}
+			}
+		} else {
+			after, err := os.Stat(filepath.Join(s.root, "example"))
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatal("non-install replaced payload", err)
+			}
+			if current["example"]["installation"] != m["installation"] || current["example"]["enabled"] != (action == "module.enable") {
+				t.Fatal(current)
+			}
+		}
+	}
+	catalog, err := os.ReadFile(filepath.Join(s.root, "catalog.json"))
+	if err != nil || !bytes.Contains(catalog, []byte("example")) {
+		t.Fatal("widget metadata not retained", err, string(catalog))
+	}
+	raw, err := os.ReadFile(data)
+	if err != nil || string(raw) != "preserve" {
+		t.Fatal("retained user data changed", err)
+	}
+}
+
+func TestCriticalRetryRejectsCoreChangeAcrossDroppedSharedLease(t *testing.T) {
+	s := executionFixture(t)
+	s.coreFile = filepath.Join(fixtureStore(t).root, "VERSION")
+	if err := os.WriteFile(s.coreFile, []byte(s.core), 0644); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"upload": uploadFixture(t, s)}
+	fp := executionPlan(t, s, "module.install", params)
+	finished := make(chan error, 1)
+	checks := 0
+	_, err := s.execute(context.Background(), "module.install", params, "alice", fp, nil, func() error {
+		checks++
+		if checks == 4 {
+			reader, err := os.Open(s.maintenance)
+			if err != nil {
+				return err
+			}
+			if err := unix.Flock(int(reader.Fd()), unix.LOCK_SH); err != nil {
+				reader.Close()
+				return err
+			}
+			go func() {
+				time.Sleep(40 * time.Millisecond)
+				changed := os.WriteFile(s.coreFile, []byte("0.2.35"), 0644)
+				unlocked := unix.Flock(int(reader.Fd()), unix.LOCK_UN)
+				closed := reader.Close()
+				finished <- errors.Join(changed, unlocked, closed)
+			}()
+		}
+		return nil
+	})
+	if checks != 4 || err == nil || err.Error() != "State has changed. Review a new operation plan." {
+		t.Fatal(checks, err)
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if state, err := s.loadTransaction(); err != nil || state != nil {
+		t.Fatal("private staging not cleaned", state, err)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, "example")); !os.IsNotExist(err) {
+		t.Fatal("core drift activated module", err)
 	}
 }

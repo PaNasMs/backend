@@ -139,3 +139,39 @@ func TestMaintenanceLeaseRejectsReplacementAndUntrustedFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestCriticalRetryWaitsForTransientRequestAndHonorsCancellation(t *testing.T) {
+	s := executionFixture(t)
+	lease, err := acquireMaintenance(s.maintenance, s.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.file.Close()
+	reader, err := os.Open(s.maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := unix.Flock(int(reader.Fd()), unix.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	if err := lease.waitCritical(ctx, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- lease.waitCritical(context.Background(), nil) }()
+	select {
+	case err := <-done:
+		t.Fatal("reader did not hold barrier", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if err := unix.Flock(int(reader.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	assertLocked(t, s.maintenance)
+}

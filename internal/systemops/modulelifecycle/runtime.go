@@ -134,7 +134,7 @@ func requireIdle(ctx context.Context, manifest Manifest, check healthCheck, run 
 	}
 	version, valid := integer(result["maintenanceVersion"])
 	if !valid || version != 1 {
-		return reject("Update module " + id + " to a maintenance-aware version before updating the module")
+		return reject("Module " + id + " does not support coordinated maintenance. Finish its tasks and stop its service in System services before retrying.")
 	}
 	active, valid := integer(result["active"])
 	if !valid || active != 0 {

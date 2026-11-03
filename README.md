@@ -655,3 +655,25 @@ failed checks; `/run/nologin` may be owned by a different maintenance operation.
 Cooperative cancellation stops and reaps the copy worker. Killing only the helper
 with SIGKILL can leave an orphan copy worker; inspect and stop that specific worker
 before manual recovery. This does not authorize deleting the retained destination.
+
+
+### Module lifecycle maintenance and recovery
+
+Module changes prepare private files while ordinary requests remain available.
+Activation briefly requires exclusive system maintenance. A pending transaction
+intentionally blocks every installed module proxy and extension, including
+unaffected modules: an orphan or interrupted registry cannot safely establish
+which module code should receive new requests. Core administration remains
+available when startup recovery refuses unchanged evidence; Modules offers the
+recorded recovery operation. A restore that changes files and then fails remains
+a hard agent-start failure, with the journal retained for operator recovery.
+
+Finish module work before changing modules. A legacy service without the SDK
+maintenance protocol remains blocked while running; a zero activity response
+alone cannot exclude a background task starting during activation. In System
+services, stop that module's service after finishing its work, then retry its
+module update or removal. Do not delete transaction directories or lock files to
+bypass checks. If background work prevents recovery, wait for it to finish; only
+an administrator should decide whether stopping its service is appropriate.
+Native recovery also understands the old three-field journal. The retained
+Python handler refuses native journals and unknown transaction directories.

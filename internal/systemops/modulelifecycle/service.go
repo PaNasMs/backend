@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/folders"
@@ -32,8 +32,24 @@ func (s *lifecycle) refreshCore() error {
 	return nil
 }
 
+func packageArchitecture(ctx context.Context, run command) (string, error) {
+	raw, err := run(ctx, []string{"dpkg", "--print-architecture"}, systemops.CommandOptions{Timeout: 10 * time.Second})
+	if err != nil {
+		return "", err
+	}
+	architecture := strings.TrimSpace(string(raw))
+	if architecture == "" {
+		return "", reject("Cannot identify the system architecture; check package state before retrying")
+	}
+	return architecture, nil
+}
+
 func installedLifecycle() (lifecycle, error) {
-	s := lifecycle{store: store{root: "/var/lib/panasms-modules", owner: 0}, coreFile: "/usr/lib/panasms/VERSION", architecture: runtime.GOARCH,
+	architecture, err := packageArchitecture(context.Background(), systemops.Command)
+	if err != nil {
+		return lifecycle{}, err
+	}
+	s := lifecycle{store: store{root: "/var/lib/panasms-modules", owner: 0}, coreFile: "/usr/lib/panasms/VERSION", architecture: architecture,
 		units: "/etc/systemd/system", uploads: "/var/lib/panasms-agent/module-uploads", keys: "/etc/panasms/module-keys", maintenance: "/run/lock/panasms-maintenance.lock",
 		run: systemops.Command, compare: compareDebian, health: health, mounts: func() ([]string, error) {
 			rows, err := folders.ReadMounts()
@@ -81,6 +97,10 @@ func Inspect() (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.inspect()
+}
+
+func (s lifecycle) inspect() (json.RawMessage, error) {
 	state, err := s.loadTransaction()
 	if err != nil {
 		return nil, err

@@ -196,7 +196,6 @@ def native_install(mode, params, user, actor=None, plan=None):
     require(process.returncode == 0 and len(process.stdout) <= 1048576, 'Native module lifecycle failed; inspect the recorded transaction')
     result = json.loads(process.stdout)
     require(isinstance(result, dict), 'Invalid native module lifecycle response')
-    require(not result.get('error'), result.get('error', 'Native module lifecycle failed'))
     return result
 
 
@@ -229,6 +228,8 @@ def execute(action, p, user, actor=None):
                                     merged.writestr(name, source.read(name))
         params = {'upload': token}
         plan = native_install('plan', params, user, actor)
+        if plan.get('error') or plan.get('cancelled'):
+            return plan
         job_control.capability(False)
         job_control.checkpoint()
         return native_install('execute', params, user, actor, plan)

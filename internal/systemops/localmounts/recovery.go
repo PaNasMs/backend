@@ -4,14 +4,15 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"path/filepath"
-	"strings"
 )
 
 func Recovery(target string) (map[string]any, error) { return defaultService().recovery(target) }
 func (s *service) recovery(target string) (map[string]any, error) {
-	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target || filepath.Dir(target) != "/dev" {
+	resolved, err := storagebase.RecoveryTarget(target)
+	if err != nil || filepath.Dir(resolved) != "/dev" {
 		return nil, reject("Select a block device")
 	}
+	target = resolved
 	state, revision, err := readJournal(s.root, target, s.owner)
 	if err != nil {
 		return nil, err

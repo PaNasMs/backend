@@ -17,8 +17,8 @@ import (
 	"panasms.local/backend/internal/systemops/storagebase"
 )
 
-// The source runner deliberately bypasses dispatch. Public routes remain legacy
-// until disposable-device acceptance passes; authorization needs separate testing.
+// The source runner deliberately bypasses dispatch; authorization and packaged
+// helper acceptance require separate tests.
 func TestDisposableVMRequest(t *testing.T) {
 	requestPath := os.Getenv("PANASMS_GO09_REQUEST")
 	if requestPath == "" {

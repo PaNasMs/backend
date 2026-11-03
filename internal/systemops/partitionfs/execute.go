@@ -212,7 +212,9 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		if num == "" {
 			return nil, reject("Could not confirm the new partition")
 		}
-		err = kernel([]string{"partx", "--add", "--nr", num, target}, func() error { return s.verifyKernel(added[0], sector) })
+		if err = kernel([]string{"partx", "--add", "--nr", num, target}, func() error { return s.verifyKernel(added[0], sector) }); err != nil {
+			return nil, err
+		}
 	case "partition.delete":
 		n, e := number(plan.row["partn"])
 		if e != nil {

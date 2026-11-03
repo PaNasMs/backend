@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -132,9 +131,11 @@ func hardwareEqual(a, b storagequery.StorageIdentity) bool {
 	return true
 }
 func Recovery(target string) (json.RawMessage, error) {
-	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target {
-		return nil, reject("Select a block device")
+	resolved, resolveErr := storagebase.RecoveryTarget(target)
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
+	target = resolved
 	s := defaultService()
 	state, err := s.load(target)
 	if err != nil {

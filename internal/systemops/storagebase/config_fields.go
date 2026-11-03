@@ -2,6 +2,7 @@ package storagebase
 
 import (
 	"panasms.local/backend/internal/systemops/storagequery"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -49,4 +50,18 @@ func RemovedFstabUUIDs(before, after string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// A missing canonical device must remain inspectable after an interrupted deletion.
+func RecoveryTarget(target string) (string, error) {
+	return recoveryTarget(target, filepath.EvalSymlinks)
+}
+func recoveryTarget(target string, resolve func(string) (string, error)) (string, error) {
+	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target {
+		return "", reject("Select a block device")
+	}
+	if resolved, err := resolve(target); err == nil && strings.HasPrefix(resolved, "/dev/") && filepath.Clean(resolved) == resolved {
+		return resolved, nil
+	}
+	return target, nil
 }

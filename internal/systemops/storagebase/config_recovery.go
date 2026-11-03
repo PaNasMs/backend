@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -158,9 +157,11 @@ func sameHardware(old, now storagequery.DeviceIdentity) bool {
 	return old.Path == now.Path && old.DeviceNumber == now.DeviceNumber && old.DiskSequence == now.DiskSequence && old.WWN == now.WWN && old.Serial == now.Serial
 }
 func (s *configRecoveryService) prepare(ctx context.Context, target string) (*configRecoveryPlan, error) {
-	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target {
-		return nil, reject("Select a block device")
+	resolved, resolveErr := RecoveryTarget(target)
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
+	target = resolved
 	var plan *configRecoveryPlan
 	for _, root := range s.roots {
 		p, err := s.read(root, target)
@@ -417,9 +418,11 @@ func ConfigRecoveryReport(target string) (json.RawMessage, error) {
 	return defaultConfigRecovery().report(target)
 }
 func (s *configRecoveryService) report(target string) (json.RawMessage, error) {
-	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target {
-		return nil, reject("Select a block device")
+	resolved, resolveErr := RecoveryTarget(target)
+	if resolveErr != nil {
+		return nil, resolveErr
 	}
+	target = resolved
 	var summary any
 	var action any
 	for _, root := range s.roots {

@@ -326,3 +326,26 @@ func TestRemovedUUIDsMatchActualFstabRemovalEvenForIncompleteRows(t *testing.T) 
 		t.Fatal(removed)
 	}
 }
+
+func TestRecoveryTargetResolvesAliasesAndRetainsMissingCanonical(t *testing.T) {
+	for _, tc := range []struct{ input, resolved, want string }{
+		{"/dev/disk/by-id/example", "/dev/sda", "/dev/sda"},
+		{"/dev/sda", "", "/dev/sda"},
+		{"/dev/disk/by-id/foreign", "/etc/passwd", "/dev/disk/by-id/foreign"},
+	} {
+		got, err := recoveryTarget(tc.input, func(string) (string, error) {
+			if tc.resolved == "" {
+				return "", os.ErrNotExist
+			}
+			return tc.resolved, nil
+		})
+		if err != nil || got != tc.want {
+			t.Fatalf("%q %v", got, err)
+		}
+	}
+	for _, input := range []string{"/dev/../etc/passwd", "/tmp/device", "/dev"} {
+		if _, err := recoveryTarget(input, func(string) (string, error) { t.Fatal("invalid path resolved"); return "", nil }); err == nil {
+			t.Fatal(input)
+		}
+	}
+}

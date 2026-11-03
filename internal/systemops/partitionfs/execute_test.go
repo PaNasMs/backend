@@ -264,3 +264,29 @@ func TestFormatConfigFailureRetainsIdentityAndRequiresRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestPartitionCreateKernelFailureRemainsPending(t *testing.T) {
+	for _, failure := range []string{"command", "mismatch"} {
+		t.Run(failure, func(t *testing.T) {
+			s, p := executionFixture(t)
+			p.target = "/dev/sda"
+			p.start, p.end = 128, 160
+			s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+				if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+					return []byte(`{"partitiontable":{"label":"gpt","sectorsize":512,"partitions":[{"node":"/dev/sda1","start":2048,"size":131072},{"node":"/dev/sda2","start":262144,"size":65536}]}}`), nil
+				}
+				if args[0] == "partx" && failure == "command" {
+					return nil, errors.New("injected kernel sync failure")
+				}
+				return nil, nil
+			}
+			if _, err := s.executePrepared(context.Background(), "partition.create", nil, p, nil); err == nil {
+				t.Fatal("kernel sync failure reported success")
+			}
+			state, err := s.load(p.target)
+			if err != nil || state == nil || state.Complete || state.Phase != "pending" {
+				t.Fatalf("%+v %v", state, err)
+			}
+		})
+	}
+}

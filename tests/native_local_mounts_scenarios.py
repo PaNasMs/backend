@@ -135,7 +135,8 @@ with open(sys.argv[1], 'rb') as data:
     Path('/fixture/cloned-fd-ready').write_text(next(line.split()[1] for line in info.splitlines() if line.startswith('mnt_id:')))
     time.sleep(90)
 """
-    reader = subprocess.Popen(['unshare','--mount','--propagation','private','--','/usr/bin/python3','-c',private_reader,str(payload)])
+    # The outer namespace is already recursively private; the chroot root need not be a mountpoint.
+    reader = subprocess.Popen(['unshare','--mount','--propagation','unchanged','--','/usr/bin/python3','-c',private_reader,str(payload)])
     try:
         for _ in range(100):
             if cloned.exists() and cloned.read_text(): break

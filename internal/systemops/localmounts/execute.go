@@ -101,7 +101,7 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	}
 	state := &transaction{TransactionEnvelope: storagebase.TransactionEnvelope{Schema: 1, Domain: "localmounts", Action: action, Target: v.target, Identity: identity, Phase: "pending"}, Fingerprint: v.fingerprint, Point: v.point, FSType: v.fs, FstabBefore: storagebase.Hash(v.conf), FstabDesired: desired}
 	if action == "disk.prepare" {
-		state.ConfigRemovedUUIDs = removedConfigUUIDs(v)
+		state.ConfigRemovedUUIDs = storagebase.RemovedFstabUUIDs(v.conf, desired)
 	}
 	if action == "mount.detach" && prior != nil && prior.Phase == "pending" {
 		state.Stage = prior.Stage
@@ -309,31 +309,6 @@ func hardwareIdentityEqual(a, b storagequery.StorageIdentity) bool {
 		}
 	}
 	return true
-}
-
-func removedConfigUUIDs(v *plan) []string {
-	owned := map[string]bool{}
-	for path := range v.identities {
-		if uuid := text(v.preflight.Inventory.Rows[path], "uuid"); uuid != "" {
-			owned[uuid] = true
-		}
-	}
-	removed := map[string]bool{}
-	for _, line := range strings.Split(v.conf, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 4 && strings.HasPrefix(fields[0], "UUID=") {
-			uuid := strings.TrimPrefix(fields[0], "UUID=")
-			if owned[uuid] {
-				removed[uuid] = true
-			}
-		}
-	}
-	result := []string{}
-	for uuid := range removed {
-		result = append(result, uuid)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func pendingConfiguration(prior *transaction, conf string) (bool, error) {

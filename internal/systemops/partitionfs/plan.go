@@ -138,7 +138,7 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 		if err != nil {
 			return nil, err
 		}
-		if err = s.noOverlap(p, target, "", out.start*mib, out.end*mib); err != nil {
+		if err = s.noOverlap(p, target, "", out.start*mib, out.end*mib, previous); err != nil {
 			return nil, err
 		}
 		details = []string{target, fmt.Sprintf("New partition: %d–%d MiB", out.start, out.end)}
@@ -186,7 +186,7 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 			if parentCap < mib || out.size > math.MaxUint64/mib || out.start > math.MaxUint64-out.size*mib || out.start+out.size*mib >= parentCap-mib {
 				return nil, reject("Outside disk boundaries")
 			}
-			if err = s.noOverlap(p, out.parent, target, out.start, out.start+out.size*mib); err != nil {
+			if err = s.noOverlap(p, out.parent, target, out.start, out.start+out.size*mib, previous); err != nil {
 				return nil, err
 			}
 			details = []string{target, fmt.Sprintf("New size: %d MiB", out.size), "The ext file system and partition will be resized in a safe order"}
@@ -307,7 +307,7 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 	out.raw, err = json.Marshal(map[string]any{"target": target, "details": details, "confirmation": target, "fingerprint": out.fingerprint})
 	return out, err
 }
-func (s *service) noOverlap(p *storagequery.Preflight, parent, except string, start, end uint64) error {
+func (s *service) noOverlap(p *storagequery.Preflight, parent, except string, start, end uint64, previous *transaction) error {
 	for child, parents := range p.Inventory.Parents {
 		if child == except || !parents[parent] || text(p.Inventory.Rows[child], "type") != "part" {
 			continue
@@ -322,6 +322,9 @@ func (s *service) noOverlap(p *storagequery.Preflight, parent, except string, st
 			return err
 		}
 		if a > math.MaxUint64-size || !(end <= a || start >= a+size) {
+			if previous != nil && previous.Phase == "pending" {
+				return reject("The partition overlaps an existing partition. Review the recovery report for the interrupted operation.")
+			}
 			return reject("The partition overlaps an existing partition")
 		}
 	}

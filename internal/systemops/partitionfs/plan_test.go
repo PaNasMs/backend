@@ -51,6 +51,27 @@ func TestPartitionCreatePlanProtectsNeighboursAndFingerprintsEpoch(t *testing.T)
 		t.Fatal("system device accepted")
 	}
 }
+func TestOverlappingRangeWithPendingCreatePointsToRecovery(t *testing.T) {
+	s, p := planningFixture(t)
+	target := "/dev/sda"
+	identity, err := s.identity(p, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := transaction{Schema: 1, Domain: "partitionfs", Phase: "pending", Action: "partition.create", Target: target, Fingerprint: journalKey(target), Identity: identity}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(s.journalPath(target), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.prepareTarget(context.Background(), record.Action, map[string]any{"startMiB": json.Number("2"), "endMiB": json.Number("6")}, p, target)
+	if err == nil || err.Error() != "The partition overlaps an existing partition. Review the recovery report for the interrupted operation." {
+		t.Fatalf("unexpected overlap result: %v", err)
+	}
+}
+
 func TestFilesystemPlansRejectProtectedMountedAndContainerDevices(t *testing.T) {
 	for _, action := range []string{"filesystem.format", "filesystem.remove"} {
 		t.Run(action, func(t *testing.T) {

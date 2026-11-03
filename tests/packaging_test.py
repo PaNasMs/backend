@@ -13,23 +13,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTest(unittest.TestCase):
     def test_pending_module_transaction_blocks_package_before_any_calls(self):
-        for symlink in (False, True):
-            with self.subTest(symlink=symlink), tempfile.TemporaryDirectory() as folder:
-                root = Path(folder)
-                pending = root / 'var/lib/panasms-modules/.transaction'
-                pending.parent.mkdir(parents=True)
-                if symlink:
-                    pending.symlink_to('missing-evidence')
-                else:
-                    pending.mkdir(mode=0o700)
-                fixture = MaintenanceFixture(root)
-                script = fixture.rebase((ROOT / 'packaging/preinst').read_text())
-                result = subprocess.run([str(fixture.bin / 'sh'), '-c', script, 'preinst', 'upgrade'],
-                                        env=fixture.env, capture_output=True, text=True)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('Recover pending module transactions', result.stderr)
-                self.assertEqual(fixture.calls(), [])
-                self.assertTrue(pending.is_symlink() if symlink else pending.is_dir())
+        for script_name, action in [('preinst', 'upgrade'), ('prerm', 'upgrade'), ('prerm', 'remove'), ('prerm', 'deconfigure')]:
+            for symlink in (False, True):
+                with self.subTest(script=script_name, action=action, symlink=symlink), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    pending = root / 'var/lib/panasms-modules/.transaction'
+                    pending.parent.mkdir(parents=True)
+                    if symlink:
+                        pending.symlink_to('missing-evidence')
+                    else:
+                        pending.mkdir(mode=0o700)
+                    fixture = MaintenanceFixture(root)
+                    script = fixture.rebase((ROOT / 'packaging' / script_name).read_text())
+                    result = subprocess.run([str(fixture.bin / 'sh'), '-c', script, script_name, action],
+                                            env=fixture.env, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Recover pending module transactions', result.stderr)
+                    self.assertEqual(fixture.calls(), [])
+                    self.assertTrue(pending.is_symlink() if symlink else pending.is_dir())
 
     def test_upgrade_accepts_empty_gecos_fields_but_rejects_other_accounts(self):
         script = (ROOT / "packaging/postinst").read_text()

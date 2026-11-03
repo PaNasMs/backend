@@ -355,7 +355,9 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		if err = s.recovery().restore(ctx, state, reporter); err != nil {
 			mutated = !systemops.Unchanged(err)
 			if mutated {
-				_ = s.haltAffected(ctx, state, reporter)
+				if state.requiresBarrier() {
+					_ = s.haltAffected(ctx, state, reporter)
+				}
 				return nil, reject(incompleteRecovery)
 			}
 			return nil, err

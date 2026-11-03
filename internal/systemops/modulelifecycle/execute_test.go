@@ -320,6 +320,54 @@ func TestCommittedRecoveryCleansOnlyBackupWhileSchedulerIsActive(t *testing.T) {
 	}
 }
 
+func TestExplicitCommittedCleanupFailureKeepsLiveServicesUnderSharedMaintenance(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged filesystem permission refusal")
+	}
+	r, state := recoveryFixture(t, true)
+	s := executionFixture(t)
+	s.store, s.units, s.mounts = r.store, r.units, r.mounts
+	state.Committed = true
+	if err := s.saveRegistry(state.After); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.saveTransaction(state); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(s.root, ".transaction/old-app")
+	if err := os.Chmod(backup, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(backup, 0755) })
+	request, err := os.Open(s.maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer request.Close()
+	if err := unix.Flock(int(request.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+		t.Fatal("cleanup error stopped live services under shared maintenance")
+		return nil, nil
+	}
+	fingerprint := executionPlan(t, s, "module.recover", map[string]any{})
+	_, err = s.execute(context.Background(), "module.recover", map[string]any{}, "alice", fingerprint, nil, func() error { return nil })
+	if err == nil || err.Error() != incompleteRecovery || systemops.Unchanged(err) {
+		t.Fatal("cleanup failure was not reported truthfully", err)
+	}
+	current, err := s.registry()
+	if err != nil || !registryEqual(current, state.After) {
+		t.Fatal("cleanup failure changed committed registry", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(s.root, "app/payload")); err != nil || string(raw) != "new-app" {
+		t.Fatal("cleanup failure changed live code", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(backup, "payload")); err != nil || string(raw) != "old-app" {
+		t.Fatal("failed removal did not retain the refused backup", err)
+	}
+}
+
 func TestFailedRollbackRetainsEvidenceStopsWithoutDisablingAndRetries(t *testing.T) {
 	s := executionFixture(t)
 	params := map[string]any{"upload": serviceUpload(t, s)}

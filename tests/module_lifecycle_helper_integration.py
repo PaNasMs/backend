@@ -304,7 +304,7 @@ def main():
         token, path = bundle(args, corrupt=True)
         uploads.append((path, owned(path)))
         rejected = helper(args, 'plan', {'action': 'module.install', 'params': {'upload': token}})
-        require(rejected.get('error') == 'Corrupted file: ui/index.js' and registry() == before
+        require(rejected.get('error') == 'Corrupted file: modules/' + ID + '/ui/index.js' and registry() == before
                 and not (MODULES / '.transaction').exists(),
                 'Corrupt signed payload was not rejected before mutation')
         token, path = bundle(args)

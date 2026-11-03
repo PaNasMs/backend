@@ -124,8 +124,6 @@ func apply(m mount, btrfs *btrfsWitness) error {
 		if err = storagebase.VerifyBtrfsMount(file, btrfs.target, btrfs.uuid); err != nil {
 			return err
 		}
-	} else if deviceID(st.Dev) != m.device {
-		return fmt.Errorf("mount changed at %s", m.point)
 	}
 	var mounted unix.Statx_t
 	if err = unix.Statx(fd, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &mounted); err != nil {
@@ -133,6 +131,27 @@ func apply(m mount, btrfs *btrfsWitness) error {
 	}
 	if strconv.FormatUint(mounted.Mnt_id, 10) != m.id {
 		return fmt.Errorf("mount replaced at %s", m.point)
+	}
+
+	if btrfs == nil && deviceID(st.Dev) != m.device {
+		// A background scan has no backing-device witness to authorize a write.
+		// The selected-mount operation may already have applied both ACL entries.
+		if m.fs == "btrfs" {
+			group, err := user.LookupGroup("users")
+			if err != nil {
+				return err
+			}
+			cmd := exec.Command("getfacl", "-cpn", "--", "/proc/self/fd/3")
+			cmd.ExtraFiles = []*os.File{file}
+			acl, err := cmd.Output()
+			if err != nil {
+				return err
+			}
+			if sharedACLPresent(string(acl), group.Gid) {
+				return nil
+			}
+		}
+		return fmt.Errorf("mount changed at %s", m.point)
 	}
 
 	switch m.fs {
@@ -272,4 +291,10 @@ func applyMounted(point string, btrfs *btrfsWitness) error {
 		return fmt.Errorf("selected Btrfs volume unavailable at %s", point)
 	}
 	return nil
+}
+
+func sharedACLPresent(acl, gid string) bool {
+	lines := "\n" + acl + "\n"
+	entry := "group:" + gid + ":rwx\n"
+	return strings.Contains(lines, "\n"+entry) && strings.Contains(lines, "\ndefault:"+entry)
 }

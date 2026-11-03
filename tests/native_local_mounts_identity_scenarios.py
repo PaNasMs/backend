@@ -94,6 +94,8 @@ def main():
     operation('mount.attach', params)
     acl = command('getfacl', '-cpn', '--', str(point)).splitlines()
     assert 'group:100:rwx' in acl and 'default:group:100:rwx' in acl, acl
+    command('/usr/lib/panasms/panasms-system-helper', 'volume-access', 'apply', str(point))
+    assert command('getfacl', '-cpn', '--', str(point)).splitlines() == acl
     marker = point / 'retained'
     marker.write_text('btrfs data')
     operation('mount.detach', {'target': second})

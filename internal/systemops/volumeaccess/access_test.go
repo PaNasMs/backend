@@ -104,3 +104,19 @@ func TestSelectedBtrfsCannotAuthorizeAnUnrelatedDirectory(t *testing.T) {
 		t.Fatalf("foreign filesystem identity: %v", err)
 	}
 }
+
+func TestExistingBtrfsAccessMustIncludeEffectiveAndInheritedGroupRights(t *testing.T) {
+	for _, tc := range []struct {
+		acl string
+		ok  bool
+	}{
+		{"group:100:rwx\ndefault:group:100:rwx", true},
+		{"group:100:rwx", false},
+		{"group:100:rwx\t#effective:r-x\ndefault:group:100:rwx", false},
+		{"group:101:rwx\ndefault:group:100:rwx", false},
+	} {
+		if got := sharedACLPresent(tc.acl, "100"); got != tc.ok {
+			t.Errorf("%q: %v", tc.acl, got)
+		}
+	}
+}

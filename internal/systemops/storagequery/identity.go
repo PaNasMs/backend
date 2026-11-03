@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 )
 
 type DeviceIdentity struct {
@@ -66,4 +68,36 @@ func (inv *Inventory) Identity(path, sysRoot string) ([]DeviceIdentity, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
 	return result, nil
+}
+
+// StorageIdentity binds an observation to one boot; callers still revalidate
+// topology, protection and operation-specific state under their mutation locks.
+type StorageIdentity struct {
+	BootID  string           `json:"bootId"`
+	Devices []DeviceIdentity `json:"devices"`
+}
+
+func (p *Preflight) Identity(target string) (StorageIdentity, error) {
+	return p.identity(target, "/sys/class/block", func() (string, error) {
+		b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		return strings.TrimSpace(string(b)), err
+	})
+}
+
+var bootIdentity = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func (p *Preflight) identity(target, sysRoot string, boot func() (string, error)) (StorageIdentity, error) {
+	before, err := boot()
+	if err != nil || !bootIdentity.MatchString(before) {
+		return StorageIdentity{}, rejectf("Could not verify storage identity")
+	}
+	devices, err := p.Inventory.Identity(target, sysRoot)
+	if err != nil {
+		return StorageIdentity{}, err
+	}
+	after, err := boot()
+	if err != nil || before != after {
+		return StorageIdentity{}, rejectf("Storage identity changed; review the operation again")
+	}
+	return StorageIdentity{BootID: before, Devices: devices}, nil
 }

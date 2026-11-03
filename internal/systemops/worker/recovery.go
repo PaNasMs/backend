@@ -11,6 +11,8 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
+	"panasms.local/backend/internal/systemops/partitionfs"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
 	"time"
@@ -24,6 +26,43 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case req.Action == "storage.recover":
+		route = "/storage"
+		raw, err := storagebase.ConfigRecoveryReport(target)
+		if err != nil {
+			return nil, err
+		}
+		var state map[string]any
+		if err = json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		fallback, _ := state["recoveryAction"].(string)
+		if suggestion := partitionfs.SuggestedRecovery(ctx, target, fallback); suggestion != "" {
+			next = suggestion
+		}
+		delete(state, "recoveryAction")
+		add("Storage operation", state)
+	case partitionfs.IsAction(req.Action) || req.Action == "storage.archive-journal":
+		route = "/storage"
+		raw, err := partitionfs.Recovery(target)
+		if err != nil {
+			return nil, err
+		}
+		var state map[string]any
+		if err = json.Unmarshal(raw, &state); err != nil {
+			return nil, err
+		}
+		if journal, ok := state["journal"].(map[string]any); ok {
+			fallback := ""
+			if journal["configurationPending"] == true {
+				fallback = "storage.recover"
+			}
+			if suggestion := partitionfs.SuggestedRecovery(ctx, target, fallback); suggestion != "" {
+				next = suggestion
+			}
+		}
+		add("Storage operation", state)
+		message = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."
 	case networkmounts.IsAction(req.Action):
 		route = "/storage/mounts"
 		point := target

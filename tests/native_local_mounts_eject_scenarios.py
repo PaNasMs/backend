@@ -16,6 +16,6 @@ for filesystem in ('ext4','btrfs'):
     subprocess.run(['mount',devices['partition'],'/mnt/long-eject'],check=True)
     Path('/mnt/long-eject/retained').write_text('preserved')
     subprocess.run(['mount','--bind','/mnt/long-eject','/mnt/x'],check=True)
-    result=subprocess.run([runner,'-test.run','^TestDisposablePartialEject$','-test.v'],check=True,capture_output=True,text=True,env={**os.environ,'PANASMS_GO09_EJECT_FIXTURE':'1'})
-    assert '--- PASS: TestDisposablePartialEject' in result.stdout and '\nPASS\n' in result.stdout, result.stdout
+    result=subprocess.run([runner,'-test.run','^TestDisposablePartialEject$','-test.v'],capture_output=True,text=True,env={**os.environ,'PANASMS_GO09_EJECT_FIXTURE':'1'})
+    assert result.returncode==0 and '--- PASS: TestDisposablePartialEject' in result.stdout and '\nPASS\n' in result.stdout, (result.stdout,result.stderr)
     print(f'PASS {filesystem} busy and partial ordinary unmount, journal preservation, explicit retry and simulated disconnect control')

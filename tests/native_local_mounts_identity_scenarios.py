@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Private-chroot GO09B scenarios; outer VM/loop isolation is mandatory."""
-import hashlib, json, os, re, subprocess, uuid
+import hashlib, json, os, re, subprocess, time, uuid
 from pathlib import Path
 
 def command(*args):
@@ -107,6 +107,24 @@ def main():
     assert command('getfacl', '-cpn', '--', str(point)).splitlines() == acl
     marker = point / 'retained'
     marker.write_text('btrfs data')
+    nested=point/'fixture-subvolume'
+    command('btrfs','subvolume','create',str(nested))
+    nested_file=nested/'held';nested_file.write_text('nested data')
+    assert nested_file.stat().st_dev != point.stat().st_dev
+    reader_code = "import os,sys,time; from pathlib import Path; f=open(sys.argv[1]); Path('/fixture/subvolume-ready').touch(); time.sleep(90)"
+    reader=subprocess.Popen(['unshare','--mount','--propagation','unchanged','--','/usr/bin/python3','-c',reader_code,str(nested_file)])
+    try:
+        for _ in range(100):
+            if Path('/fixture/subvolume-ready').exists():break
+            assert reader.poll() is None
+            time.sleep(.05)
+        assert Path('/fixture/subvolume-ready').exists()
+        blocked=invoke('plan','mount.detach',{'target':second})
+        assert str(reader.pid) in blocked.get('error',''),blocked
+    finally:
+        if reader.poll() is None:reader.terminate()
+        reader.wait(timeout=5)
+    print('PASS cloned namespace open file in nested Btrfs subvolume blocks detach',flush=True)
     operation('mount.detach', {'target': second})
     operation('mount.attach', params)
     assert marker.read_text() == 'btrfs data'

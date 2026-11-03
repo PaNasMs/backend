@@ -69,6 +69,7 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 	points := map[string]bool{}
 	ids := map[uint64]string{}
 	mappedDevices := map[string][]string{}
+	btrfsDevices := map[string][]string{}
 	for _, m := range selected {
 		points[m.Target] = true
 		ids[m.ID] = m.Target
@@ -82,6 +83,7 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 			key := fmt.Sprintf("%02x:%02x", major, minor)
 			mappedDevices[key] = append(mappedDevices[key], m.Target)
 			if m.FSType == "btrfs" {
+				btrfsDevices[m.Device] = append(btrfsDevices[m.Device], m.Target)
 				var st unix.Statx_t
 				if err := unix.Statx(unix.AT_FDCWD, m.Target, unix.AT_STATX_DONT_SYNC, unix.STATX_MNT_ID, &st); err != nil || st.Mnt_id != m.ID {
 					return reject("Could not verify process mount identity")
@@ -142,6 +144,26 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 		}
 		root := filepath.Join(proc, entry.Name())
 		busy := map[string]bool{}
+		var namespaceMounts []folders.LiveMount
+		namespaceIDs := map[uint64][]string{}
+		if len(btrfsDevices) > 0 {
+			raw, e := os.ReadFile(filepath.Join(root, "mountinfo"))
+			if processGone(e) {
+				continue
+			}
+			if e != nil {
+				return reject("Could not verify process mount identity")
+			}
+			namespaceMounts, e = folders.ParseMounts(string(raw))
+			if e != nil {
+				return reject("Could not verify process mount identity")
+			}
+			for _, row := range namespaceMounts {
+				if row.FSType == "btrfs" && len(btrfsDevices[row.Device]) > 0 {
+					namespaceIDs[row.ID] = btrfsDevices[row.Device]
+				}
+			}
+		}
 		// Cloned namespaces can assign another mount ID to the same filesystem.
 		recordUse := func(path string) error {
 			var st unix.Statx_t
@@ -153,6 +175,9 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 				return reject("Could not check which processes use the volume. No unmount has started.")
 			}
 			if point := ids[st.Mnt_id]; point != "" {
+				busy[point] = true
+			}
+			for _, point := range namespaceIDs[st.Mnt_id] {
 				busy[point] = true
 			}
 			for _, point := range mappedDevices[fmt.Sprintf("%02x:%02x", st.Dev_major, st.Dev_minor)] {
@@ -191,6 +216,9 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 					if err != nil {
 						return reject("Could not verify process mount identity")
 					}
+					for _, point := range namespaceIDs[id] {
+						busy[point] = true
+					}
 					if point := ids[id]; point != "" {
 						busy[point] = true
 					}
@@ -198,7 +226,7 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 			}
 		}
 		if len(mappedDevices) > 0 {
-			if err := mappedVolumes(filepath.Join(root, "maps"), mappedDevices, busy); err != nil && !processGone(err) {
+			if err := mappedVolumes(filepath.Join(root, "maps"), mappedDevices, namespaceMounts, namespaceIDs, busy); err != nil && !processGone(err) {
 				return reject("Could not check which processes use the volume. No unmount has started.")
 			}
 		}
@@ -246,7 +274,7 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 }
 func processGone(err error) bool { return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) }
 
-func mappedVolumes(path string, devices map[string][]string, busy map[string]bool) error {
+func mappedVolumes(path string, devices map[string][]string, ns []folders.LiveMount, nsIDs map[uint64][]string, busy map[string]bool) error {
 	maps, err := os.Open(path)
 	if err != nil {
 		return err
@@ -260,6 +288,22 @@ func mappedVolumes(path string, devices map[string][]string, busy map[string]boo
 		}
 		// File mappings keep the filesystem busy even after the descriptor closes.
 		if fields[4] != "0" {
+			// Btrfs gives nested subvolumes distinct inode devices while retaining
+			// the same filesystem in this process's mount namespace.
+			if len(nsIDs) > 0 && strings.HasPrefix(fields[3], "00:") && len(fields) >= 6 {
+				mapped := scanner.Text()
+				for _, field := range fields[:5] {
+					mapped = strings.TrimLeft(strings.TrimPrefix(mapped, field), " \t")
+				}
+				mapped = folders.UnescapeMount(mapped)
+				for _, row := range ns {
+					if points := nsIDs[row.ID]; len(points) > 0 && inside(mapped, row.Target) {
+						for _, point := range points {
+							busy[point] = true
+						}
+					}
+				}
+			}
 			for _, point := range devices[fields[3]] {
 				busy[point] = true
 			}

@@ -228,6 +228,9 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	})
 	switch action {
 	case "disk.prepare":
+		if err = s.checkPrepareSources(v.conf, pf, v.identities); err != nil {
+			return nil, err
+		}
 		desired, err := desiredFstab(action, v)
 		if err != nil {
 			return nil, err
@@ -285,7 +288,18 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 					}
 					// Mount IDs can be reused. Only retain evidence of the recorded volume.
 					for _, device := range prior.Identity.Devices {
-						if device.Path == prior.Target && (live.Device == device.DeviceNumber || (live.FSType == "btrfs" && live.Source == device.Path)) {
+						if device.Path != prior.Target {
+							continue
+						}
+						matches := live.Device == device.DeviceNumber
+						if live.FSType == "btrfs" && prior.FSType == "btrfs" {
+							mountedUUID, err := recordedBtrfsUUID(live)
+							if err != nil {
+								return nil, err
+							}
+							matches = device.UUID == "" || strings.EqualFold(mountedUUID, device.UUID)
+						}
+						if matches {
 							return nil, reject("The mount changed; review a new operation plan")
 						}
 					}

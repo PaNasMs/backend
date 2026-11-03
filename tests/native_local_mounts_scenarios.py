@@ -96,6 +96,11 @@ def main():
         rejected = denied('plan', 'disk.prepare', {'target': target})
         assert 'managed outside the panel' in rejected['error'], rejected
         assert config.read_bytes() == custom
+        for source in (target, 'PARTUUID=' + command('blkid', '-s', 'PARTUUID', '-o', 'value', target)):
+            alias_row = original + f'{source} /mnt/custom ext4 defaults 0 2\n'.encode()
+            config.write_bytes(alias_row)
+            rejected = denied('plan', 'disk.prepare', {'target': target})
+            assert 'managed outside the panel' in rejected['error'] and config.read_bytes() == alias_row, rejected
     finally:
         config.write_bytes(original)
     operation('mount.attach', params)

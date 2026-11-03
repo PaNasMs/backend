@@ -110,3 +110,20 @@ func TestDetachClearsInterruptedMountAfterItDisappears(t *testing.T) {
 		t.Fatalf("reused id treated as old mount: %v", err)
 	}
 }
+
+func TestDetachCannotDiscardBtrfsEvidenceFromSourceSpelling(t *testing.T) {
+	s := fixtureService(t)
+	state := testJournal()
+	state.Action = "mount.attach"
+	state.FSType = "btrfs"
+	state.MountID = 101
+	if err := writeJournal(s.root, s.owner, state); err != nil {
+		t.Fatal(err)
+	}
+	s.mounts = func() ([]folders.LiveMount, error) {
+		return []folders.LiveMount{{ID: 101, Device: "0:97", Target: "/mnt/go09b-missing-proof", Root: "/", FSType: "btrfs", Source: "/dev/disk/by-label/data"}}, nil
+	}
+	if _, err := s.prepare(context.Background(), "mount.detach", map[string]any{"target": state.Target}, "admin"); err == nil {
+		t.Fatal("Btrfs evidence was discarded without checking the mounted filesystem identity")
+	}
+}

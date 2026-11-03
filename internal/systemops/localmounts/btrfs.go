@@ -22,3 +22,15 @@ func mountedPoint(row map[string]any, point string) bool {
 	}
 	return false
 }
+
+func recordedBtrfsUUID(live folders.LiveMount) (string, error) {
+	dir, err := folders.OpenDirectory(live.Target)
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	if _, err = folders.DirectoryMount(dir, []folders.LiveMount{live}); err != nil {
+		return "", err
+	}
+	return storagebase.BtrfsUUID(dir)
+}

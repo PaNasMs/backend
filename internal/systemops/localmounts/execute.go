@@ -149,8 +149,23 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		}
 	case "disk.prepare":
 		err = perform("remove-signatures", func() error {
+			cfgLock, err := storagebase.Lock(ctx, "/run/panasms-storage", "fstab.lock", 0)
+			if err != nil {
+				return err
+			}
+			defer cfgLock.Close()
+			config, err := s.fstab()
+			if err != nil {
+				return err
+			}
+			if config != v.conf {
+				return reject("Storage configuration changed; review recovery before modifying it")
+			}
 			fresh, err := s.load(ctx)
 			if err != nil {
+				return err
+			}
+			if err = s.checkPrepareSources(config, fresh, v.identities); err != nil {
 				return err
 			}
 			if err = fresh.Protected(v.target, false); err != nil {

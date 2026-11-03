@@ -36,9 +36,9 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		if err = json.Unmarshal(raw, &state); err != nil {
 			return nil, err
 		}
-		next = state["recoveryAction"]
-		if partitionfs.ArchiveAvailable(ctx, target) {
-			next = "storage.archive-journal"
+		fallback, _ := state["recoveryAction"].(string)
+		if suggestion := partitionfs.SuggestedRecovery(ctx, target, fallback); suggestion != "" {
+			next = suggestion
 		}
 		delete(state, "recoveryAction")
 		add("Storage operation", state)
@@ -52,11 +52,14 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		if err = json.Unmarshal(raw, &state); err != nil {
 			return nil, err
 		}
-		if journal, ok := state["journal"].(map[string]any); ok && journal["configurationPending"] == true {
-			next = "storage.recover"
-		}
-		if state["journal"] != nil && partitionfs.ArchiveAvailable(ctx, target) {
-			next = "storage.archive-journal"
+		if journal, ok := state["journal"].(map[string]any); ok {
+			fallback := ""
+			if journal["configurationPending"] == true {
+				fallback = "storage.recover"
+			}
+			if suggestion := partitionfs.SuggestedRecovery(ctx, target, fallback); suggestion != "" {
+				next = suggestion
+			}
 		}
 		add("Storage operation", state)
 		message = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."

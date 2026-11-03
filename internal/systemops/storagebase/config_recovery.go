@@ -65,6 +65,11 @@ func ConfigRecoveryPlan(ctx context.Context, params map[string]any) (json.RawMes
 		return nil, err
 	}
 	defer lock.Close()
+	return ConfigRecoveryPlanLocked(ctx, params)
+}
+
+// ConfigRecoveryPlanLocked inspects ordinary recovery while the caller owns DomainLock.
+func ConfigRecoveryPlanLocked(ctx context.Context, params map[string]any) (json.RawMessage, error) {
 	target, _ := params["target"].(string)
 	plan, err := defaultConfigRecovery().prepare(ctx, target)
 	if err != nil {

@@ -17,6 +17,9 @@ import (
 
 const archiveAction = "storage.archive-journal"
 const archiveWarning = "Archiving preserves the interrupted journal and allows new plans. Inspect the disk and mount configuration before confirming."
+
+var useConfigurationRecovery = reject("Recover the mount configuration before archiving this journal")
+
 const noArchive = "No interrupted partition or file system journal is available to archive"
 
 type archiveReview struct {
@@ -25,7 +28,12 @@ type archiveReview struct {
 }
 
 func ArchivePlan(ctx context.Context, params map[string]any) (json.RawMessage, error) {
-	plan, err := loadArchiveReview(ctx, params)
+	domain, err := storagebase.DomainLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer domain.Close()
+	plan, err := loadArchiveReviewLocked(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +51,7 @@ func ArchiveExecute(ctx context.Context, params map[string]any, expected string)
 		return nil, systemops.BeforeMutation(err)
 	}
 	defer config.Close()
-	plan, err := loadArchiveReview(ctx, params)
+	plan, err := loadArchiveReviewLocked(ctx, params)
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
@@ -90,7 +98,7 @@ func (s *service) archiveOriginal(plan *archiveReview) error {
 	return dir.Sync()
 }
 
-func loadArchiveReview(ctx context.Context, params map[string]any) (*archiveReview, error) {
+func loadArchiveReviewLocked(ctx context.Context, params map[string]any) (*archiveReview, error) {
 	input, _ := params["target"].(string)
 	target, err := storagebase.RecoveryTarget(input)
 	if err != nil {
@@ -134,9 +142,9 @@ func loadArchiveReview(ctx context.Context, params map[string]any) (*archiveRevi
 		return nil, err
 	}
 	// Prefer ordinary configuration recovery whenever the saved intent is still usable.
-	if state.FstabBefore != storagebase.Hash(state.FstabDesired) && !state.ConfigReconciled {
-		if _, err := storagebase.ConfigRecoveryPlan(ctx, map[string]any{"target": target}); err == nil {
-			return nil, reject("Recover the mount configuration before archiving this journal")
+	if state.FstabBefore != storagebase.Hash(state.FstabDesired) {
+		if _, err := storagebase.ConfigRecoveryPlanLocked(ctx, map[string]any{"target": target}); err == nil {
+			return nil, useConfigurationRecovery
 		} else {
 			if !storagebase.IsConfigRecoveryConflict(err) {
 				return nil, err
@@ -226,7 +234,18 @@ func (s *service) archiveReview(state *transaction, digest, current, boot string
 	return &archiveReview{target: state.Target, journal: digest, config: configHash, fingerprint: fingerprint, details: details}, nil
 }
 
-func ArchiveAvailable(ctx context.Context, target string) bool {
-	_, err := loadArchiveReview(ctx, map[string]any{"target": target})
-	return err == nil
+func SuggestedRecovery(ctx context.Context, target, fallback string) string {
+	domain, err := storagebase.TryDomainLock(ctx)
+	if err != nil {
+		return fallback
+	}
+	defer domain.Close()
+	_, err = loadArchiveReviewLocked(ctx, map[string]any{"target": target})
+	if err == nil {
+		return archiveAction
+	}
+	if err == useConfigurationRecovery {
+		return "storage.recover"
+	}
+	return fallback
 }

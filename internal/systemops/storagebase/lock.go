@@ -22,9 +22,17 @@ func DomainLock(ctx context.Context) (*os.File, error) {
 	return Lock(ctx, "/run/panasms-storage", "operation.lock", 0)
 }
 
+// Recovery reports should remain available while a long storage operation owns this lock.
+func TryDomainLock(ctx context.Context) (*os.File, error) {
+	return lock(ctx, "/run/panasms-storage", "operation.lock", 0, false)
+}
+
 // Use the legacy filesystem lock inode, including existing root-owned0644 files.
 // Never replace a lock file: Python and Go workers must serialize on the same inode.
 func Lock(ctx context.Context, root, name string, owner int) (*os.File, error) {
+	return lock(ctx, root, name, owner, true)
+}
+func lock(ctx context.Context, root, name string, owner int, wait bool) (*os.File, error) {
 	if filepath.Base(name) != name || name == "." || name == ".." {
 		return nil, reject("Invalid storage lock")
 	}
@@ -59,7 +67,7 @@ func Lock(ctx context.Context, root, name string, owner int) (*os.File, error) {
 			keep = true
 			return f, nil
 		}
-		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
+		if !wait || (err != unix.EWOULDBLOCK && err != unix.EAGAIN) {
 			return nil, err
 		}
 		timer := time.NewTimer(50 * time.Millisecond)

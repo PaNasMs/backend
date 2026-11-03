@@ -84,6 +84,16 @@ func Execute(ctx context.Context, action string, params map[string]any, expected
 	if err = storagebase.CheckPendingRoots("partitionfs", target, plan.identity); err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
+	pins, err := pinPlan(action, plan)
+	if err != nil {
+		return nil, systemops.BeforeMutation(err)
+	}
+	defer func() {
+		for _, pin := range pins {
+			pin.Close()
+		}
+	}()
+	s.run = pinnedRunner(s.run, pins)
 	return s.executePrepared(ctx, action, params, plan, r)
 }
 func (s *service) executePrepared(ctx context.Context, action string, params map[string]any, plan *prepared, r *systemops.Reporter) (json.RawMessage, error) {

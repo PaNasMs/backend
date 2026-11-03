@@ -7,6 +7,7 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
+	"panasms.local/backend/internal/systemops/partitionfs"
 	"panasms.local/backend/internal/systemops/storagequery"
 	"strings"
 
@@ -193,6 +194,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if partitionfs.IsAction(action) {
+		return partitionfs.Plan(ctx, action, p)
+	}
 	if networkmounts.IsAction(action) {
 		return networkmounts.Plan(ctx, action, p, user)
 	}
@@ -223,6 +227,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if partitionfs.IsAction(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return partitionfs.Execute(ctx, action, p, expected, r)
+	}
 	if networkmounts.IsAction(action) {
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)

@@ -67,3 +67,21 @@ func TestPendingRejectsLinksAndMalformedEvidence(t *testing.T) {
 		t.Fatal("malformed journal ignored")
 	}
 }
+
+func TestPendingIgnoresOnlyTrustedUncommittedWriterTemps(t *testing.T) {
+	root := t.TempDir()
+	os.Chmod(root, 0700)
+	roots := []PendingRoot{{root, "partitionfs"}}
+	for _, name := range []string{".journal-partial", ".panasms-partial"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("{partial"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", storagequery.StorageIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	os.Symlink("/dev/null", filepath.Join(root, ".journal-link"))
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", storagequery.StorageIdentity{}); err == nil {
+		t.Fatal("unsafe temp ignored")
+	}
+}

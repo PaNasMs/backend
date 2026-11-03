@@ -149,7 +149,7 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		}
 	case "disk.prepare":
 		err = perform("remove-signatures", func() error {
-			cfgLock, err := storagebase.Lock(ctx, "/run/panasms-storage", "fstab.lock", 0)
+			cfgLock, err := storagebase.FstabLock(ctx)
 			if err != nil {
 				return err
 			}

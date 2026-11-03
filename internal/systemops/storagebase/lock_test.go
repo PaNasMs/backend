@@ -77,3 +77,24 @@ func TestLockRejectsLinksAndForeignWritableState(t *testing.T) {
 		t.Fatal("writable root accepted")
 	}
 }
+
+func TestBusyReportLockReturnsImmediately(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "storage")
+	held, err := lock(context.Background(), dir, "operation.lock", os.Getuid(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if f, err := lock(ctx, dir, "operation.lock", os.Getuid(), false); !errors.Is(err, unix.EWOULDBLOCK) {
+		if f != nil {
+			f.Close()
+		}
+		t.Fatalf("report waited on an active operation: %v", err)
+	}
+}

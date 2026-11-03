@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -32,6 +33,7 @@ func within(path, root string) bool {
 }
 
 type service struct {
+	fstabLock          func(context.Context) (*os.File, error)
 	attach             func(string, *os.File, func(uint64) error) (uint64, error)
 	unmount            func(string, folders.LiveMount) error
 	root               string
@@ -46,7 +48,7 @@ type service struct {
 }
 
 func defaultService() *service {
-	return &service{proc: "/proc", attach: attachStaged, unmount: unmountPinned, root: "/var/lib/panasms-agent/network-mounts", owner: 0, write: systemops.AtomicWrite, fstab: "/etc/fstab", credentials: "/etc/panasms/network-credentials", mounts: folders.ReadMounts, lookup: user.Lookup, path: folders.MountPath, run: systemops.Command}
+	return &service{fstabLock: storagebase.FstabLock, proc: "/proc", attach: attachStaged, unmount: unmountPinned, root: "/var/lib/panasms-agent/network-mounts", owner: 0, write: systemops.AtomicWrite, fstab: "/etc/fstab", credentials: "/etc/panasms/network-credentials", mounts: folders.ReadMounts, lookup: user.Lookup, path: folders.MountPath, run: systemops.Command}
 }
 func safePath(path string) error {
 	for current := path; ; current = filepath.Dir(current) {

@@ -135,17 +135,7 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		if err = s.save(state); err != nil {
 			return nil, s.abortMount(ctx, state, err, r)
 		}
-		current, err := os.ReadFile(s.fstab)
-		if err != nil {
-			return nil, s.abortMount(ctx, state, err, r)
-		}
-		if string(current) != plan.conf {
-			return nil, s.abortMount(ctx, state, reject("Network mount configuration changed; review recovery before continuing"), r)
-		}
-		if err = s.write(s.fstab, after, 0644); err != nil {
-			return nil, s.abortMount(ctx, state, err, r)
-		}
-		if _, err = s.run(ctx, []string{"systemctl", "daemon-reload"}, systemops.CommandOptions{Operation: true, Reporter: r}); err != nil {
+		if err = s.commitMountConfig(ctx, plan.conf, after, r); err != nil {
 			return nil, s.abortMount(ctx, state, err, r)
 		}
 	}
@@ -158,6 +148,26 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	}
 	return json.Marshal(map[string]any{"message": "Network share mounted", "point": plan.point})
 }
+func (s *service) commitMountConfig(ctx context.Context, before, after string, r *systemops.Reporter) error {
+	lock, err := s.fstabLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	current, err := os.ReadFile(s.fstab)
+	if err != nil {
+		return err
+	}
+	if string(current) != before {
+		return reject("Network mount configuration changed; review recovery before continuing")
+	}
+	if err = s.write(s.fstab, after, 0644); err != nil {
+		return err
+	}
+	_, err = s.run(ctx, []string{"systemctl", "daemon-reload"}, systemops.CommandOptions{Operation: true, Reporter: r})
+	return err
+}
+
 func compatibleFS(actual, expected string) bool {
 	return actual == expected || expected == "nfs" && actual == "nfs4"
 }
@@ -218,6 +228,11 @@ func (s *service) cleanupMount(ctx context.Context, state *transaction, expected
 	return s.removeState(state.Point)
 }
 func (s *service) removeConfigured(ctx context.Context, state *transaction, expectedConf string, r *systemops.Reporter) error {
+	lock, err := s.fstabLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	point := state.Point
 	raw, err := os.ReadFile(s.fstab)
 	if err != nil {

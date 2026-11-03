@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/folders"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,7 +23,9 @@ func fixture(t *testing.T) (*service, map[string]any) {
 	if err := os.WriteFile(conf, []byte("UUID=root / ext4 defaults 0 1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return &service{proc: filepath.Join(root, "proc"), root: filepath.Join(root, "state"), owner: os.Geteuid(), write: func(path, text string, mode os.FileMode) error { return os.WriteFile(path, []byte(text), mode) }, fstab: conf, credentials: filepath.Join(root, "credentials"), mounts: func() ([]folders.LiveMount, error) { return []folders.LiveMount{}, nil }, lookup: func(string) (*user.User, error) { return &user.User{Uid: "1000", Gid: "1000"}, nil }, path: func(p string) error { _, err := systemops.CleanPath(p); return err }, run: func(context.Context, []string, systemops.CommandOptions) ([]byte, error) { return nil, nil }}, map[string]any{"target": "//nas/share", "point": filepath.Join(root, "share"), "username": "member", "password": "secret-value", "automount": true}
+	return &service{fstabLock: func(ctx context.Context) (*os.File, error) {
+		return storagebase.Lock(ctx, filepath.Join(root, "fstab-lock"), "fstab.lock", os.Geteuid())
+	}, proc: filepath.Join(root, "proc"), root: filepath.Join(root, "state"), owner: os.Geteuid(), write: func(path, text string, mode os.FileMode) error { return os.WriteFile(path, []byte(text), mode) }, fstab: conf, credentials: filepath.Join(root, "credentials"), mounts: func() ([]folders.LiveMount, error) { return []folders.LiveMount{}, nil }, lookup: func(string) (*user.User, error) { return &user.User{Uid: "1000", Gid: "1000"}, nil }, path: func(p string) error { _, err := systemops.CleanPath(p); return err }, run: func(context.Context, []string, systemops.CommandOptions) ([]byte, error) { return nil, nil }}, map[string]any{"target": "//nas/share", "point": filepath.Join(root, "share"), "username": "member", "password": "secret-value", "automount": true}
 }
 func TestPlanDoesNotCreateOrExposeCredentials(t *testing.T) {
 	s, p := fixture(t)

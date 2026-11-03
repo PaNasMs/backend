@@ -8,6 +8,8 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
+	"panasms.local/backend/internal/systemops/partitionfs"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
 	"strings"
 
@@ -197,6 +199,15 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	if localmounts.IsAction(action) {
 		return localmounts.Plan(ctx, action, p, user)
 	}
+	if action == "storage.archive-journal" {
+		return partitionfs.ArchivePlan(ctx, p)
+	}
+	if action == "storage.recover" {
+		return storagebase.ConfigRecoveryPlan(ctx, p)
+	}
+	if partitionfs.IsAction(action) {
+		return partitionfs.Plan(ctx, action, p)
+	}
 	if networkmounts.IsAction(action) {
 		return networkmounts.Plan(ctx, action, p, user)
 	}
@@ -231,6 +242,18 @@ func execute(ctx context.Context, action string, p map[string]any, r *systemops.
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return localmounts.Execute(ctx, action, p, user, expected, r)
+	}
+	if action == "storage.archive-journal" {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return partitionfs.ArchiveExecute(ctx, p, expected)
+	}
+	if action == "storage.recover" {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return storagebase.ConfigRecoveryExecute(ctx, p, expected, r)
+	}
+	if partitionfs.IsAction(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		return partitionfs.Execute(ctx, action, p, expected, r)
 	}
 	if networkmounts.IsAction(action) {
 		user, _ := ctx.Value(networkUserKey{}).(string)

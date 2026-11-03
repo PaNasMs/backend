@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"panasms.local/backend/internal/systemops/partitionfs"
+	"panasms.local/backend/internal/systemops/storagebase"
 	"sync"
 	"time"
 )
@@ -51,6 +53,18 @@ func (m *Manager) cancel(id string) error {
 
 // Recovery stores only object references. Passwords, tokens and executable input
 // are never persisted or replayed from a job record.
+func partitionJournalAction(action string) bool {
+	return partitionfs.IsAction(action) || action == "storage.recover" || action == "storage.archive-journal"
+}
+func storedOperationTarget(req Request, target string) string {
+	// A by-id link may disappear as soon as the partition table changes.
+	if partitionJournalAction(req.Action) {
+		if resolved, err := storagebase.RecoveryTarget(target); err == nil && resolved == req.Confirmation {
+			return resolved
+		}
+	}
+	return target
+}
 func recoveryContext(req Request) string {
 	result := map[string]string{}
 	for _, key := range []string{"target", "destination", "point", "name", "interface"} {
@@ -91,7 +105,7 @@ func (m *Manager) inspect(ctx context.Context, id, user string) (json.RawMessage
 	if json.Unmarshal([]byte(raw), &params) != nil {
 		return nil, errors.New("Recovery metadata is unreadable")
 	}
-	if params["target"] == "" {
+	if params["target"] == "" || partitionJournalAction(action) && target != "" {
 		params["target"] = target
 	}
 	m.inspecting = true

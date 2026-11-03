@@ -492,3 +492,51 @@ func TestPendingStageWithoutPublicMountOffersExplicitRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkFstabWritersRejectChangesCommittedUnderStorageLock(t *testing.T) {
+	for _, mode := range []string{"mount", "unmount"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := fixture(t)
+			acquire := s.fstabLock
+			held, err := acquire(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			waiting := make(chan struct{})
+			s.fstabLock = func(ctx context.Context) (*os.File, error) {
+				close(waiting)
+				return acquire(ctx)
+			}
+			before, err := os.ReadFile(s.fstab)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				if mode == "mount" {
+					done <- s.commitMountConfig(ctx, string(before), "# network entry\n", nil)
+				} else {
+					done <- s.removeConfigured(ctx, &transaction{Point: "/mnt/test"}, hashText(string(before)), nil)
+				}
+			}()
+			<-waiting
+			foreign := string(before) + "# committed by native storage\n"
+			if err = os.WriteFile(s.fstab, []byte(foreign), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err = held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = <-done; err == nil || !strings.Contains(err.Error(), "configuration changed") {
+				t.Fatal(err)
+			}
+			actual, err := os.ReadFile(s.fstab)
+			if err != nil || string(actual) != foreign {
+				t.Fatalf("unexpected fstab after conflict: %q, %v", actual, err)
+			}
+		})
+	}
+}

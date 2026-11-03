@@ -301,6 +301,9 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 	if err != nil {
 		return nil, err
 	}
+	if previous != nil && previous.Phase == "pending" {
+		details = append(details, "Interrupted operation: "+previous.Action, interruptedInspection)
+	}
 	out.raw, err = json.Marshal(map[string]any{"target": target, "details": details, "confirmation": target, "fingerprint": out.fingerprint})
 	return out, err
 }

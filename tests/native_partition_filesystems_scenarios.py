@@ -84,12 +84,19 @@ def main():
    else:Path('/fixture/fail-reload').unlink()
   journal=Path('/var/lib/panasms-agent/storage')/(hashlib.sha256(second.encode()).hexdigest()+'.json')
   state=json.loads(journal.read_text());assert state['phase']=='pending' and state['configOnlyRemaining'] and not state['configReconciled']
-  report=invoke('recover','filesystem.format',params)
+  alias=Path('/dev/fixture-recovery-alias')
+  if not alias.exists():alias.symlink_to(second)
+  alias_params={**params,'target':str(alias)}
+  report=invoke('recover','filesystem.format',alias_params)
   assert report['ok'] and report['data']['recoveryAction']=='storage.recover',report
   count=Path('/fixture/formatter-calls').read_text().count('\n')
-  denied_result=invoke('execute','filesystem.format',params,plan('filesystem.format',params));assert not denied_result['ok']
+  interrupted_plan=plan('filesystem.format',params)
+  assert 'Interrupted operation: filesystem.format' in interrupted_plan['details']
+  assert any('Interrupted writes are never repeated automatically.' in detail for detail in interrupted_plan['details'])
+  denied_result=invoke('execute','filesystem.format',params,interrupted_plan);assert not denied_result['ok']
   assert Path('/fixture/formatter-calls').read_text().count('\n')==count
-  apply('storage.recover',{'target':second})
+  assert invoke('recover','storage.recover',alias_params)['data']['recoveryAction']=='storage.recover'
+  apply('storage.recover',{'target':str(alias)})
   assert Path('/fixture/formatter-calls').read_text().count('\n')==count
   state=json.loads(journal.read_text());assert state['phase']=='complete' and state['configReconciled']
   assert config.read_text()==saved and digest(marker)==first_hash

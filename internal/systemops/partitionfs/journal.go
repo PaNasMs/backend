@@ -130,6 +130,8 @@ func hardwareEqual(a, b storagequery.StorageIdentity) bool {
 	}
 	return true
 }
+const interruptedInspection = "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."
+
 func Recovery(target string) (json.RawMessage, error) {
 	resolved, resolveErr := storagebase.RecoveryTarget(target)
 	if resolveErr != nil {
@@ -145,5 +147,5 @@ func Recovery(target string) (json.RawMessage, error) {
 	if state != nil {
 		summary = map[string]any{"action": state.Action, "target": state.Target, "phase": state.Phase, "steps": state.Steps, "complete": state.Complete, "configurationPending": !state.Complete && !state.ConfigReconciled && state.FstabBefore != storagebase.Hash(state.FstabDesired)}
 	}
-	return json.Marshal(map[string]any{"target": target, "journal": summary, "automaticReplay": false, "message": "Inspect the current partition table and file system before preparing another operation. Interrupted writes are never repeated automatically."})
+	return json.Marshal(map[string]any{"target": target, "journal": summary, "automaticReplay": false, "message": interruptedInspection})
 }

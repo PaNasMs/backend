@@ -156,6 +156,9 @@ func (s lifecycle) resume(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = s.refreshCore(); err != nil {
+		return err
+	}
 	registry, err := s.registry()
 	if err != nil {
 		return err

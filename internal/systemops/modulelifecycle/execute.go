@@ -14,6 +14,7 @@ import (
 )
 
 const incompleteRecovery = "Module recovery is incomplete. Recover the recorded transaction before changing modules."
+const committedRecovery = "Modules were activated, but transaction cleanup is incomplete. Recover the recorded transaction before changing modules."
 
 func matchesCommitIntent(expected, recorded *transaction) bool {
 	if recorded == nil || recorded.orphan {
@@ -46,6 +47,9 @@ func (s lifecycle) recovery() recovery {
 }
 
 func (s lifecycle) checkPlanLive(plan *prepared) error {
+	if err := s.checkArchiveTrust(plan); err != nil {
+		return err
+	}
 	current, err := s.registry()
 	if err != nil {
 		return err
@@ -77,6 +81,16 @@ func (s lifecycle) checkPlanLive(plan *prepared) error {
 		}
 		if payload != plan.payloads[id].Before || !snapshotEqual(unitBefore, plan.units[id]) {
 			return reject("State has changed. Review a new operation plan.")
+		}
+	}
+	return nil
+}
+
+func (s lifecycle) checkArchiveTrust(plan *prepared) error {
+	for _, signer := range names(plan.signingKeys) {
+		key, err := readPublicKey(s.keys, signer, s.owner)
+		if err != nil || !bytes.Equal(key, plan.signingKeys[signer]) {
+			return reject("Module publisher trust changed. Review a new operation plan.")
 		}
 	}
 	return nil
@@ -282,6 +296,9 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 	if err != nil {
 		return nil, err
 	}
+	if err = s.refreshCore(); err != nil {
+		return nil, err
+	}
 	cancellable(reporter, true)
 	lock, err = s.lock(ctx, reporter)
 	if err != nil {
@@ -397,6 +414,9 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 	if err = authorize(); err != nil {
 		return nil, err
 	}
+	if err = s.checkArchiveTrust(plan); err != nil {
+		return nil, err
+	}
 	if err = s.recovery().checkStaging(state); err != nil {
 		return nil, err
 	}
@@ -473,6 +493,7 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		if readErr == nil && matchesCommitIntent(state, loaded) {
 			if loaded.Committed {
 				rollback = false
+				err = reject(committedRecovery)
 			} else {
 				state.Committed = false
 			}

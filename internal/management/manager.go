@@ -234,7 +234,7 @@ func (m *Manager) execute(w work) {
 	})
 	var result json.RawMessage
 	release, err := func() (func(), error) {
-		if modulelifecycle.IsAction(w.Request.Action) || w.Request.Action == "module.catalog-install" {
+		if modulelifecycle.IsAction(w.Request.Action) && actionModules[w.Request.Action] == goNative || w.Request.Action == "module.catalog-install" {
 			return func() {}, nil
 		}
 		return maintenance.Acquire()

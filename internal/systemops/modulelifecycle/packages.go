@@ -19,7 +19,7 @@ func compareDebian(ctx context.Context, left, operator, right string) (bool, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/dpkg", "--compare-versions", left, operator, right)
+	cmd := exec.CommandContext(ctx, "/usr/bin/dpkg", "--compare-versions", "--", left, operator, right)
 	cmd.Env = []string{"LC_ALL=C"}
 	err := cmd.Run()
 	if err == nil {

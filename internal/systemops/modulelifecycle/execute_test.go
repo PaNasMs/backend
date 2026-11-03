@@ -2,9 +2,13 @@ package modulelifecycle
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -422,5 +426,106 @@ func TestCommitReadbackMustMatchAllTransactionEvidence(t *testing.T) {
 				t.Fatal("readback trusted evidence from another activation", field)
 			}
 		})
+	}
+}
+
+func TestExecuteRefreshesInstalledCoreAfterAcquiringMaintenance(t *testing.T) {
+	s := executionFixture(t)
+	s.coreFile = filepath.Join(fixtureStore(t).root, "VERSION")
+	if err := os.WriteFile(s.coreFile, []byte(s.core), 0644); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"upload": uploadFixture(t, s)}
+	fingerprint := executionPlan(t, s, "module.install", params)
+	if err := os.WriteFile(s.coreFile, []byte("0.2.35"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.execute(context.Background(), "module.install", params, "alice", fingerprint, nil, func() error { return nil })
+	if err == nil || !systemops.Unchanged(err) || err.Error() != "State has changed. Review a new operation plan." {
+		t.Fatal("stale core metadata authorized a mutation", err)
+	}
+	if state, err := s.loadTransaction(); err != nil || state != nil {
+		t.Fatal("stale core created a transaction", state, err)
+	}
+}
+
+func TestExecuteRechecksRevokedReplacedAndUnsafePublisherAfterStaging(t *testing.T) {
+	for _, change := range []string{"removed", "replaced", "unsafe"} {
+		t.Run(change, func(t *testing.T) {
+			s := executionFixture(t)
+			params := map[string]any{"upload": uploadFixture(t, s)}
+			fingerprint := executionPlan(t, s, "module.install", params)
+			checks := 0
+			_, err := s.execute(context.Background(), "module.install", params, "alice", fingerprint, nil, func() error {
+				checks++
+				if checks == 4 {
+					path := filepath.Join(s.keys, "fixture.pem")
+					switch change {
+					case "removed":
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+					case "unsafe":
+						if err := os.Chmod(path, 0666); err != nil {
+							t.Fatal(err)
+						}
+					case "replaced":
+						key, _, err := ed25519.GenerateKey(rand.Reader)
+						if err != nil {
+							t.Fatal(err)
+						}
+						der, err := x509.MarshalPKIXPublicKey(key)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				return nil
+			})
+			if err == nil || err.Error() != "Module publisher trust changed. Review a new operation plan." || checks != 5 {
+				t.Fatal("revoked key authorized activation", checks, err)
+			}
+			if state, err := s.loadTransaction(); err != nil || state != nil {
+				t.Fatal("revoked publisher staging was not cleaned", state, err)
+			}
+			if _, err := os.Lstat(filepath.Join(s.root, "example")); !os.IsNotExist(err) {
+				t.Fatal("revoked publisher payload activated", err)
+			}
+		})
+	}
+}
+
+func TestInterruptedRecoveryRefusesActiveWorkWithoutChangingEvidence(t *testing.T) {
+	r, _ := recoveryFixture(t, true)
+	s := executionFixture(t)
+	s.store, s.units, s.mounts = r.store, r.units, r.mounts
+	before, err := os.ReadFile(filepath.Join(s.root, ".transaction/journal.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := os.Open(s.maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer request.Close()
+	if err := unix.Flock(int(request.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{}
+	fingerprint := executionPlan(t, s, "module.recover", params)
+	if _, err := s.execute(context.Background(), "module.recover", params, "alice", fingerprint, nil, func() error { return nil }); err == nil || !systemops.Unchanged(err) || !strings.Contains(err.Error(), "Active requests or tasks") {
+		t.Fatal("live rollback admitted active work", err)
+	}
+	after, err := os.ReadFile(filepath.Join(s.root, ".transaction/journal.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("blocked recovery changed its evidence", err)
+	}
+	for _, id := range []string{"app", "dep"} {
+		if data, err := os.ReadFile(filepath.Join(s.root, id, "payload")); err != nil || string(data) != "new-"+id {
+			t.Fatal("blocked recovery changed active code", id, err)
+		}
 	}
 }

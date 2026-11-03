@@ -3,6 +3,7 @@ package modulelifecycle
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -10,21 +11,29 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 )
 
-func installedLifecycle() (lifecycle, error) {
-	dir, err := trustedDirectory("/usr/lib/panasms", 0)
+func (s *lifecycle) refreshCore() error {
+	if s.coreFile == "" {
+		return nil
+	}
+	dir, err := trustedDirectory(filepath.Dir(s.coreFile), s.owner)
 	if err != nil {
-		return lifecycle{}, err
+		return err
 	}
 	defer dir.Close()
-	raw, err := readOwnedAt(dir, "VERSION", 0, 100)
+	raw, err := readOwnedAt(dir, filepath.Base(s.coreFile), s.owner, 100)
 	if err != nil {
-		return lifecycle{}, err
+		return err
 	}
 	core := strings.TrimSpace(string(raw))
 	if _, err = parseVersion(core); err != nil {
-		return lifecycle{}, err
+		return err
 	}
-	return lifecycle{store: store{root: "/var/lib/panasms-modules", owner: 0}, core: core, architecture: runtime.GOARCH,
+	s.core = core
+	return nil
+}
+
+func installedLifecycle() (lifecycle, error) {
+	s := lifecycle{store: store{root: "/var/lib/panasms-modules", owner: 0}, coreFile: "/usr/lib/panasms/VERSION", architecture: runtime.GOARCH,
 		units: "/etc/systemd/system", uploads: "/var/lib/panasms-agent/module-uploads", keys: "/etc/panasms/module-keys", maintenance: "/run/lock/panasms-maintenance.lock",
 		run: systemops.Command, compare: compareDebian, health: health, mounts: func() ([]string, error) {
 			rows, err := folders.ReadMounts()
@@ -36,7 +45,11 @@ func installedLifecycle() (lifecycle, error) {
 				paths = append(paths, row.Target)
 			}
 			return paths, nil
-		}}, nil
+		}}
+	if err := s.refreshCore(); err != nil {
+		return lifecycle{}, err
+	}
+	return s, nil
 }
 
 func Query(member bool) (json.RawMessage, error) {

@@ -24,9 +24,27 @@ func TestLifecycleOwnsMaintenanceWhileOtherJobsKeepSharedBarrier(t *testing.T) {
 	}
 	defer m.db.Close()
 	defer func() { close(m.queue); <-m.finished }()
-	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover", "module.catalog-install", "module.source-add", "module.custom", "group.create"} {
-		t.Run(action, func(t *testing.T) {
-			if _, err := m.db.Exec("INSERT INTO jobs VALUES(?, 'alice', ?, 'target', 'queued', 'Waiting', 'now', 'now', '{}')", action, action); err != nil {
+	type scenario struct {
+		action string
+		route  impl
+		owns   bool
+	}
+	cases := []scenario{{"module.catalog-install", legacy, true}, {"module.source-add", legacy, false}, {"module.custom", legacy, false}, {"group.create", goNative, false}}
+	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover"} {
+		cases = append(cases, scenario{action, legacy, false}, scenario{action, goNative, true})
+	}
+	for _, example := range cases {
+		name := example.action + "-legacy"
+		if example.route == goNative {
+			name = example.action + "-native"
+		}
+		t.Run(name, func(t *testing.T) {
+			previous, registered := actionModules[example.action]
+			if registered {
+				actionModules[example.action] = example.route
+				defer func() { actionModules[example.action] = previous }()
+			}
+			if _, err := m.db.Exec("INSERT INTO jobs VALUES(?, 'alice', ?, 'target', 'queued', 'Waiting', 'now', 'now', '{}')", name, example.action); err != nil {
 				t.Fatal(err)
 			}
 			called := false
@@ -38,13 +56,12 @@ func TestLifecycleOwnsMaintenanceWhileOtherJobsKeepSharedBarrier(t *testing.T) {
 				}
 				defer file.Close()
 				err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-				owns := action == "module.install" || action == "module.enable" || action == "module.disable" || action == "module.remove" || action == "module.recover" || action == "module.catalog-install"
-				if owns && err != nil || !owns && !errors.Is(err, unix.EWOULDBLOCK) {
-					t.Fatal("wrong maintenance ownership", action, err)
+				if example.owns && err != nil || !example.owns && !errors.Is(err, unix.EWOULDBLOCK) {
+					t.Fatal("wrong maintenance ownership", name, err)
 				}
 				return json.RawMessage(`{}`), nil
 			}
-			m.execute(work{Job: Job{ID: action, User: "alice", Action: action}, Request: Request{Action: action}})
+			m.execute(work{Job: Job{ID: name, User: "alice", Action: example.action}, Request: Request{Action: example.action}})
 			if !called {
 				t.Fatal("job never ran")
 			}

@@ -17,7 +17,7 @@ func TestDebianComparisonPreservesEpochPrereleaseAndInvalidVersionFailure(t *tes
 	for _, example := range []struct {
 		left, operator, right string
 		want                  bool
-	}{{"1:1.0", "gt", "2.0", true}, {"1.0~rc1", "ge", "1.0", false}, {"1.0-2", "ge", "1.0-1", true}, {"1.0", "gt", "1.0", false}} {
+	}{{"1:1.0", "gt", "2.0", true}, {"1.0~rc1", "ge", "1.0", false}, {"1.0-2", "ge", "1.0-1", true}, {"1.0", "gt", "1.0", false}, {"--literal", "gt", "--literal", false}} {
 		got, err := compareDebian(context.Background(), example.left, example.operator, example.right)
 		if err != nil || got != example.want {
 			t.Fatal(example, got, err)

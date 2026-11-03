@@ -1,6 +1,7 @@
 package modulelifecycle
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -18,11 +19,11 @@ import (
 
 type lifecycle struct {
 	store
-	core, architecture, units, uploads, keys, maintenance string
-	run                                                   command
-	compare                                               versionCompare
-	health                                                healthCheck
-	mounts                                                func() ([]string, error)
+	core, architecture, units, uploads, keys, maintenance, coreFile string
+	run                                                             command
+	compare                                                         versionCompare
+	health                                                          healthCheck
+	mounts                                                          func() ([]string, error)
 }
 
 type prepared struct {
@@ -38,6 +39,7 @@ type prepared struct {
 	result      json.RawMessage
 	units       map[string]fileSnapshot
 	payloads    map[string]payloadState
+	signingKeys map[string]ed25519.PublicKey
 }
 
 func IsAction(action string) bool {
@@ -156,7 +158,7 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 	if err != nil {
 		return nil, err
 	}
-	plan := &prepared{installed: installed, available: Registry{}}
+	plan := &prepared{installed: installed, available: Registry{}, signingKeys: map[string]ed25519.PublicKey{}}
 	defer func() {
 		if err != nil && plan.archive != nil {
 			plan.archive.Close()
@@ -176,7 +178,17 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 		if statErr != nil {
 			return nil, statErr
 		}
-		plan.bundle, err = inspectBundle(file, stat.Size(), s.core, s.architecture, func(signer string) (ed25519.PublicKey, error) { return readPublicKey(s.keys, signer, s.owner) })
+		plan.bundle, err = inspectBundle(file, stat.Size(), s.core, s.architecture, func(signer string) (ed25519.PublicKey, error) {
+			key, err := readPublicKey(s.keys, signer, s.owner)
+			if err != nil {
+				return nil, err
+			}
+			if previous := plan.signingKeys[signer]; previous != nil && !bytes.Equal(previous, key) {
+				return nil, reject("Module publisher trust changed. Review a new operation plan.")
+			}
+			plan.signingKeys[signer] = append(ed25519.PublicKey{}, key...)
+			return key, nil
+		})
 		if err != nil {
 			return nil, err
 		}

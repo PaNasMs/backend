@@ -260,7 +260,10 @@ class Updates(unittest.TestCase):
             gpg('--yes','--armor','--detach-sign',str(catalog))
             return catalog.read_bytes(),catalog.with_suffix('.json.asc').read_bytes()
         raw,sig=sign(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=1))
-        with patch.object(u,'KEY',key),patch.object(u,'fetch',side_effect=[raw,sig]):u.check()
+        with patch.object(u,'KEY',key),patch.object(u,'fetch',side_effect=[raw,sig]) as fetch:
+            u.check()
+        self.assertEqual([call.args[0] for call in fetch.call_args_list], [
+            u.BASE+'channels/current/stable.json', u.BASE+'channels/current/stable.json.asc'])
         with patch.object(u,'KEY',key),patch.object(u,'fetch',side_effect=[raw+b' ',sig]),self.assertRaises(Rejected):u.check()
         raw,sig=sign(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=1))
         with patch.object(u,'KEY',key),patch.object(u,'fetch',side_effect=[raw,sig]),self.assertRaisesRegex(Rejected,'expired'):u.check()

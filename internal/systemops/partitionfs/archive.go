@@ -142,7 +142,7 @@ func loadArchiveReviewLocked(ctx context.Context, params map[string]any) (*archi
 		return nil, err
 	}
 	// Prefer ordinary configuration recovery whenever the saved intent is still usable.
-	if state.FstabBefore != storagebase.Hash(state.FstabDesired) {
+	if state.needsConfigRecovery(config) {
 		if _, err := storagebase.ConfigRecoveryPlanLocked(ctx, map[string]any{"target": target}); err == nil {
 			return nil, useConfigurationRecovery
 		} else {
@@ -152,6 +152,10 @@ func loadArchiveReviewLocked(ctx context.Context, params map[string]any) (*archi
 		}
 	}
 	return plan, nil
+}
+
+func (state *transaction) needsConfigRecovery(current string) bool {
+	return state.FstabBefore != storagebase.Hash(state.FstabDesired) && !state.Acknowledged(current, state.FstabBefore, state.FstabDesired)
 }
 
 func (s *service) archiveReview(state *transaction, digest, current, boot string, p *storagequery.Preflight) (*archiveReview, error) {
@@ -188,10 +192,7 @@ func (s *service) archiveReview(state *transaction, digest, current, boot string
 		observed[d.Path] = map[string]any{"identity": id, "devices": rows}
 	}
 	configHash := storagebase.Hash(current)
-	configIntent := state.FstabBefore != storagebase.Hash(state.FstabDesired)
-	canCheckConfig := configIntent && !state.ConfigReconciled
-	staleAcknowledgement := configIntent && state.ConfigReconciled && !state.Acknowledged(current, state.FstabBefore, state.FstabDesired)
-	if !canCheckConfig && !staleAcknowledgement && !hardwareChanged && state.Identity.BootID == boot {
+	if !state.needsConfigRecovery(current) && !hardwareChanged && state.Identity.BootID == boot {
 		return nil, reject(interruptedInspection)
 	}
 	details := []string{"Interrupted operation: " + state.Action}

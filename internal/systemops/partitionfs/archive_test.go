@@ -103,3 +103,27 @@ func TestArchiveIsUnavailableForOrdinaryPendingRecord(t *testing.T) {
 		}
 	}
 }
+
+func TestValidConfigurationAcknowledgementDoesNotLoopAfterDisappearingTarget(t *testing.T) {
+	s, p := planningFixture(t)
+	target := "/dev/sda1"
+	id, err := s.identity(p, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &transaction{Action: "partition.delete", Target: target, Identity: id, Phase: "pending", FstabBefore: journalKey("before"), FstabDesired: "after", Steps: []step{{"delete-partition", true}, {"future-inspection", true}}}
+	state.ConfigOnlyRemaining = true
+	state.ConfigReconciled = true
+	state.ConfigResolution = "desired"
+	state.ConfigWitness = journalKey("after")
+	delete(p.Inventory.Rows, target)
+	if state.needsConfigRecovery("after") {
+		t.Fatal("already acknowledged bytes incorrectly routed back to recovery")
+	}
+	if _, err = s.archiveReview(state, journalKey("raw evidence"), "after", id.BootID, p); err != nil {
+		t.Fatal(err)
+	}
+	if !state.needsConfigRecovery("before") {
+		t.Fatal("changed acknowledgement bypassed ordinary configuration recovery")
+	}
+}

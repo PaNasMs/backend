@@ -167,3 +167,26 @@ func TestCatalogRecoveryNeverFallsBackToLegacyMutations(t *testing.T) {
 		t.Fatal("catalog selection/download route changed")
 	}
 }
+
+func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
+	failure := errors.New("native lifecycle failed")
+	hit := false
+	r := route(func(context.Context, string, string, any) (json.RawMessage, error) {
+		return nil, failure
+	}, recordingRunner(&hit))
+	if _, err := r(context.Background(), "query", "member", map[string]string{"view": "modules"}); !errors.Is(err, failure) || hit {
+		t.Fatal("native module query fell back", err, hit)
+	}
+	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover"} {
+		for _, mode := range []string{"plan", "execute", "recover"} {
+			if _, err := r(context.Background(), mode, "admin", Request{Action: action}); !errors.Is(err, failure) || hit {
+				t.Fatal("native lifecycle fell back", action, mode, err, hit)
+			}
+		}
+	}
+	for _, action := range []string{"module.catalog-install", "module.source-add", "module.source-remove"} {
+		if actionModules[action] != legacy {
+			t.Fatal("catalog selection/source ownership changed", action)
+		}
+	}
+}

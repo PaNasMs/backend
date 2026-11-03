@@ -666,7 +666,7 @@ unaffected modules: an orphan or interrupted registry cannot safely establish
 which module code should receive new requests. Core administration remains
 available when startup recovery refuses unchanged evidence; Modules offers the
 recorded recovery operation. A restore that changes files and then fails remains
-a hard agent-start failure, with the journal retained for operator recovery.
+a hard agent-start failure; inspect the reported transaction state before resuming.
 
 Finish module work before changing modules. A legacy service without the SDK
 maintenance protocol remains blocked while running; a zero activity response

@@ -151,9 +151,11 @@ func (s *service) archiveReview(state *transaction, digest, current, boot string
 		return nil, reject("Storage recovery identity is unavailable")
 	}
 	observed := map[string]any{}
+	hardwareChanged := false
 	for _, d := range state.Identity.Devices {
 		if p.Inventory.Rows[d.Path] == nil {
 			observed[d.Path] = nil
+			hardwareChanged = true
 			continue
 		}
 		id, err := s.identity(p, d.Path)
@@ -163,6 +165,14 @@ func (s *service) archiveReview(state *transaction, digest, current, boot string
 		if id.BootID != boot {
 			return nil, reject("Storage recovery identity changed")
 		}
+		same := false
+		for _, live := range id.Devices {
+			if live.Path == d.Path && live.DeviceNumber == d.DeviceNumber && live.DiskSequence == d.DiskSequence && live.WWN == d.WWN && live.Serial == d.Serial {
+				same = true
+				break
+			}
+		}
+		hardwareChanged = hardwareChanged || !same
 		rows := map[string]any{}
 		for _, child := range p.Inventory.Descendants(d.Path) {
 			rows[child] = p.Inventory.Rows[child]
@@ -170,6 +180,12 @@ func (s *service) archiveReview(state *transaction, digest, current, boot string
 		observed[d.Path] = map[string]any{"identity": id, "devices": rows}
 	}
 	configHash := storagebase.Hash(current)
+	configIntent := state.FstabBefore != storagebase.Hash(state.FstabDesired)
+	canCheckConfig := configIntent && !state.ConfigReconciled
+	staleAcknowledgement := configIntent && state.ConfigReconciled && !state.Acknowledged(current, state.FstabBefore, state.FstabDesired)
+	if !canCheckConfig && !staleAcknowledgement && !hardwareChanged && state.Identity.BootID == boot {
+		return nil, reject(interruptedInspection)
+	}
 	details := []string{"Interrupted operation: " + state.Action}
 	if p.Inventory.Rows[state.Target] == nil {
 		details = append(details, "The recorded device is absent")

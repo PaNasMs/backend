@@ -87,3 +87,19 @@ func TestArchiveReviewTracksEvidenceAndPreservesExactOriginal(t *testing.T) {
 		t.Fatal("acknowledgement replayed")
 	}
 }
+
+func TestArchiveIsUnavailableForOrdinaryPendingRecord(t *testing.T) {
+	s, p := planningFixture(t)
+	target := "/dev/sda1"
+	id, err := s.identity(p, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := "# original configuration\n"
+	state := &transaction{Action: "partition.create", Target: target, Identity: id, Phase: "pending", FstabBefore: journalKey(current), FstabDesired: current}
+	for _, conf := range []string{current, current + "# unrelated row\n"} {
+		if _, err = s.archiveReview(state, journalKey("record"), conf, id.BootID, p); err == nil {
+			t.Fatal("ordinary pending record became archivable")
+		}
+	}
+}

@@ -133,7 +133,7 @@ func apply(m mount, btrfs *btrfsWitness) error {
 		return fmt.Errorf("mount replaced at %s", m.point)
 	}
 
-	if btrfs == nil && deviceID(st.Dev) != m.device {
+	if btrfs == nil && (m.fs == "btrfs" || deviceID(st.Dev) != m.device) {
 		// A background scan has no backing-device witness to authorize a write.
 		// The selected-mount operation may already have applied both ACL entries.
 		if m.fs == "btrfs" {

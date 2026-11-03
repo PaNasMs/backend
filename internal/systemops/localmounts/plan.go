@@ -32,6 +32,7 @@ type service struct {
 	identity  func(*storagequery.Preflight, string) (storagequery.StorageIdentity, error)
 	resolve   func(string) (string, error)
 	mounts    func() ([]folders.LiveMount, error)
+	btrfsUUID func(folders.LiveMount) (string, error)
 	fstab     func() (string, error)
 	witness   func(string) (storagebase.TargetWitness, error)
 	blockers  func(context.Context, []folders.LiveMount, []folders.LiveMount) error
@@ -47,7 +48,7 @@ func defaultService() *service {
 		identity: func(p *storagequery.Preflight, target string) (storagequery.StorageIdentity, error) {
 			return p.Identity(target)
 		},
-		resolve: filepath.EvalSymlinks, mounts: folders.ReadMounts, fstab: storagebase.ReadFstab,
+		btrfsUUID: recordedBtrfsUUID, resolve: filepath.EvalSymlinks, mounts: folders.ReadMounts, fstab: storagebase.ReadFstab,
 		witness: func(point string) (storagebase.TargetWitness, error) {
 			w, f, err := storagebase.ObserveTarget(point)
 			if f != nil {
@@ -293,7 +294,7 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 						}
 						matches := live.Device == device.DeviceNumber
 						if live.FSType == "btrfs" && prior.FSType == "btrfs" {
-							mountedUUID, err := recordedBtrfsUUID(live)
+							mountedUUID, err := s.btrfsUUID(live)
 							if err != nil {
 								return nil, err
 							}

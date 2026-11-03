@@ -116,6 +116,7 @@ func TestDetachCannotDiscardBtrfsEvidenceFromSourceSpelling(t *testing.T) {
 	state := testJournal()
 	state.Action = "mount.attach"
 	state.FSType = "btrfs"
+	state.Identity.Devices[0].UUID = "retained"
 	state.MountID = 101
 	if err := writeJournal(s.root, s.owner, state); err != nil {
 		t.Fatal(err)
@@ -123,7 +124,21 @@ func TestDetachCannotDiscardBtrfsEvidenceFromSourceSpelling(t *testing.T) {
 	s.mounts = func() ([]folders.LiveMount, error) {
 		return []folders.LiveMount{{ID: 101, Device: "0:97", Target: "/mnt/go09b-missing-proof", Root: "/", FSType: "btrfs", Source: "/dev/disk/by-label/data"}}, nil
 	}
-	if _, err := s.prepare(context.Background(), "mount.detach", map[string]any{"target": state.Target}, "admin"); err == nil {
-		t.Fatal("Btrfs evidence was discarded without checking the mounted filesystem identity")
+	for _, tc := range []struct {
+		uuid    string
+		blocked bool
+	}{{"retained", true}, {"other-filesystem", false}} {
+		inspected := false
+		s.btrfsUUID = func(live folders.LiveMount) (string, error) {
+			if live.ID != 101 {
+				t.Fatal("wrong mount inspected")
+			}
+			inspected = true
+			return tc.uuid, nil
+		}
+		_, err := s.prepare(context.Background(), "mount.detach", map[string]any{"target": state.Target}, "admin")
+		if !inspected || (err != nil) != tc.blocked || (err != nil && err.Error() != "The mount changed; review a new operation plan") {
+			t.Fatalf("UUID %s inspected=%v err=%v", tc.uuid, inspected, err)
+		}
 	}
 }

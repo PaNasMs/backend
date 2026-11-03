@@ -90,6 +90,15 @@ def main():
     command('mkfs.btrfs', '-q', '-f', second)
     command('udevadm', 'settle')
     point = Path('/mnt/btrfs-access')
+    point.mkdir()
+    command('mount', '-t', 'btrfs', second, str(point))
+    try:
+        unmanaged_acl = command('getfacl', '-cpn', '--', str(point))
+        assert 'default:group:100:rwx' not in unmanaged_acl.splitlines()
+        passive = subprocess.run(['/usr/lib/panasms/panasms-system-helper', 'volume-access', 'apply', str(point)], capture_output=True, text=True)
+        assert passive.returncode != 0 and command('getfacl', '-cpn', '--', str(point)) == unmanaged_acl
+    finally:
+        command('umount', str(point))
     params = {'target': second, 'point': str(point), 'mountPolicy': 'manual'}
     operation('mount.attach', params)
     acl = command('getfacl', '-cpn', '--', str(point)).splitlines()

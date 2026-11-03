@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"unsafe"
 )
 
@@ -54,6 +55,39 @@ func (p *PinnedDevice) Verify() error {
 	}
 	if strconv.FormatUint(sequence, 10) != p.Identity.DiskSequence {
 		return reject("The block device changed. Review a new operation plan.")
+	}
+	var current unix.Stat_t
+	if err := unix.Lstat(p.Identity.Path, &current); err != nil || current.Mode&unix.S_IFMT != unix.S_IFBLK || fmt.Sprintf("%d:%d", unix.Major(current.Rdev), unix.Minor(current.Rdev)) != p.Identity.DeviceNumber {
+		return reject("The block device changed. Review a new operation plan.")
+	}
+	return verifyPublishedDevice(p.Identity, "/sys/dev/block")
+}
+
+func verifyPublishedDevice(identity storagequery.DeviceIdentity, sysRoot string) error {
+	changed := func() error { return reject("The block device changed. Review a new operation plan.") }
+	node := filepath.Join(sysRoot, identity.DeviceNumber)
+	before, err := os.Stat(node)
+	if err != nil || !before.IsDir() {
+		return changed()
+	}
+	sequencePath := filepath.Join(node, "diskseq")
+	if _, err := os.Stat(filepath.Join(node, "partition")); err == nil {
+		// Resolve the kernel's dev-number symlink before walking to its parent disk.
+		sequencePath = node + "/../diskseq"
+	} else if !os.IsNotExist(err) {
+		return changed()
+	}
+	dev, err := os.ReadFile(filepath.Join(node, "dev"))
+	if err != nil || strings.TrimSpace(string(dev)) != identity.DeviceNumber {
+		return changed()
+	}
+	seq, err := os.ReadFile(sequencePath)
+	if err != nil || strings.TrimSpace(string(seq)) != identity.DiskSequence {
+		return changed()
+	}
+	after, err := os.Stat(node)
+	if err != nil || !os.SameFile(before, after) {
+		return changed()
 	}
 	return nil
 }

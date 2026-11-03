@@ -86,6 +86,9 @@ func (s *service) save(state *transaction) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > 2*1024*1024 {
+		return reject("Storage recovery record is too large")
+	}
 	return s.write(s.journalPath(state.Target), string(data), 0600)
 }
 func (s *service) archive(state *transaction) error {

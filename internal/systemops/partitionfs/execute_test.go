@@ -26,7 +26,7 @@ func executionFixture(t *testing.T) (*service, *prepared) {
 	row := p.Inventory.Rows["/dev/sda1"]
 	row["size"] = json.Number("67108864")
 	row["fstype"] = "ext4"
-	table := map[string]any{"label": "gpt", "sectorsize": json.Number("512")}
+	table := map[string]any{"label": "gpt", "sectorsize": json.Number("512"), "partitions": []any{map[string]any{"node": "/dev/sda1", "start": json.Number("2048"), "size": json.Number("131072")}}}
 	plan := &prepared{target: "/dev/sda1", parent: "/dev/sda", row: row, table: table, identity: identity, fingerprint: strings.Repeat("a", 64), config: "# retained\n", start: 1048576, size: 32}
 	return s, plan
 }
@@ -39,6 +39,9 @@ func TestResizeOrderingAndUncertainStepRetained(t *testing.T) {
 			}
 			calls := []string{}
 			s.run = func(_ context.Context, args []string, opts systemops.CommandOptions) ([]byte, error) {
+				if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+					return updatedTable(p), nil
+				}
 				calls = append(calls, args[0]+" "+strings.Join(args[1:], " "))
 				if args[0] == "partx" {
 					if err := os.WriteFile(filepath.Join(s.sys, "sda1/size"), []byte(json.Number(stringify(p.size*2048))), 0600); err != nil {
@@ -71,6 +74,9 @@ func TestResizeOrderingAndUncertainStepRetained(t *testing.T) {
 	s, p := executionFixture(t)
 	calls := []string{}
 	s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+		if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+			return updatedTable(p), nil
+		}
 		calls = append(calls, args[0])
 		if args[0] == "sfdisk" {
 			return nil, errors.New("injected uncertain write")
@@ -96,6 +102,9 @@ func TestKernelMismatchDoesNotGrowFilesystem(t *testing.T) {
 	s, p := executionFixture(t)
 	calls := []string{}
 	s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+		if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+			return updatedTable(p), nil
+		}
 		calls = append(calls, args[0])
 		return nil, nil
 	}
@@ -116,6 +125,9 @@ func TestCancellationAfterShrinkNeverRepeatsOrStartsPartitionWrite(t *testing.T)
 	defer cancel()
 	calls := []string{}
 	s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+		if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+			return updatedTable(p), nil
+		}
 		calls = append(calls, args[0])
 		if args[0] == "resize2fs" {
 			cancel()
@@ -159,6 +171,9 @@ func TestReplacementBeforeNextWriteRetainsIntentAndStops(t *testing.T) {
 		return nil
 	}
 	s.run = func(_ context.Context, args []string, _ systemops.CommandOptions) ([]byte, error) {
+		if len(args) > 1 && args[0] == "sfdisk" && args[1] == "--json" {
+			return updatedTable(p), nil
+		}
 		calls = append(calls, args[0])
 		return nil, nil
 	}
@@ -172,4 +187,10 @@ func TestReplacementBeforeNextWriteRetainsIntentAndStops(t *testing.T) {
 	if err != nil || state.Complete || state.Phase != "pending" || len(state.Steps) != 1 {
 		t.Fatalf("%v %v", state, err)
 	}
+}
+
+func updatedTable(p *prepared) []byte {
+	table := map[string]any{"label": "gpt", "sectorsize": json.Number("512"), "partitions": []any{map[string]any{"node": p.target, "start": json.Number("2048"), "size": json.Number(stringify(p.size * 2048))}}}
+	data, _ := json.Marshal(map[string]any{"partitiontable": table})
+	return data
 }

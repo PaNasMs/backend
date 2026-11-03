@@ -208,6 +208,9 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		if err = run("delete-partition", []string{"sfdisk", "--no-reread", "--no-tell-kernel", "--delete", plan.parent, num}, ""); err != nil {
 			return nil, err
 		}
+		if err = s.verifyLayoutChange(context.WithoutCancel(ctx), plan, true); err != nil {
+			return nil, err
+		}
 		err = kernel([]string{"partx", "--delete", "--nr", num, plan.parent}, func() error {
 			_, e := os.Lstat(filepath.Join(s.sys, text(plan.row, "kname")))
 			if !os.IsNotExist(e) {
@@ -241,6 +244,9 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		}
 		num := strconv.FormatUint(n, 10)
 		if err = run("resize-partition", []string{"sfdisk", "--no-reread", "--no-tell-kernel", "-N", num, plan.parent}, fmt.Sprintf("size=%d\n", plan.size*mib/sector)); err != nil {
+			return nil, err
+		}
+		if err = s.verifyLayoutChange(context.WithoutCancel(ctx), plan, false); err != nil {
 			return nil, err
 		}
 		err = kernel([]string{"partx", "--update", "--nr", num, plan.parent}, func() error {
@@ -355,6 +361,57 @@ func revalidate(ctx context.Context, action string, state *transaction) error {
 	}
 	if !hardwareEqual(state.Identity, now) {
 		return reject("Storage identity changed; preserve the operation record and inspect the device")
+	}
+	return nil
+}
+
+func (s *service) verifyLayoutChange(ctx context.Context, plan *prepared, removed bool) error {
+	after, err := s.table(ctx, plan.parent)
+	if err != nil {
+		return err
+	}
+	beforeParts, err := tableParts(plan.table)
+	if err != nil {
+		return err
+	}
+	afterParts, err := tableParts(after)
+	if err != nil {
+		return err
+	}
+	sector, err := sectorSize(plan.table)
+	if err != nil {
+		return err
+	}
+	newSector, err := sectorSize(after)
+	if err != nil || newSector != sector || text(after, "label") != text(plan.table, "label") {
+		return reject("Could not confirm the updated partition table; inspect it before retrying")
+	}
+	expected := map[string]map[string]any{}
+	for _, part := range beforeParts {
+		node := text(part, "node")
+		if node == plan.target && removed {
+			continue
+		}
+		copy := map[string]any{}
+		for k, v := range part {
+			copy[k] = v
+		}
+		if node == plan.target {
+			copy["size"] = json.Number(strconv.FormatUint(plan.size*mib/sector, 10))
+		}
+		expected[node] = copy
+	}
+	if len(expected) != len(afterParts) {
+		return reject("Could not confirm the updated partition table; inspect it before retrying")
+	}
+	for _, part := range afterParts {
+		if !reflect.DeepEqual(expected[text(part, "node")], part) {
+			return reject("Could not confirm the updated partition table; inspect it before retrying")
+		}
+		delete(expected, text(part, "node"))
+	}
+	if len(expected) != 0 {
+		return reject("Could not confirm the updated partition table; inspect it before retrying")
 	}
 	return nil
 }

@@ -34,7 +34,7 @@ func RemovedFstabUUIDs(before, after string) []string {
 		out := map[string]bool{}
 		for _, line := range strings.Split(data, "\n") {
 			fields := strings.Fields(line)
-			if len(fields) >= 4 && strings.HasPrefix(fields[0], "UUID=") {
+			if len(fields) >= 1 && strings.HasPrefix(fields[0], "UUID=") {
 				out[strings.TrimPrefix(fields[0], "UUID=")] = true
 			}
 		}

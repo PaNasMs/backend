@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"panasms.local/backend/internal/systemops"
@@ -285,5 +286,43 @@ func TestConfigRecoveryPlanKeepsSharedPlanSchema(t *testing.T) {
 	}
 	if plan.Target != r.Target || plan.Confirmation != r.Target || len(plan.Fingerprint) != 64 || len(plan.Details) != 2 {
 		t.Fatalf("invalid plan: %+v", plan)
+	}
+}
+
+func TestConfigRecoveryReportIsMetadataOnlyAndRedacted(t *testing.T) {
+	s, record, _, _, _ := recoveryFixture(t)
+	s.preflight = func(context.Context) (*storagequery.Preflight, error) {
+		t.Fatal("inspection ran inventory")
+		return nil, nil
+	}
+	s.readConfig = func() (string, error) { t.Fatal("inspection read fstab"); return "", nil }
+	s.write = func(string, string, os.FileMode) error { t.Fatal("inspection wrote state"); return nil }
+	data, err := s.report(record.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report map[string]any
+	if err = json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report["recoveryAction"] != "storage.recover" || report["automaticReplay"] != false {
+		t.Fatal(string(data))
+	}
+	for _, private := range []string{"fstabDesired", "fstabBefore", "boot-a", "ownerEvidence", "UUID="} {
+		if strings.Contains(string(data), private) {
+			t.Fatal("private evidence leaked", string(data))
+		}
+	}
+}
+
+func TestRemovedUUIDsMatchActualFstabRemovalEvenForIncompleteRows(t *testing.T) {
+	before := "# retained\nUUID=old incomplete\nUUID=other /other ext4 defaults 0 2\n"
+	desired, err := EditFstab(before, map[string]bool{"old": true}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := RemovedFstabUUIDs(before, desired)
+	if len(removed) != 1 || removed[0] != "old" {
+		t.Fatal(removed)
 	}
 }

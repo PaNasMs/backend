@@ -412,3 +412,33 @@ func (s *configRecoveryService) execute(ctx context.Context, plan *configRecover
 	}
 	return json.Marshal(map[string]any{"ok": true, "configurationReconciled": true, "diskStepsRepeated": false, "complete": complete})
 }
+
+func ConfigRecoveryReport(target string) (json.RawMessage, error) {
+	return defaultConfigRecovery().report(target)
+}
+func (s *configRecoveryService) report(target string) (json.RawMessage, error) {
+	if !strings.HasPrefix(target, "/dev/") || filepath.Clean(target) != target {
+		return nil, reject("Select a block device")
+	}
+	var summary any
+	var action any
+	for _, root := range s.roots {
+		plan, err := s.read(root, target)
+		if err != nil {
+			return nil, err
+		}
+		if plan == nil {
+			continue
+		}
+		if summary != nil {
+			return nil, reject("Storage recovery evidence is ambiguous")
+		}
+		record := plan.record
+		pending := !record.ConfigReconciled && record.FstabBefore != Hash(record.FstabDesired)
+		summary = map[string]any{"action": record.Action, "target": record.Target, "phase": record.Phase, "configurationPending": pending, "configurationReconciled": record.ConfigReconciled}
+		if pending {
+			action = "storage.recover"
+		}
+	}
+	return json.Marshal(map[string]any{"target": target, "journal": summary, "automaticReplay": false, "recoveryAction": action})
+}

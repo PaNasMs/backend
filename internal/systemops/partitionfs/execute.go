@@ -306,6 +306,12 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 					found = true
 				}
 			}
+			if fs == "btrfs" {
+				if e = verifyBtrfsMount(dir, target, text(plan.row, "uuid")); e != nil {
+					return nil, e
+				}
+				found = true
+			}
 			if !found || mount.FSType != fs || mount.Target != points[0] {
 				return nil, reject("The mount changed; review a new operation plan")
 			}

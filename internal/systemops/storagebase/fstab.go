@@ -96,6 +96,7 @@ func EditFstab(current string, removeUUIDs map[string]bool, line string, missing
 		point = fields[1]
 	}
 	kept := []string{}
+	removed := false
 	for _, row := range strings.Split(strings.TrimSuffix(current, "\n"), "\n") {
 		fields := strings.Fields(row)
 		if len(fields) == 0 || strings.HasPrefix(strings.TrimSpace(row), "#") {
@@ -103,6 +104,7 @@ func EditFstab(current string, removeUUIDs map[string]bool, line string, missing
 			continue
 		}
 		if strings.HasPrefix(fields[0], "UUID=") && removeUUIDs[strings.TrimPrefix(fields[0], "UUID=")] {
+			removed = true
 			continue
 		}
 		if point != "" && len(fields) >= 4 && fields[1] == point {
@@ -124,6 +126,9 @@ func EditFstab(current string, removeUUIDs map[string]bool, line string, missing
 			continue
 		}
 		kept = append(kept, row)
+	}
+	if line == "" && !removed {
+		return current, nil
 	}
 	if line != "" {
 		kept = append(kept, line)

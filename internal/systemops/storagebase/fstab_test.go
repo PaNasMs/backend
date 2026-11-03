@@ -72,3 +72,12 @@ func TestFstabSupersedesOnlyUnavailableManagedVolume(t *testing.T) {
 		t.Fatal("present device superseded")
 	}
 }
+
+func TestFstabRemovalWithoutMatchPreservesExactBytes(t *testing.T) {
+	for _, before := range []string{"", "# no final newline", "\n\n", "UUID=keep /data ext4 defaults 0 2"} {
+		after, err := EditFstab(before, map[string]bool{"absent": true}, "", nil)
+		if err != nil || after != before {
+			t.Fatalf("%q became %q: %v", before, after, err)
+		}
+	}
+}

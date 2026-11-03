@@ -92,3 +92,12 @@ func TestMountDoesNotDisplaceForeignConfigurationForSameUUID(t *testing.T) {
 		t.Fatalf("managed row cannot move: %q %v", out, err)
 	}
 }
+
+func TestDiskPreparationDoesNotOwnGenericSystemdTimeout(t *testing.T) {
+	for _, opts := range []string{"x-systemd.device-timeout=30s", "rw,noatime,nofail,x-systemd.device-timeout=30s,nodev", "rw,noatime,nofail,x-systemd.device-timeout=30s # administrator-managed"} {
+		row := "UUID=selected /mnt/data ext4 " + opts + " 0 0\n"
+		if _, err := RemoveManagedFstabRows(row, map[string]bool{"selected": true}); err == nil {
+			t.Errorf("foreign options accepted: %s", opts)
+		}
+	}
+}

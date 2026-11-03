@@ -63,7 +63,7 @@ def main():
     command('mount', second, str(retained))
     marker = retained / 'payload'
     marker.write_text('retain the other volume')
-    fstab.write_text(before + f'UUID={shared_uuid} {retained} ext4 noauto,x-systemd.device-timeout=30s 0 0\n')
+    fstab.write_text(before + f'UUID={shared_uuid} {retained} ext4 rw,noatime,nofail,x-systemd.device-timeout=30s,noauto 0 0\n')
     expected = fstab.read_bytes()
     for action in ('disk.prepare', 'mount.attach', 'mount.settings', 'mount.open'):
         result = denied('plan', action, {'target': first, 'point': '/mnt/selected-clone'})

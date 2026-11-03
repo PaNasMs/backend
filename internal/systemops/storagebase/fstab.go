@@ -10,6 +10,7 @@ import (
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/folders"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
@@ -96,11 +97,19 @@ func managedFstabRow(fields []string) bool {
 	return false
 }
 
+// Older panel versions did not emit a dedicated owner tag. For a destructive
+// disk operation, recognize only rows matching the complete generated format.
+var panelMountOptions = regexp.MustCompile(`^(rw|ro),noatime,nofail,x-systemd\.device-timeout=30s(,noauto|,x-systemd\.automount,x-systemd\.idle-timeout=10min)?(,uid=[0-9]+,gid=[0-9]+,fmask=0113,dmask=0002|,noload)?$`)
+
+func generatedMountRow(fields []string) bool {
+	return len(fields) == 6 && fields[4] == "0" && fields[5] == "0" && panelMountOptions.MatchString(fields[3])
+}
+
 // Local disk preparation never assumes ownership of an administrator's boot entries.
 func RemoveManagedFstabRows(current string, uuids map[string]bool) (string, error) {
 	for _, line := range strings.Split(current, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) > 0 && strings.HasPrefix(fields[0], "UUID=") && uuids[strings.TrimPrefix(fields[0], "UUID=")] && !managedFstabRow(fields) {
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "UUID=") && uuids[strings.TrimPrefix(fields[0], "UUID=")] && !generatedMountRow(fields) {
 			return "", reject("This disk has a mount entry managed outside the panel. Review it before preparing the disk.")
 		}
 	}

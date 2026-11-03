@@ -361,7 +361,7 @@ func TestRecoveryOfLocalDiskPreparationPreservesExternalMountEntries(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "managed outside the panel") {
 		t.Fatalf("foreign entry accepted: %v", err)
 	}
-	*current = strings.Replace(*current, "defaults", "x-systemd.device-timeout=30s", 1)
+	*current = strings.Replace(*current, "defaults 0 2", "rw,noatime,nofail,x-systemd.device-timeout=30s 0 0", 1)
 	r.FstabBefore = Hash(*current)
 	save()
 	if _, err = s.prepare(context.Background(), r.Target); err != nil {

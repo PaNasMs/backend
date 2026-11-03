@@ -14,7 +14,7 @@ func TestForeignDuplicateUUIDPreservesConfiguredVolume(t *testing.T) {
 	p.Inventory.Rows["/dev/sdb"] = map[string]any{"path": "/dev/sdb", "kname": "sdb", "type": "disk", "fstype": "ext4", "uuid": "test-uuid", "mountpoints": []any{}}
 	p.Inventory.Parents["/dev/sdb"] = map[string]bool{}
 	s.fstab = func() (string, error) {
-		return "UUID=test-uuid /mnt/retained ext4 noauto,x-systemd.device-timeout=30s 0 2\n", nil
+		return "UUID=test-uuid /mnt/retained ext4 rw,noatime,nofail,x-systemd.device-timeout=30s,noauto 0 0\n", nil
 	}
 	for _, action := range []string{"disk.prepare", "mount.attach", "mount.open", "mount.settings"} {
 		_, e := s.prepare(context.Background(), action, map[string]any{"target": "/dev/sda", "point": "/mnt/data"}, "admin")

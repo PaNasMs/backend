@@ -95,17 +95,20 @@ func (s *service) archive(state *transaction) error {
 	if state == nil {
 		return nil
 	}
-	path := s.journalPath(state.Target)
-	// An existing reviewed record is retained, never silently replayed or deleted.
+	// Copy first: the old active record must survive failure to persist its successor.
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
 	history, err := os.CreateTemp(s.root, journalKey(state.Target)+".history-*")
 	if err != nil {
 		return err
 	}
-	name := history.Name()
-	if err = history.Close(); err != nil {
+	defer history.Close()
+	if _, err = history.Write(data); err != nil {
 		return err
 	}
-	if err = os.Rename(path, name); err != nil {
+	if err = history.Sync(); err != nil {
 		return err
 	}
 	dir, err := os.Open(s.root)

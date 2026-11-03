@@ -194,3 +194,28 @@ func updatedTable(p *prepared) []byte {
 	data, _ := json.Marshal(map[string]any{"partitiontable": table})
 	return data
 }
+
+func TestFailedSuccessorJournalDoesNotHideUnresolvedEvidence(t *testing.T) {
+	s, p := executionFixture(t)
+	old := &transaction{Schema: 1, Domain: "partitionfs", Phase: "pending", Action: "partition.resize", Target: p.target, Fingerprint: p.fingerprint, Identity: p.identity, Steps: []step{{Name: "resize-partition"}}, FstabDesired: p.config}
+	if err := s.save(old); err != nil {
+		t.Fatal(err)
+	}
+	p.previous = old
+	s.write = func(string, string, os.FileMode) error { return errors.New("injected full filesystem") }
+	s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+		t.Fatal("ran command without durable intent")
+		return nil, nil
+	}
+	if _, err := s.executePrepared(context.Background(), "partition.resize", nil, p, nil); err == nil {
+		t.Fatal("persist failure ignored")
+	}
+	after, err := s.load(p.target)
+	if err != nil || !reflect.DeepEqual(after, old) {
+		t.Fatalf("lost active unresolved journal: %+v %v", after, err)
+	}
+	files, err := filepath.Glob(filepath.Join(s.root, "*.history-*"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("%v %v", files, err)
+	}
+}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestPartitionFilesystemActionsRemainAdministratorOnly(t *testing.T) {
-	for _, action := range []string{"partition.create", "partition.delete", "partition.resize", "filesystem.format", "filesystem.remove", "filesystem.resize"} {
+	for _, action := range []string{"storage.recover", "partition.create", "partition.delete", "partition.resize", "filesystem.format", "filesystem.remove", "filesystem.resize"} {
 		for _, mode := range []systemops.Mode{systemops.ModePlan, systemops.ModeExecute, systemops.ModeRecover} {
 			d, _ := setup()
 			d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }

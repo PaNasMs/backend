@@ -85,6 +85,34 @@ def main():
         assert digest(payload) == original_hash
     finally:
         busy.terminate(); busy.wait(timeout=5)
+    ready = Path('/fixture/mapped-ready')
+    mapping_script = """
+import ctypes, mmap, os, sys, time
+from pathlib import Path
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mmap.restype = ctypes.c_void_p
+libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+with open(sys.argv[1], 'rb') as data:
+    address = libc.mmap(None, os.fstat(data.fileno()).st_size, mmap.PROT_READ, mmap.MAP_PRIVATE, data.fileno(), 0)
+    assert address != ctypes.c_void_p(-1).value, ctypes.get_errno()
+assert all(os.path.realpath('/proc/self/fd/' + fd) != sys.argv[1] for fd in os.listdir('/proc/self/fd'))
+Path('/fixture/mapped-ready').touch()
+time.sleep(120)
+"""
+    reader = subprocess.Popen(['/usr/bin/python3', '-c', mapping_script, str(payload)])
+    try:
+        for _ in range(100):
+            if ready.exists():
+                break
+            assert reader.poll() is None
+            time.sleep(.05)
+        assert ready.exists()
+        result = denied('plan', 'mount.detach', {'target': target})
+        assert str(reader.pid) in result['error'] and digest(payload) == original_hash, result
+    finally:
+        reader.terminate()
+        reader.wait(timeout=5)
+    print('PASS a closed-descriptor file mapping reports the busy process', flush=True)
     nested = point / 'nested'
     nested.mkdir()
     command('mount', '-t', 'tmpfs', 'tmpfs', str(nested))

@@ -198,11 +198,18 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	}
 	for _, m := range all {
 		selected := numbers[m.Device]
-		if !selected && v.fs == "btrfs" && m.FSType == "btrfs" && mountedPoint(row, m.Target) {
-			if err = verifyBtrfsPoint(m.Target, target, text(row, "uuid")); err != nil {
-				return nil, err
+		if !selected && m.FSType == "btrfs" {
+			for path := range v.identities {
+				child := pf.Inventory.Rows[path]
+				if text(child, "fstype") != "btrfs" || !mountedPoint(child, m.Target) {
+					continue
+				}
+				if err = verifyBtrfsPoint(m.Target, path, text(child, "uuid")); err != nil {
+					return nil, err
+				}
+				selected = true
+				break
 			}
-			selected = true
 		}
 		if selected {
 			if err = folders.MountPath(m.Target); err != nil {

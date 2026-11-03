@@ -1,6 +1,7 @@
 package storagebase
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -67,9 +68,20 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 	}
 	points := map[string]bool{}
 	ids := map[uint64]string{}
+	mappedDevices := map[string][]string{}
 	for _, m := range selected {
 		points[m.Target] = true
 		ids[m.ID] = m.Target
+		if m.Device != "" {
+			majorText, minorText, ok := strings.Cut(m.Device, ":")
+			major, majorErr := strconv.ParseUint(majorText, 10, 32)
+			minor, minorErr := strconv.ParseUint(minorText, 10, 32)
+			if !ok || majorErr != nil || minorErr != nil {
+				return reject("Could not verify process mount identity")
+			}
+			key := fmt.Sprintf("%02x:%02x", major, minor)
+			mappedDevices[key] = append(mappedDevices[key], m.Target)
+		}
 	}
 	problems := []string{}
 	for _, m := range selected {
@@ -160,6 +172,11 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 				}
 			}
 		}
+		if len(mappedDevices) > 0 {
+			if err := mappedVolumes(filepath.Join(root, "maps"), mappedDevices, busy); err != nil && !processGone(err) {
+				return reject("Could not check which processes use the volume. No unmount has started.")
+			}
+		}
 		if len(busy) == 0 {
 			continue
 		}
@@ -203,3 +220,25 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 	return nil
 }
 func processGone(err error) bool { return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) }
+
+func mappedVolumes(path string, devices map[string][]string, busy map[string]bool) error {
+	maps, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer maps.Close()
+	scanner := bufio.NewScanner(maps)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 {
+			return reject("Could not verify process mount identity")
+		}
+		// File mappings keep the filesystem busy even after the descriptor closes.
+		if fields[4] != "0" {
+			for _, point := range devices[fields[3]] {
+				busy[point] = true
+			}
+		}
+	}
+	return scanner.Err()
+}

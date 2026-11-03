@@ -69,3 +69,24 @@ func TestClonedMountIDsStillIdentifyProcessFilesystem(t *testing.T) {
 		})
 	}
 }
+
+func TestMissingMountNamespaceRequiresConfirmedZombie(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		status string
+		err    error
+		skip   bool
+	}{
+		{"Name:\tmisleading ) R (name\nState:\tZ (zombie)\n", unix.EINVAL, true},
+		{"Name:\tname ) Z\nState:\tS (sleeping)\n", unix.EINVAL, false},
+		{"State:\tZ (zombie)\n", unix.EACCES, false},
+		{"Name:\tzombie\n", unix.EINVAL, false},
+	} {
+		if err := os.WriteFile(filepath.Join(root, "status"), []byte(tc.status), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := mountNamespaceGone(root, tc.err); got != tc.skip {
+			t.Fatalf("state=%q err=%v skip=%v", tc.status, tc.err, got)
+		}
+	}
+}

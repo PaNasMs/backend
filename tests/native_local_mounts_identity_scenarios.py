@@ -125,7 +125,14 @@ def main():
         if reader.poll() is None:reader.terminate()
         reader.wait(timeout=5)
     print('PASS cloned namespace open file in nested Btrfs subvolume blocks detach',flush=True)
-    operation('mount.detach', {'target': second})
+    zombie=os.fork()
+    if zombie==0:os._exit(0)
+    try:
+        os.waitid(os.P_PID,zombie,os.WEXITED|os.WNOWAIT)
+        assert any(line.startswith('State:') and line.split()[1]=='Z' for line in Path('/proc',str(zombie),'status').read_text().splitlines())
+        operation('mount.detach', {'target': second})
+    finally:
+        os.waitpid(zombie,0)
     operation('mount.attach', params)
     assert marker.read_text() == 'btrfs data'
     operation('mount.detach', {'target': second})

@@ -148,7 +148,7 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 		namespaceIDs := map[uint64][]string{}
 		if len(btrfsDevices) > 0 {
 			raw, e := os.ReadFile(filepath.Join(root, "mountinfo"))
-			if processGone(e) {
+			if mountNamespaceGone(root, e) {
 				continue
 			}
 			if e != nil {
@@ -271,6 +271,26 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 		return reject(strings.Join(problems, " "))
 	}
 	return nil
+}
+func mountNamespaceGone(root string, err error) bool {
+	if processGone(err) {
+		return true
+	}
+	if !errors.Is(err, unix.EINVAL) {
+		return false
+	}
+	// A zombie has dropped its mount namespace; the kernel returns EINVAL for mountinfo.
+	data, e := os.ReadFile(filepath.Join(root, "status"))
+	if e != nil {
+		return processGone(e)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if state, ok := strings.CutPrefix(line, "State:"); ok {
+			fields := strings.Fields(state)
+			return len(fields) > 0 && fields[0] == "Z"
+		}
+	}
+	return false
 }
 func processGone(err error) bool { return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) }
 

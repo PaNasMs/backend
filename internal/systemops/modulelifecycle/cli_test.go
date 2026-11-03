@@ -224,3 +224,76 @@ func TestMutatingStartupRestoreFailureStillBlocksAgentStart(t *testing.T) {
 		t.Fatal("lost recovery evidence", err)
 	}
 }
+
+func TestStartupCleanupRefusalKeepsAgentServicesAndEvidence(t *testing.T) {
+	for _, phase := range []string{"orphan", "staging", "committed", "changed-backup"} {
+		t.Run(phase, func(t *testing.T) {
+			s := executionFixture(t)
+			if phase == "orphan" {
+				if err := os.Mkdir(filepath.Join(s.root, ".transaction"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				r, state := recoveryFixture(t, true)
+				s.store, s.units, s.health = r.store, r.units, r.health
+				state.Committed = phase != "staging"
+				if phase == "staging" {
+					state.Phase = "staging"
+					for _, id := range state.Affected {
+						if err := os.Rename(filepath.Join(s.root, id), filepath.Join(s.root, ".transaction", id)); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Rename(filepath.Join(s.root, ".transaction", "old-"+id), filepath.Join(s.root, id)); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(filepath.Join(s.units, unit(id)), state.Units[id].Data, 0640); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := s.saveRegistry(state.Before); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if phase == "changed-backup" {
+					if err := os.Rename(filepath.Join(s.root, ".transaction/old-app"), filepath.Join(s.root, ".transaction/preserved-app")); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(filepath.Join(s.root, ".transaction/old-app"), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := s.saveTransaction(state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.mounts = func() ([]string, error) {
+				if phase != "changed-backup" {
+					return []string{filepath.Join(s.root, ".transaction/mounted")}, nil
+				}
+				return nil, nil
+			}
+			s.run = func(context.Context, []string, systemops.CommandOptions) ([]byte, error) {
+				t.Fatal("read-only cleanup refusal touched a service")
+				return nil, nil
+			}
+			before, err := s.registry()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.recoverStartup(context.Background()); err == nil || !systemops.Unchanged(err) {
+				t.Fatal("cleanup preflight refusal classified as mutation", err)
+			}
+			var diagnostic bytes.Buffer
+			if err := s.startup(context.Background(), &diagnostic); err != nil || diagnostic.Len() == 0 {
+				t.Fatal("cleanup preflight refusal blocked administrative startup", err, diagnostic.String())
+			}
+			current, err := s.registry()
+			if err != nil || !registryEqual(before, current) {
+				t.Fatal("cleanup refusal changed registry", err)
+			}
+			if _, err := os.Stat(filepath.Join(s.root, ".transaction")); err != nil {
+				t.Fatal("cleanup refusal deleted evidence", err)
+			}
+		})
+	}
+}

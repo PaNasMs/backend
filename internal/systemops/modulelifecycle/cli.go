@@ -119,7 +119,7 @@ func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
 		return reject(incompleteRecovery)
 	}
 	restoring = true
-	if err = s.recovery().restore(ctx, state, nil); err != nil && !systemops.Unchanged(err) {
+	if err = s.recovery().restore(ctx, state, nil); err != nil && !systemops.Unchanged(err) && state.requiresBarrier() {
 		_ = s.haltAffected(ctx, state, nil)
 	}
 	return err

@@ -356,7 +356,13 @@ func (r recovery) restore(ctx context.Context, state *transaction, reporter *sys
 	return r.cleanup(state)
 }
 
-func (r recovery) cleanup(state *transaction) error {
+func (r recovery) cleanup(state *transaction) (err error) {
+	mutated := false
+	defer func() {
+		if err != nil && !mutated {
+			err = systemops.BeforeMutation(err)
+		}
+	}()
 	if err := r.noMounts(filepath.Join(r.root, ".transaction")); err != nil {
 		return err
 	}
@@ -376,7 +382,17 @@ func (r recovery) cleanup(state *transaction) error {
 			}
 		}
 	}
-	if err := r.removeTree(filepath.Join(r.root, ".transaction")); err != nil {
+	path := filepath.Join(r.root, ".transaction")
+	directory, err := trustedDirectory(path, r.owner)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	directory.Close()
+	mutated = true
+	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
 	dir, err := trustedDirectory(r.root, r.owner)

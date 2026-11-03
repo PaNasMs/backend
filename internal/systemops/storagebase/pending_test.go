@@ -26,24 +26,27 @@ func TestPendingOtherDomainBlocksAcrossBoots(t *testing.T) {
 		}
 	}
 	save()
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", current); err == nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", current); err == nil {
 		t.Fatal("pending operation ignored across boot")
 	}
-	if err := checkPendingRoots(roots, os.Getuid(), "partitionfs", current); err != nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "partitionfs", "/dev/sda", current); err != nil {
 		t.Fatal(err)
 	}
+	if err := checkPendingRoots(roots, os.Getuid(), "partitionfs", "/dev/sda1", current); err == nil {
+		t.Fatal("own-domain parent journal bypassed by child operation")
+	}
 	current.Devices = []storagequery.DeviceIdentity{{Path: "/dev/sdb", DeviceNumber: "8:16", DiskSequence: "12"}}
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", current); err != nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", current); err != nil {
 		t.Fatal(err)
 	}
 	record.Phase = "complete"
 	save()
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", old); err != nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", old); err != nil {
 		t.Fatal(err)
 	}
 	record.Schema = 2
 	save()
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", current); err == nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", current); err == nil {
 		t.Fatal("unknown complete schema ignored")
 	}
 }
@@ -55,12 +58,12 @@ func TestPendingRejectsLinksAndMalformedEvidence(t *testing.T) {
 	if err := os.Symlink("/dev/null", path); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", storagequery.StorageIdentity{}); err == nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", storagequery.StorageIdentity{}); err == nil {
 		t.Fatal("symlink followed")
 	}
 	os.Remove(path)
 	os.WriteFile(path, []byte("{"), 0600)
-	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", storagequery.StorageIdentity{}); err == nil {
+	if err := checkPendingRoots(roots, os.Getuid(), "localmounts", "/dev/sda", storagequery.StorageIdentity{}); err == nil {
 		t.Fatal("malformed journal ignored")
 	}
 }

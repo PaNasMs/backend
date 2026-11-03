@@ -27,13 +27,13 @@ type TransactionEnvelope struct {
 
 // Call under DomainLock after fresh identity capture. The owning domain must
 // inspect its own pending journal before any retry; this scan never clears one.
-func CheckPendingRoots(domain string, identity storagequery.StorageIdentity) error {
+func CheckPendingRoots(domain, target string, identity storagequery.StorageIdentity) error {
 	if (domain != "partitionfs" && domain != "localmounts") || identity.BootID == "" || len(identity.Devices) == 0 {
 		return reject("Storage transaction identity is invalid")
 	}
-	return checkPendingRoots(TransactionRoots, 0, domain, identity)
+	return checkPendingRoots(TransactionRoots, 0, domain, target, identity)
 }
-func checkPendingRoots(roots []PendingRoot, owner int, domain string, identity storagequery.StorageIdentity) error {
+func checkPendingRoots(roots []PendingRoot, owner int, domain, target string, identity storagequery.StorageIdentity) error {
 	for _, root := range roots {
 		if err := SecureDirectory(root.Path, owner, false); err != nil {
 			if os.IsNotExist(err) {
@@ -67,12 +67,12 @@ func checkPendingRoots(roots []PendingRoot, owner int, domain string, identity s
 				f.Close()
 				return reject("Storage transaction permissions are unsafe")
 			}
-			data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+			data, err := io.ReadAll(io.LimitReader(f, (2<<20)+1))
 			f.Close()
 			if err != nil {
 				return err
 			}
-			if len(data) > 1<<20 {
+			if len(data) > 2<<20 {
 				return reject("Storage transaction evidence is too large")
 			}
 			var record TransactionEnvelope
@@ -94,7 +94,7 @@ func checkPendingRoots(roots []PendingRoot, owner int, domain string, identity s
 			if !targetFound {
 				return reject("Storage transaction identity is invalid")
 			}
-			if record.Phase == "complete" || record.Domain == domain {
+			if record.Phase == "complete" || (record.Domain == domain && record.Target == target) {
 				continue
 			}
 			for _, old := range record.Identity.Devices {

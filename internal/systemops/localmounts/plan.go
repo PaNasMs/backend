@@ -274,13 +274,25 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 			v.details = append(v.details, m.Target)
 		}
 	case "mount.detach":
-		if len(v.selected) == 0 && (prior == nil || prior.Phase != "pending" || !prior.StageIntent) {
-			return nil, reject("Device is not mounted")
+		if len(v.selected) == 0 {
+			if prior == nil || prior.Phase != "pending" || (!prior.StageIntent && prior.MountID == 0) {
+				return nil, reject("Device is not mounted")
+			}
+			if prior.MountID != 0 && prior.Identity.BootID == boot {
+				for _, live := range all {
+					if live.ID == prior.MountID {
+						return nil, reject("The mount changed; review a new operation plan")
+					}
+				}
+			}
 		}
 		if err = s.blockers(ctx, v.selected, all); err != nil {
 			return nil, err
 		}
 		v.details = []string{target, "The volume will be unmounted without forcibly terminating processes"}
+		if len(v.selected) == 0 {
+			v.details = []string{target, "Clear the interrupted mount state after verifying that the mount is gone."}
+		}
 	default:
 		if v.fs == "" || slices.Contains([]string{"linux_raid_member", "crypto_LUKS", "swap"}, v.fs) {
 			return nil, reject("Select a file system")
@@ -418,6 +430,11 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 	}
 	if prior != nil && prior.Phase == "pending" {
 		v.details = append(v.details, "A previous operation is unfinished. This new confirmed plan preserves its evidence in history and does not replay its destructive steps.")
+	}
+	if action == "mount.attach" || action == "mount.open" || action == "mount.settings" {
+		if _, err = plannedFstab(action, v, p); err != nil {
+			return nil, err
+		}
 	}
 	raw, err := json.Marshal([]any{p, v.identities, v.selected, v.witness, storagebase.Hash(conf), v.options, revision, v.remountParent, v.stale})
 	if err != nil {

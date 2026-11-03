@@ -25,7 +25,7 @@ func VerifyBtrfsMount(dir *os.File, target, expectedUUID string) error {
 	}
 	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", fs.UUID[0:4], fs.UUID[4:6], fs.UUID[6:8], fs.UUID[8:10], fs.UUID[10:16])
 	if fs.Devices != 1 || expectedUUID == "" || uuid != strings.ToLower(expectedUUID) {
-		return reject("Resizing multi-device or changed Btrfs requires a separate workflow")
+		return reject("Multi-device or changed Btrfs volumes require a separate workflow")
 	}
 	var device struct {
 		ID          uint64

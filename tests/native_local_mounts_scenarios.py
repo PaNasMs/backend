@@ -64,7 +64,19 @@ def main():
     finally:
         command('umount', str(foreign))
     print('PASS foreign tmpfs with a missing device label is preserved', flush=True)
+    config = Path('/etc/fstab')
+    original = config.read_bytes()
+    volume_uuid = command('blkid', '-s', 'UUID', '-o', 'value', target)
+    custom = original + f'UUID={volume_uuid} /mnt/custom ext4 ro,nosuid,nodev 0 2\n'.encode()
+    config.write_bytes(custom)
+    try:
+        denied('plan', 'mount.attach', params)
+        assert config.read_bytes() == custom
+    finally:
+        config.write_bytes(original)
     operation('mount.attach', params)
+    rows = [line for line in Path('/proc/self/mountinfo').read_text().splitlines() if line.split()[4] == str(point)]
+    assert len(rows) == 1 and rows[0].split(' - ',1)[1].split()[1] == target, rows
     payload = point / 'payload'
     payload.write_bytes(b'GO09B retained data\n' * 8192)
     original_hash = digest(payload)

@@ -26,7 +26,21 @@ def main():
  devices=json.loads(Path('/fixture/devices.json').read_text());target=devices['partition'];point='/mnt/interrupted';params={'target':target,'point':point,'mountPolicy':'manual'}
  original=Path('/etc/fstab').read_bytes()
  shim=Path('/fixture/bin/mount')
- shim.write_text('#!/usr/bin/python3\nimport os,sys,time,json\nfrom pathlib import Path\nif Path("/fixture/pause-stage").exists():\n assert sys.argv[-1].startswith("/run/panasms-local-mounts/") and sys.argv[-1].endswith(".stage")\n Path("/fixture/mount-event").write_text(json.dumps({"pid":os.getpid(),"parent":os.getppid()}))\n while True:time.sleep(.05)\nos.execv("/usr/bin/mount",["mount",*sys.argv[1:]])\n');shim.chmod(0o755)
+ shim.write_text("""#!/usr/bin/python3
+import json,os,subprocess,sys,time
+from pathlib import Path
+stage=sys.argv[-1]
+assert stage.startswith("/run/panasms-local-mounts/") and stage.endswith(".stage")
+if Path("/fixture/pause-stage").exists():
+    Path("/fixture/mount-event").write_text(json.dumps({"pid":os.getpid(),"parent":os.getppid()}))
+    while True: time.sleep(.05)
+if Path("/fixture/reject-stage").exists():
+    sys.exit(17)
+if Path("/fixture/mounted-then-failed").exists():
+    subprocess.run(["/usr/bin/mount",*sys.argv[1:]],check=True)
+    sys.exit(17)
+os.execv("/usr/bin/mount",["mount",*sys.argv[1:]])
+""");shim.chmod(0o755)
  Path('/fixture/pause-stage').touch()
  plan=invoke('plan','mount.attach',params);assert not plan.get('error'),plan
  body=dict(action='mount.attach',params=params,fingerprint=plan['fingerprint'],confirmation=plan['confirmation'])
@@ -63,10 +77,36 @@ def main():
  Path('/fixture/fail-reload').touch()
  failed=invoke('execute','mount.attach',{**params,'mountPolicy':'boot'});assert failed.get('error'),failed
  Path('/fixture/fail-reload').unlink()
+ state=json.loads(journal.read_text())
+ assert not state.get('stageIntent') and state['mountID']>0
+ command('umount',point)
+ assert not os.path.ismount(point)
+ report=invoke('recover','mount.attach',params)
+ assert report.get('recoveryAction')=='mount.detach',report
  before=Path('/fixture/reload-count').read_text().count('\n')
  apply('mount.detach',{'target':target})
  assert Path('/fixture/reload-count').read_text().count('\n')>before
  apply('mount.attach',params);assert Path(point,'retained').read_text()=='after interrupted attach'
  apply('mount.detach',{'target':target})
+ readonly={**params,'mode':'readonly'}
+ Path('/fixture/reject-stage').touch()
+ failed=invoke('execute','mount.open',readonly)
+ assert failed.get('needsChoice') and not failed.get('error'),failed
+ state=json.loads(journal.read_text())
+ assert state['phase']=='complete' and not state.get('stageIntent') and not state.get('mountID')
+ assert not list(Path('/run/panasms-local-mounts').glob('*.stage'))
+ Path('/fixture/reject-stage').unlink()
+ apply('mount.open',readonly)
+ assert Path(point,'retained').read_text()=='after interrupted attach'
+ apply('mount.detach',{'target':target})
+ Path('/fixture/mounted-then-failed').touch()
+ failed=invoke('execute','mount.open',readonly)
+ assert failed.get('error') and not failed.get('needsChoice'),failed
+ state=json.loads(journal.read_text())
+ assert state['phase']=='pending' and state['stageIntent'] and os.path.ismount(state['stage'])
+ Path('/fixture/mounted-then-failed').unlink()
+ apply('mount.detach',{'target':target})
+ assert not list(Path('/run/panasms-local-mounts').glob('*.stage'))
+ print('PASS vanished published mount, empty failed stage and genuinely mounted failed stage recover separately',flush=True)
  print(json.dumps({'result':'PASS','scope':'real own helper SIGKILL and controlled daemon-reload failure; no powerloss/coldboot proof'}),flush=True)
 if __name__=='__main__':main()

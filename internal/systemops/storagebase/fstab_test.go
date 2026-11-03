@@ -81,3 +81,14 @@ func TestFstabRemovalWithoutMatchPreservesExactBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestMountDoesNotDisplaceForeignConfigurationForSameUUID(t *testing.T) {
+	before := "UUID=shared /home/archive ext4 nosuid,nodev,ro 0 2\n"
+	line := "UUID=shared /mnt/selected ext4 rw,noauto,x-systemd.device-timeout=30s 0 0"
+	if _, err := EditFstab(before, map[string]bool{"shared": true}, line, nil); err == nil {
+		t.Fatal("foreign row silently discarded")
+	}
+	if out, err := EditFstab(strings.Replace(before, "nosuid,nodev,ro", "x-systemd.device-timeout=30s", 1), map[string]bool{"shared": true}, line, nil); err != nil || !strings.Contains(out, line) {
+		t.Fatalf("managed row cannot move: %q %v", out, err)
+	}
+}

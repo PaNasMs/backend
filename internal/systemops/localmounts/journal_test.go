@@ -1,8 +1,10 @@
 package localmounts
 
 import (
+	"context"
 	"errors"
 	"os"
+	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
 	"testing"
@@ -71,5 +73,33 @@ func TestJournalHistoryLeavesActiveUntilReplacement(t *testing.T) {
 	}
 	if err = archiveJournal(root, state.Target, revision, os.Getuid()); err == nil {
 		t.Fatal("stale plan accepted")
+	}
+}
+
+func TestDetachClearsInterruptedMountAfterItDisappears(t *testing.T) {
+	s := fixtureService(t)
+	state := testJournal()
+	state.Action = "mount.attach"
+	state.MountID = 101
+	if err := writeJournal(s.root, s.owner, state); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"target": state.Target}
+	if _, err := s.prepare(context.Background(), "mount.detach", params, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	s.mounts = func() ([]folders.LiveMount, error) {
+		return []folders.LiveMount{{ID: 101, Device: "8:97", Target: "/mnt/changed", Root: "/"}}, nil
+	}
+	if _, err := s.prepare(context.Background(), "mount.detach", params, "admin"); err == nil {
+		t.Fatal("live unaccounted mount id ignored")
+	}
+	state.Identity.BootID = "older-boot"
+	if err := writeJournal(s.root, s.owner, state); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.prepare(context.Background(), "mount.detach", params, "admin")
+	if err != nil || len(plan.selected) != 0 {
+		t.Fatalf("reused id treated as old mount: %v", err)
 	}
 }

@@ -95,7 +95,7 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		return nil, systemops.BeforeMutation(err)
 	}
 	defer pin.Close()
-	desired, err := desiredFstab(action, v)
+	desired, err := plannedFstab(action, v, p)
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
@@ -122,13 +122,9 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 	var response map[string]any
 	switch action {
 	case "mount.open":
-		var complete bool
-		response, complete, err = s.open(ctx, v, p, pin, state, save, r)
+		response, err = s.open(ctx, v, p, pin, state, save, r)
 		if err != nil {
 			return nil, err
-		}
-		if !complete {
-			return json.Marshal(response)
 		}
 		if state.MountID == 0 {
 			desired = v.conf
@@ -265,6 +261,23 @@ func combinedIdentity(v *plan) storagequery.StorageIdentity {
 	sort.Slice(result.Devices, func(i, j int) bool { return result.Devices[i].Path < result.Devices[j].Path })
 	return result
 }
+func plannedFstab(action string, v *plan, p map[string]any) (string, error) {
+	if action == "mount.open" {
+		mode := text(p, "mode")
+		if mode == "repair-only" {
+			return v.conf, nil
+		}
+		if len(v.selected) > 0 && mode != "repair" {
+			readOnly := mode == "readonly" || ((mode == "" || mode == "auto") && p["readOnly"] == true)
+			alreadyReadOnly := strings.Contains(","+v.selected[0].Options+",", ",ro,")
+			if !readOnly || alreadyReadOnly {
+				return v.conf, nil
+			}
+		}
+	}
+	return desiredFstab(action, v)
+}
+
 func desiredFstab(action string, v *plan) (string, error) {
 	if action == "mount.detach" || action == "disk.eject" {
 		return v.conf, nil

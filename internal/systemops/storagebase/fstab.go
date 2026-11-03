@@ -84,6 +84,18 @@ func EscapeFstab(path string) string {
 	return strings.NewReplacer(`\`, `\134`, " ", `\040`, "\t", `\011`).Replace(path)
 }
 
+func managedFstabRow(fields []string) bool {
+	if len(fields) < 4 {
+		return false
+	}
+	for _, option := range strings.Split(fields[3], ",") {
+		if option == "x-systemd.device-timeout=30s" {
+			return true
+		}
+	}
+	return false
+}
+
 // Preserve comments and unrelated rows; only a vanished panel-managed UUID may
 // be superseded at the selected destination, matching existing installed fstab.
 func EditFstab(current string, removeUUIDs map[string]bool, line string, missing func(string) (bool, error)) (string, error) {
@@ -104,15 +116,14 @@ func EditFstab(current string, removeUUIDs map[string]bool, line string, missing
 			continue
 		}
 		if strings.HasPrefix(fields[0], "UUID=") && removeUUIDs[strings.TrimPrefix(fields[0], "UUID=")] {
+			if line != "" && (len(fields) < 2 || fields[1] != point) && !managedFstabRow(fields) {
+				return "", reject("This volume has an existing mount configuration at another location. Review it before continuing.")
+			}
 			removed = true
 			continue
 		}
 		if point != "" && len(fields) >= 4 && fields[1] == point {
-			managed := false
-			for _, opt := range strings.Split(fields[3], ",") {
-				managed = managed || opt == "x-systemd.device-timeout=30s"
-			}
-			if !strings.HasPrefix(fields[0], "UUID=") || !managed || missing == nil {
+			if !strings.HasPrefix(fields[0], "UUID=") || !managedFstabRow(fields) || missing == nil {
 				return "", reject("The mount point is already used by another volume")
 			}
 			absent, err := missing(strings.TrimPrefix(fields[0], "UUID="))

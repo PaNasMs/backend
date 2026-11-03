@@ -2,6 +2,7 @@ package localmounts
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"panasms.local/backend/internal/systemops"
@@ -9,6 +10,10 @@ import (
 	"panasms.local/backend/internal/systemops/volumeaccess"
 	"strings"
 )
+
+type mountCommandFailure struct{ error }
+
+func (e *mountCommandFailure) Unwrap() error { return e.error }
 
 func emptyDirectory(f *os.File) error {
 	names, err := f.Readdirnames(1)
@@ -46,13 +51,27 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 	if err = os.Mkdir(state.Stage, 0700); err != nil {
 		return err
 	}
+	var commandErr error
 	if err = step(state, "stage-mount", save, func() error {
 		if err := pin.Verify(); err != nil {
 			return err
 		}
-		_, err := s.run(ctx, []string{"mount", "--no-canonicalize", "-t", v.fs, "-o", v.options, "--", pin.Path(), state.Stage}, systemops.CommandOptions{Operation: true, Reporter: r})
-		return err
+		// The kernel retains this source in mountinfo after the worker exits.
+		_, commandErr = s.run(ctx, []string{"mount", "--no-canonicalize", "-t", v.fs, "-o", v.options, "--", v.target, state.Stage}, systemops.CommandOptions{Operation: true, Reporter: r})
+		return commandErr
 	}); err != nil {
+		if commandErr == nil {
+			return err
+		}
+		if cleanupErr := s.cleanupPrivateStage(v, state); cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
+		if saveErr := save(state); saveErr != nil {
+			return errors.Join(err, saveErr)
+		}
+		return &mountCommandFailure{commandErr}
+	}
+	if err = pin.Verify(); err != nil {
 		return err
 	}
 	mounts, err := s.mounts()

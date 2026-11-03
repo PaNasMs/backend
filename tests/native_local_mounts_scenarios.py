@@ -53,6 +53,17 @@ def main():
     params = {'target': target, 'point': str(point), 'mountPolicy': 'manual'}
     for mode in ('plan', 'recover'):
         denied(mode, 'mount.attach', params, user='nobody')
+    foreign = Path('/mnt/foreign-tmpfs')
+    foreign.mkdir()
+    command('mount', '-t', 'tmpfs', '--no-canonicalize', '/dev/panasms-absent-fixture', str(foreign))
+    try:
+        marker = foreign / 'retained'
+        marker.write_text('foreign mount')
+        denied('plan', 'mount.open', {**params, 'point': str(foreign), 'mode': 'readonly'})
+        assert marker.read_text() == 'foreign mount'
+    finally:
+        command('umount', str(foreign))
+    print('PASS foreign tmpfs with a missing device label is preserved', flush=True)
     operation('mount.attach', params)
     payload = point / 'payload'
     payload.write_bytes(b'GO09B retained data\n' * 8192)

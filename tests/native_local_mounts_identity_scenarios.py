@@ -92,6 +92,8 @@ def main():
     point = Path('/mnt/btrfs-access')
     params = {'target': second, 'point': str(point), 'mountPolicy': 'manual'}
     operation('mount.attach', params)
+    acl = command('getfacl', '-cpn', '--', str(point)).splitlines()
+    assert 'group:100:rwx' in acl and 'default:group:100:rwx' in acl, acl
     marker = point / 'retained'
     marker.write_text('btrfs data')
     operation('mount.detach', {'target': second})

@@ -1,6 +1,8 @@
 package volumeaccess
 
 import (
+	"errors"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"os/user"
@@ -83,5 +85,22 @@ func TestLiveSharedVolume(t *testing.T) {
 			details, _ := exec.Command("findmnt", "-no", "OPTIONS", "--target", point).Output()
 			t.Fatalf("user %d: %v: %s; mount options: %s", i, e, out, details)
 		}
+	}
+}
+
+func TestSelectedBtrfsCannotAuthorizeAnUnrelatedDirectory(t *testing.T) {
+	point := t.TempDir()
+	var st unix.Statx_t
+	if err := unix.Statx(unix.AT_FDCWD, point, 0, unix.STATX_MNT_ID, &st); err != nil {
+		t.Fatal(err)
+	}
+	m := mount{point: point, id: strconv.FormatUint(st.Mnt_id, 10), fs: "btrfs", root: "/", device: "0:0"}
+	witness := btrfsWitness{mountID: st.Mnt_id + 1, target: "/dev/unrelated", uuid: "unrelated"}
+	if err := apply(m, &witness); err == nil || err.Error() != "mount replaced at "+point {
+		t.Fatalf("wrong mount ID: %v", err)
+	}
+	witness.mountID = st.Mnt_id
+	if err := apply(m, &witness); err == nil || (!errors.Is(err, unix.ENOTTY) && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.EOPNOTSUPP) && err.Error() != "Multi-device or changed Btrfs volumes require a separate workflow") {
+		t.Fatalf("foreign filesystem identity: %v", err)
 	}
 }

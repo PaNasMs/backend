@@ -138,9 +138,16 @@ func (s *service) attach(ctx context.Context, v *plan, pin *storagebase.PinnedDe
 		return err
 	}
 	if !strings.HasPrefix(v.options, "ro,") {
-		if err = step(state, "volume-access", save, func() error { return volumeaccess.ApplyMounted(v.point) }); err != nil {
+		if err = step(state, "volume-access", save, func() error { return v.applyAccess(state.MountID, pin.Identity.UUID) }); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (v *plan) applyAccess(mountID uint64, uuid string) error {
+	if v.fs == "btrfs" {
+		return volumeaccess.ApplyMountedBtrfs(v.point, mountID, v.target, uuid)
+	}
+	return volumeaccess.ApplyMounted(v.point)
 }

@@ -9,7 +9,6 @@ import (
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
-	"panasms.local/backend/internal/systemops/volumeaccess"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -229,8 +228,13 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		}
 	}
 	if action == "mount.settings" && !strings.HasPrefix(v.options, "ro,") {
-		if err = perform("volume-access", func() error { return volumeaccess.ApplyMounted(v.point) }); err != nil {
-			return nil, err
+		for _, live := range v.selected {
+			if live.Target == v.point {
+				if err = perform("volume-access", func() error { return v.applyAccess(live.ID, pin.Identity.UUID) }); err != nil {
+					return nil, err
+				}
+				break
+			}
 		}
 	}
 	state.ConfigReconciled = true

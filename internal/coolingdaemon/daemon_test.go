@@ -123,11 +123,17 @@ func TestCPUProfilePreservesCriticalTrip(t *testing.T) {
 		_ = writeValue(filepath.Join(root, fmt.Sprintf("trip_point_%d_type", i)), "active")
 		_ = writeValue(filepath.Join(root, fmt.Sprintf("trip_point_%d_temp", i)), "75000")
 	}
-	if _, err := applyCPU("balanced", root); err != nil {
-		t.Fatal(err)
-	}
-	if readText(filepath.Join(root, "trip_point_0_temp")) != "110000" || readText(filepath.Join(root, "trip_point_1_temp")) != "45000" || readText(filepath.Join(root, "trip_point_4_temp")) != "70000" {
-		t.Fatal("wrong thresholds")
+	for _, tc := range []struct{ profile, first, last string }{
+		{"performance", "40000", "65000"},
+		{"balanced", "45000", "70000"},
+		{"quiet", "45000", "75000"},
+	} {
+		if _, err := applyCPU(tc.profile, root); err != nil {
+			t.Fatal(err)
+		}
+		if readText(filepath.Join(root, "trip_point_0_temp")) != "110000" || readText(filepath.Join(root, "trip_point_1_temp")) != tc.first || readText(filepath.Join(root, "trip_point_4_temp")) != tc.last {
+			t.Fatalf("incorrect %s trip points", tc.profile)
+		}
 	}
 	_ = writeValue(filepath.Join(root, "trip_point_4_type"), "critical")
 	if _, err := applyCPU("quiet", root); err == nil {

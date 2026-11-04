@@ -66,3 +66,52 @@ func ApplyFrequency(root string, limit int) error {
 	}
 	return os.WriteFile(filepath.Join(dir, "scaling_max_freq"), []byte(strconv.Itoa(limit)), 0644)
 }
+
+// Remember the pre-management ceiling across daemon restarts so rolling back
+// to an older configuration with no CPU field restores the owner's policy.
+func ReconcileFrequency(root string, desired, applied *int) (*int, error) {
+	marker := filepath.Join(root, "run/panasms-cooling/cpu-frequency.previous")
+	path := filepath.Join(root, cpuPolicies, "policy0/scaling_max_freq")
+	if desired == nil {
+		previous, err := os.ReadFile(marker)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return applied, err
+		}
+		if len(cpuFrequencies(root)) == 0 {
+			return applied, fmt.Errorf("CPU frequency control unavailable")
+		}
+		limit, err := strconv.Atoi(strings.TrimSpace(string(previous)))
+		if err != nil || limit <= 0 {
+			return applied, fmt.Errorf("invalid saved CPU ceiling")
+		}
+		if err = os.WriteFile(path, []byte(strconv.Itoa(limit)), 0644); err != nil {
+			return applied, err
+		}
+		if err = os.Remove(marker); err != nil {
+			return applied, err
+		}
+		return nil, nil
+	}
+	if applied != nil && *applied == *desired {
+		return applied, nil
+	}
+	if _, err := os.Stat(marker); os.IsNotExist(err) {
+		previous, err := os.ReadFile(path)
+		if err != nil {
+			return applied, err
+		}
+		if err = os.WriteFile(marker, previous, 0600); err != nil {
+			return applied, err
+		}
+	} else if err != nil {
+		return applied, err
+	}
+	if err := ApplyFrequency(root, *desired); err != nil {
+		return applied, err
+	}
+	limit := *desired
+	return &limit, nil
+}

@@ -263,11 +263,10 @@ func Run(ctx context.Context) (err error) {
 				c.ControlGPIO = h.wiring.Control
 				c.TachGPIO = h.wiring.Tach
 			}
-			if c.CPUMaxKHz != nil && (frequencyApplied == nil || *frequencyApplied != c.Limit()) {
-				if e := cooling.ApplyFrequency("/", c.Limit()); e == nil {
-					applied := c.Limit()
-					frequencyApplied = &applied
-				}
+			frequencyApplied, e = cooling.ReconcileFrequency("/", c.CPUMaxKHz, frequencyApplied)
+			var frequencyError string
+			if e != nil {
+				frequencyError = e.Error()
 			}
 			if c.CPUProfile != cpuApplied {
 				cpuStatus, e = applyCPU(c.CPUProfile, "/sys/class/thermal/thermal_zone0")
@@ -317,7 +316,7 @@ func Run(ctx context.Context) (err error) {
 			if !state.at.IsZero() {
 				age = math.Round(now.Sub(state.at).Seconds())
 			}
-			status := map[string]any{"frequencyAppliedKHz": frequencyApplied, "profile": c.Profile, "sampleSeconds": c.SampleSeconds, "dutyPercent": math.Round(actual * 100), "reason": reason, "disks": state.disks, "observedAt": float64(now.UnixNano()) / 1e9, "sampleAgeSeconds": age, "controller": h.wiring.Mode, "rpm": h.rpm, "cpu": cpuStatus, "hardware": h.wiring, "hardwareAttempt": attempted, "hardwareError": hardwareError}
+			status := map[string]any{"frequencyError": frequencyError, "frequencyAppliedKHz": frequencyApplied, "profile": c.Profile, "sampleSeconds": c.SampleSeconds, "dutyPercent": math.Round(actual * 100), "reason": reason, "disks": state.disks, "observedAt": float64(now.UnixNano()) / 1e9, "sampleAgeSeconds": age, "controller": h.wiring.Mode, "rpm": h.rpm, "cpu": cpuStatus, "hardware": h.wiring, "hardwareAttempt": attempted, "hardwareError": hardwareError}
 			if e = atomicJSON(statusPath, status); e != nil {
 				return e
 			}

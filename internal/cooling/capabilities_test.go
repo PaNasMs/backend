@@ -64,6 +64,19 @@ func TestCapabilities(t *testing.T) {
 			t.Fatal(string(raw))
 		}
 	}
+	put("run/panasms-cooling/status.json", "{}")
+	put(dir+"scaling_max_freq", "1500000")
+	limit := 1800000
+	if _, err := ReconcileFrequency(root, &limit, nil); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := ReconcileFrequency(root, nil, nil); err != nil || applied != nil {
+		t.Fatal(applied, err)
+	}
+	restored, _ := os.ReadFile(filepath.Join(root, dir, "scaling_max_freq"))
+	if string(restored) != "1500000" {
+		t.Fatal("wrong pre-management ceiling", string(restored))
+	}
 	if ApplyFrequency(root, 1700000) == nil {
 		t.Fatal("unadvertised clock accepted")
 	}

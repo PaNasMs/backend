@@ -173,4 +173,7 @@ func TestDisplaySkipsUnchangedPages(t *testing.T) {
 	check(pageBytes)
 	frame[512] = 0
 	check(pageBytes)
+	device.lastFullFrame = time.Now().Add(-time.Minute)
+	check(8*pageBytes + 2)
+	check(0)
 }

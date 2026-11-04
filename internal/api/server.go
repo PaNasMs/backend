@@ -52,6 +52,7 @@ type Server struct {
 	notificationsRevision atomic.Value
 	monitorStorage        system.Storage
 	storageRevision       uint64
+	storageReadAt         time.Time
 	knownDevices          map[string]deviceSnapshot
 	seenEjects            map[string]bool
 	revision              atomic.Uint64

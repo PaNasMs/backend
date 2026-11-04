@@ -9,16 +9,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/powercontrol"
 )
 
 type Device struct {
-	file     *os.File
-	settings Settings
-	frame    [1024]byte
-	ready    bool
+	file          *os.File
+	settings      Settings
+	frame         [1024]byte
+	lastFullFrame time.Time
 }
 
 func checkCooling(s Settings) error {
@@ -127,9 +128,10 @@ func pageCommand(controller string, page int) []byte {
 	return []byte{byte(0xb0 + page), offset, 0x10}
 }
 func (d *Device) Display(frame [1024]byte) error {
+	full := time.Since(d.lastFullFrame) >= time.Minute
 	for page := 0; page < 8; page++ {
 		offset := page * 128
-		if d.ready && bytes.Equal(d.frame[offset:offset+128], frame[offset:offset+128]) {
+		if !full && bytes.Equal(d.frame[offset:offset+128], frame[offset:offset+128]) {
 			continue
 		}
 		if e := d.command(pageCommand(d.settings.Controller, page)...); e != nil {
@@ -141,12 +143,12 @@ func (d *Device) Display(frame [1024]byte) error {
 			}
 		}
 	}
-	if !d.ready {
+	if full {
 		if err := d.command(0xaf); err != nil {
 			return err
 		}
+		d.lastFullFrame = time.Now()
 	}
-	d.ready = true
 	d.frame = frame
 	return nil
 }

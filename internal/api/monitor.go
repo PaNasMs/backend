@@ -162,7 +162,7 @@ func (s *Server) deviceEvent(message string, warning bool) {
 func (s *Server) monitorDevices(ctx context.Context, jobs []management.Job) (system.Storage, error) {
 	revision := s.revision.Load()
 	snapshot := s.monitorStorage
-	refresh := revision != s.storageRevision || time.Since(snapshot.ObservedAt) >= 30*time.Second
+	refresh := revision != s.storageRevision || time.Since(s.storageReadAt) >= 30*time.Second
 	for _, job := range jobs {
 		if job.Status == "running" || job.Status == "queued" {
 			refresh = true
@@ -177,9 +177,10 @@ func (s *Server) monitorDevices(ctx context.Context, jobs []management.Job) (sys
 		var err error
 		snapshot, err = system.StorageRead(ctx)
 		if err != nil {
-			s.monitorStorage = system.Storage{}
+			s.storageReadAt = time.Time{}
 			return snapshot, err
 		}
+		s.storageReadAt = time.Now()
 		s.monitorStorage = snapshot
 		s.storageRevision = revision
 	}

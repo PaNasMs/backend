@@ -124,9 +124,9 @@ func TestCPUProfilePreservesCriticalTrip(t *testing.T) {
 		_ = writeValue(filepath.Join(root, fmt.Sprintf("trip_point_%d_temp", i)), "75000")
 	}
 	for _, tc := range []struct{ profile, first, last string }{
-		{"performance", "40000", "65000"},
-		{"balanced", "40000", "70000"},
 		{"quiet", "45000", "75000"},
+		{"balanced", "40000", "70000"},
+		{"performance", "40000", "65000"},
 	} {
 		if _, err := applyCPU(tc.profile, root); err != nil {
 			t.Fatal(err)
@@ -139,7 +139,7 @@ func TestCPUProfilePreservesCriticalTrip(t *testing.T) {
 	if _, err := applyCPU("quiet", root); err == nil {
 		t.Fatal("accepted critical mapping")
 	}
-	if readText(filepath.Join(root, "trip_point_1_temp")) != "45000" {
+	if readText(filepath.Join(root, "trip_point_1_temp")) != "40000" {
 		t.Fatal("partial update")
 	}
 }

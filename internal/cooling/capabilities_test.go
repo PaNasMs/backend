@@ -47,7 +47,30 @@ func TestCapabilities(t *testing.T) {
 	if !DetectCapabilities(root).Disk {
 		t.Fatal("RP1 not detected before fan configuration")
 	}
+	dir := cpuPolicies + "/policy0/"
+	put(dir+"scaling_min_freq", "1500000")
+	put(dir+"cpuinfo_max_freq", "2400000")
+	put(dir+"scaling_max_freq", "2400000")
+	put(dir+"scaling_available_frequencies", "1500000 1800000 2400000")
+	for _, tc := range []struct {
+		selected int
+		expected string
+	}{{1800000, "1800000"}, {0, "2400000"}} {
+		if err := ApplyFrequency(root, tc.selected); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(root, dir, "scaling_max_freq"))
+		if string(raw) != tc.expected {
+			t.Fatal(string(raw))
+		}
+	}
+	if ApplyFrequency(root, 1700000) == nil {
+		t.Fatal("unadvertised clock accepted")
+	}
 	put("proc/device-tree/model", "Other board")
+	if len(cpuFrequencies(root)) != 0 || ApplyFrequency(root, 1800000) == nil {
+		t.Fatal("non-Pi clock control enabled")
+	}
 	if DetectCapabilities(root).Disk {
 		t.Fatal("unsupported board")
 	}

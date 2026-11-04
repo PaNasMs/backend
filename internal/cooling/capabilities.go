@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 type Capabilities struct {
-	CPU  bool `json:"cpu"`
-	Disk bool `json:"disk"`
+	Frequencies []int `json:"cpuFrequenciesKHz,omitempty"`
+	CPU         bool  `json:"cpu"`
+	Disk        bool  `json:"disk"`
 }
 
 func DetectCapabilities(root string) Capabilities {
@@ -18,7 +20,7 @@ func DetectCapabilities(root string) Capabilities {
 		return strings.Trim(strings.TrimSpace(string(raw)), "\x00")
 	}
 	zone := "sys/class/thermal/thermal_zone0"
-	caps := Capabilities{CPU: read(zone+"/type") == "cpu-thermal"}
+	caps := Capabilities{Frequencies: cpuFrequencies(root), CPU: read(zone+"/type") == "cpu-thermal"}
 	for i := 1; i <= 4; i++ {
 		base := fmt.Sprintf("%s/trip_point_%d", zone, i)
 		info, err := os.Stat(filepath.Join(root, base+"_temp"))
@@ -40,6 +42,9 @@ func DetectCapabilities(root string) Capabilities {
 }
 
 func validateCapabilities(old, next Settings, caps Capabilities) error {
+	if next.Limit() != old.Limit() && (len(caps.Frequencies) == 0 || (next.Limit() != 0 && !slices.Contains(caps.Frequencies, next.Limit()))) {
+		return fmt.Errorf("unsupported CPU frequency")
+	}
 	if !caps.CPU && old.CPUProfile != next.CPUProfile {
 		return fmt.Errorf("CPU cooling control is not supported on this system")
 	}

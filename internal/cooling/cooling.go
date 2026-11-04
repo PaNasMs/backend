@@ -13,6 +13,7 @@ import (
 )
 
 type Settings struct {
+	CPUMaxKHz     *int   `json:"cpuMaxKHz,omitempty"`
 	CPUProfile    string `json:"cpuProfile"`
 	Profile       string `json:"profile"`
 	SampleSeconds int    `json:"sampleSeconds"`
@@ -20,6 +21,14 @@ type Settings struct {
 	ControlGPIO   int    `json:"controlGPIO"`
 	TachGPIO      *int   `json:"tachGPIO"`
 }
+
+func (s Settings) Limit() int {
+	if s.CPUMaxKHz == nil {
+		return 0
+	}
+	return *s.CPUMaxKHz
+}
+
 type config struct {
 	Settings
 	Disks []string `json:"disks"`
@@ -113,6 +122,9 @@ func Save(settings Settings) error {
 	}
 	previous := append([]byte(nil), raw...)
 	old := normalize(cfg.Settings)
+	if settings.CPUMaxKHz == nil {
+		settings.CPUMaxKHz = old.CPUMaxKHz
+	}
 	if settings.HardwareMode == "" {
 		settings.HardwareMode, settings.ControlGPIO, settings.TachGPIO = old.HardwareMode, old.ControlGPIO, old.TachGPIO
 	}
@@ -145,18 +157,23 @@ func Save(settings Settings) error {
 	if err = writeConfig(raw); err != nil {
 		return err
 	}
-	if old.HardwareMode == settings.HardwareMode && old.ControlGPIO == settings.ControlGPIO && samePin(old.TachGPIO, settings.TachGPIO) {
+	if old.Limit() == settings.Limit() && old.HardwareMode == settings.HardwareMode && old.ControlGPIO == settings.ControlGPIO && samePin(old.TachGPIO, settings.TachGPIO) {
 		return nil
 	}
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
 		stateRaw, readErr := os.ReadFile("/run/panasms-cooling/status.json")
 		var state struct {
-			Attempt  Settings `json:"hardwareAttempt"`
-			Error    string   `json:"hardwareError"`
-			Observed float64  `json:"observedAt"`
+			Frequency *int     `json:"frequencyAppliedKHz"`
+			Attempt   Settings `json:"hardwareAttempt"`
+			Error     string   `json:"hardwareError"`
+			Observed  float64  `json:"observedAt"`
 		}
 		if readErr == nil && json.Unmarshal(stateRaw, &state) == nil && time.Now().Unix()-int64(state.Observed) < 5 && state.Attempt.HardwareMode == settings.HardwareMode && state.Attempt.ControlGPIO == settings.ControlGPIO && samePin(state.Attempt.TachGPIO, settings.TachGPIO) {
+			if state.Error == "" && old.Limit() != settings.Limit() && (state.Frequency == nil || *state.Frequency != settings.Limit()) {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
 			if state.Error == "" {
 				return nil
 			}

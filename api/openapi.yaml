@@ -1963,6 +1963,7 @@ components:
           type: integer
           minimum: 30
           maximum: 600
+        cpuMaxKHz: {type: integer, minimum: 0, description: CPU frequency ceiling in kHz. Zero selects the system maximum.}
         cpuProfile:
           type: string
           enum:
@@ -1984,6 +1985,7 @@ components:
           required: [cpu, disk]
           description: Supported control interfaces, independent of controller service health. GPIO support does not prove a fan is wired.
           properties:
+            cpuFrequenciesKHz: {type: array, items: {type: integer}}
             cpu: {type: boolean}
             disk: {type: boolean}
         config:

@@ -221,7 +221,7 @@ func Run(ctx context.Context) (err error) {
 	kickUntil := time.Time{}
 	value := .5
 	previousTarget := -1.0
-	frequencyApplied := 0
+	var frequencyApplied *int
 	cpuApplied := ""
 	cpuStatus := map[string]any{"available": false}
 	notify("READY=1")
@@ -263,9 +263,10 @@ func Run(ctx context.Context) (err error) {
 				c.ControlGPIO = h.wiring.Control
 				c.TachGPIO = h.wiring.Tach
 			}
-			if c.Limit() != frequencyApplied {
+			if c.CPUMaxKHz != nil && (frequencyApplied == nil || *frequencyApplied != c.Limit()) {
 				if e := cooling.ApplyFrequency("/", c.Limit()); e == nil {
-					frequencyApplied = c.Limit()
+					applied := c.Limit()
+					frequencyApplied = &applied
 				}
 			}
 			if c.CPUProfile != cpuApplied {

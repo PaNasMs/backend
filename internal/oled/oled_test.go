@@ -143,3 +143,34 @@ func TestRotationAndFrameBounds(t *testing.T) {
 		t.Fatal("incorrect page addressing")
 	}
 }
+
+func TestDisplaySkipsUnchangedPages(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "i2c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	device := Device{file: file}
+	var frame [1024]byte
+	check := func(want int64) {
+		t.Helper()
+		start, err := file.Seek(0, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := device.Display(frame); err != nil {
+			t.Fatal(err)
+		}
+		end, err := file.Seek(0, 1)
+		if err != nil || end-start != want {
+			t.Fatalf("wrote %d bytes, want %d, err=%v", end-start, want, err)
+		}
+	}
+	const pageBytes = 4 + 4*33
+	check(8*pageBytes + 2)
+	check(0)
+	frame[512] = 1
+	check(pageBytes)
+	frame[512] = 0
+	check(pageBytes)
+}

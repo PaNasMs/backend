@@ -189,8 +189,8 @@ func RunButton(ctx context.Context) {
 		gesture = buttonGesture{}
 	}
 	defer closeLine()
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
 	var nextCheck time.Time
 	var lastError string
 	reportError := func(e error) {
@@ -201,10 +201,15 @@ func RunButton(ctx context.Context) {
 		}
 	}
 	for {
+		delay := time.Second
+		if line != nil {
+			delay = 25 * time.Millisecond
+		}
+		timer.Reset(delay)
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
+		case now := <-timer.C:
 			if !now.Before(nextCheck) {
 				nextCheck = now.Add(time.Second)
 				unlock, e := Lock()

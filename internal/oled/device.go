@@ -1,6 +1,7 @@
 package oled
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 type Device struct {
 	file     *os.File
 	settings Settings
+	frame    [1024]byte
+	ready    bool
 }
 
 func checkCooling(s Settings) error {
@@ -93,7 +96,7 @@ func Open(s Settings) (*Device, error) {
 		f.Close()
 		return nil, e
 	}
-	d := &Device{f, s}
+	d := &Device{file: f, settings: s}
 	init := []byte{0xae, 0xd5, 0x80, 0xa8, 0x3f, 0xd3, 0x00, 0x40}
 	if s.Controller == "sh1106" {
 		init = append(init, 0xad, 0x8b)
@@ -125,6 +128,10 @@ func pageCommand(controller string, page int) []byte {
 }
 func (d *Device) Display(frame [1024]byte) error {
 	for page := 0; page < 8; page++ {
+		offset := page * 128
+		if d.ready && bytes.Equal(d.frame[offset:offset+128], frame[offset:offset+128]) {
+			continue
+		}
 		if e := d.command(pageCommand(d.settings.Controller, page)...); e != nil {
 			return e
 		}
@@ -134,7 +141,14 @@ func (d *Device) Display(frame [1024]byte) error {
 			}
 		}
 	}
-	return d.command(0xaf)
+	if !d.ready {
+		if err := d.command(0xaf); err != nil {
+			return err
+		}
+	}
+	d.ready = true
+	d.frame = frame
+	return nil
 }
 func (d *Device) Close() error {
 	e := d.command(0xae)

@@ -1,6 +1,7 @@
 package oled
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,14 +9,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/powercontrol"
 )
 
 type Device struct {
-	file     *os.File
-	settings Settings
+	file          *os.File
+	settings      Settings
+	frame         [1024]byte
+	lastFullFrame time.Time
 }
 
 func checkCooling(s Settings) error {
@@ -93,7 +97,7 @@ func Open(s Settings) (*Device, error) {
 		f.Close()
 		return nil, e
 	}
-	d := &Device{f, s}
+	d := &Device{file: f, settings: s}
 	init := []byte{0xae, 0xd5, 0x80, 0xa8, 0x3f, 0xd3, 0x00, 0x40}
 	if s.Controller == "sh1106" {
 		init = append(init, 0xad, 0x8b)
@@ -124,7 +128,12 @@ func pageCommand(controller string, page int) []byte {
 	return []byte{byte(0xb0 + page), offset, 0x10}
 }
 func (d *Device) Display(frame [1024]byte) error {
+	full := time.Since(d.lastFullFrame) >= time.Minute
 	for page := 0; page < 8; page++ {
+		offset := page * 128
+		if !full && bytes.Equal(d.frame[offset:offset+128], frame[offset:offset+128]) {
+			continue
+		}
 		if e := d.command(pageCommand(d.settings.Controller, page)...); e != nil {
 			return e
 		}
@@ -134,7 +143,14 @@ func (d *Device) Display(frame [1024]byte) error {
 			}
 		}
 	}
-	return d.command(0xaf)
+	if full {
+		if err := d.command(0xaf); err != nil {
+			return err
+		}
+		d.lastFullFrame = time.Now()
+	}
+	d.frame = frame
+	return nil
 }
 func (d *Device) Close() error {
 	e := d.command(0xae)

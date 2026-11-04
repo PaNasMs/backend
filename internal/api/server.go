@@ -50,6 +50,9 @@ type Server struct {
 	metricsError          bool
 	jobsRevision          atomic.Value
 	notificationsRevision atomic.Value
+	monitorStorage        system.Storage
+	storageRevision       uint64
+	storageReadAt         time.Time
 	knownDevices          map[string]deviceSnapshot
 	seenEjects            map[string]bool
 	revision              atomic.Uint64

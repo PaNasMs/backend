@@ -9,7 +9,7 @@ import (
 )
 
 var profiles = map[string][3]float64{"quiet": {40, 45, 50}, "balanced": {35, 40, 45}, "performance": {30, 35, 40}}
-var cpuProfiles = map[string][4]int{"quiet": {45000, 60000, 67500, 75000}, "balanced": {45000, 55000, 64000, 70000}, "performance": {40000, 50000, 60000, 65000}}
+var cpuProfiles = map[string][4]int{"quiet": {45000, 60000, 67500, 75000}, "balanced": {40000, 55000, 64000, 70000}, "performance": {40000, 50000, 60000, 65000}}
 
 // While all disks sleep the fan stops below sleepingOff and starts again from sleepingOn (°C, disk
 // temperature read in standby). Disks that cannot be read in standby use the CPU temperature instead,

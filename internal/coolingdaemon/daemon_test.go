@@ -125,7 +125,7 @@ func TestCPUProfilePreservesCriticalTrip(t *testing.T) {
 	}
 	for _, tc := range []struct{ profile, first, last string }{
 		{"performance", "40000", "65000"},
-		{"balanced", "45000", "70000"},
+		{"balanced", "40000", "70000"},
 		{"quiet", "45000", "75000"},
 	} {
 		if _, err := applyCPU(tc.profile, root); err != nil {

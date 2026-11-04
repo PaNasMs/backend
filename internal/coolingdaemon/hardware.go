@@ -139,11 +139,12 @@ type hardware struct {
 	pulses        atomic.Uint64
 	rpm           *int
 	since         time.Time
+	tachPaused    bool
 	actual        float64
 }
 
 func openHardware(w Wiring) (h *hardware, err error) {
-	h = &hardware{wiring: w, since: time.Now(), actual: -1}
+	h = &hardware{wiring: w, actual: -1}
 	if w.Mode == "none" {
 		return h, nil
 	}
@@ -202,6 +203,7 @@ func openHardware(w Wiring) (h *hardware, err error) {
 		if err != nil {
 			return nil, err
 		}
+		h.since = time.Now()
 	}
 	if err = atomicJSON(markerPath, w); err != nil {
 		return nil, err
@@ -236,7 +238,7 @@ func (h *hardware) tick(ctx context.Context, actual float64) error {
 				return err
 			}
 		}
-		wait(ctx, 25*time.Millisecond)
+		wait(ctx, time.Second)
 	} else if h.wiring.Mode == "external-pwm" {
 		v := 0
 		if actual > 0 {
@@ -246,7 +248,7 @@ func (h *hardware) tick(ctx context.Context, actual float64) error {
 			return err
 		}
 		if actual == 0 || actual == 1 {
-			wait(ctx, 25*time.Millisecond)
+			wait(ctx, time.Second)
 		} else {
 			wait(ctx, time.Duration(actual*float64(25*time.Millisecond)))
 			if err := h.control.SetValue(0); err != nil {
@@ -255,13 +257,32 @@ func (h *hardware) tick(ctx context.Context, actual float64) error {
 			wait(ctx, time.Duration((1-actual)*float64(25*time.Millisecond)))
 		}
 	} else {
-		wait(ctx, 25*time.Millisecond)
+		wait(ctx, time.Second)
 	}
 	h.actual = actual
-	if h.tach != nil && time.Since(h.since) >= 2*time.Second {
-		rpm := int(math.Round(float64(h.pulses.Swap(0)) * 30 / time.Since(h.since).Seconds()))
+	if h.tach == nil || ctx.Err() != nil {
+		return nil
+	}
+	now := time.Now()
+	elapsed := now.Sub(h.since)
+	if h.tachPaused {
+		if elapsed < 4*time.Second {
+			return nil
+		}
+		h.pulses.Store(0)
+		if err := h.tach.Reconfigure(gpio.WithBothEdges); err != nil {
+			return err
+		}
+		h.since = now
+		h.tachPaused = false
+	} else if elapsed >= time.Second {
+		if err := h.tach.Reconfigure(gpio.WithoutEdges); err != nil {
+			return err
+		}
+		rpm := int(math.Round(float64(h.pulses.Swap(0)) * 30 / elapsed.Seconds()))
 		h.rpm = &rpm
-		h.since = time.Now()
+		h.since = now
+		h.tachPaused = true
 	}
 	return nil
 }

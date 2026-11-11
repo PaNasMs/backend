@@ -15,7 +15,7 @@ func (s *service) open(ctx context.Context, v *plan, p map[string]any, pin *stor
 	}
 	readonly := mode == "readonly" || (mode == "auto" && p["readOnly"] == true)
 	choice := func(reason string) map[string]any {
-		return map[string]any{"needsChoice": true, "reason": reason, "repairAvailable": s.checkAvailable(v.fs), "message": "Choose how to open the volume before mounting"}
+		return map[string]any{"needsChoice": true, "reason": reason, "repairAvailable": s.repairAvailable(v.fs), "message": "Choose how to open the volume before mounting"}
 	}
 	if v.stale != nil {
 		if !staleBlockMount(*v.stale) {
@@ -74,7 +74,7 @@ func (s *service) open(ctx context.Context, v *plan, p map[string]any, pin *stor
 		if err = step(state, "filesystem-check", save, func() error { clean, reason = s.checkFilesystem(ctx, pin.Path(), v.fs, repair, r); return nil }); err != nil {
 			return nil, err
 		}
-		if err = saveHealth("/run/panasms-filesystems", 0, pin.Identity, clean, reason, s.checkAvailable(v.fs)); err != nil {
+		if err = saveHealth("/run/panasms-filesystems", 0, pin.Identity, clean, reason, s.repairAvailable(v.fs)); err != nil {
 			return nil, err
 		}
 		if !clean {

@@ -12,11 +12,15 @@ import (
 )
 
 func (s *service) checkFilesystem(ctx context.Context, source, fs string, repair bool, r *systemops.Reporter) (bool, string) {
-	if !s.checkAvailable(fs) {
+	if !s.checkAvailable(fs) || (repair && !s.repairAvailable(fs)) {
 		return false, "Checking and repair are not yet available for this file system"
 	}
 	tool := checkers[fs]
 	flags := []string{"-n"}
+	if fs == "ntfs3" {
+		tool = "ntfs-3g.probe"
+		flags = []string{"--readwrite"}
+	}
 	if tool == "e2fsck" {
 		flags = []string{"-f", "-n"}
 	}

@@ -240,9 +240,6 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 			}
 		}
 		details = []string{target, "New file system: " + format}
-		if format == "ntfs" {
-			details = append(details, "For ntfs automatic checking is unavailable. You can mount the volume read-only.")
-		}
 		if fs != "" {
 			details = append(details, "Current file system: "+fs)
 		}

@@ -275,7 +275,7 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		err = run("remove-filesystem", []string{"wipefs", "--all", "--types", fs, "--", target}, "")
 	case "filesystem.format":
 		format := text(params, "format")
-		args := map[string][]string{"ext4": {"mkfs.ext4", "-F"}, "xfs": {"mkfs.xfs", "-f"}, "btrfs": {"mkfs.btrfs", "-f"}, "vfat": {"mkfs.vfat"}}[format]
+		args := storagequery.FormatCommand(format)
 		if len(args) == 0 {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}

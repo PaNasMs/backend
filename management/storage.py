@@ -1031,8 +1031,18 @@ def removable_filesystem(target, inv):
             "Select a supported data file system, not a RAID member or encrypted container")
 
 
+FORMAT_COMMANDS = {
+    "ext4": ["mkfs.ext4", "-F"],
+    "xfs": ["mkfs.xfs", "-f"],
+    "btrfs": ["mkfs.btrfs", "-f"],
+    "vfat": ["mkfs.vfat"],
+    "fat32": ["mkfs.vfat", "-F", "32"],
+    "ntfs": ["mkfs.ntfs", "--quick"],
+}
+
+
 def supported_formats():
-    return [f for f in ("ext4", "xfs", "btrfs", "vfat") if shutil.which("mkfs." + f)]
+    return [name for name, args in FORMAT_COMMANDS.items() if shutil.which(args[0])]
 
 
 def without_array(config, uuid):
@@ -1351,12 +1361,7 @@ def execute_unlocked(action, p, user=None):
             fstab_change(inv[target]["uuid"])
     elif action == "filesystem.format":
         fs = p["format"]
-        args = {
-            "ext4": ["mkfs.ext4", "-F"],
-            "xfs": ["mkfs.xfs", "-f"],
-            "btrfs": ["mkfs.btrfs", "-f"],
-            "vfat": ["mkfs.vfat"],
-        }[fs]
+        args = FORMAT_COMMANDS[fs]
         command([*args, target], timeout=86400)
         # udev does not always re-read an md array after mkfs; without the new
         # signature in its database the volume stays invisible in the panel.
@@ -1710,7 +1715,8 @@ def query(view, target):
                     "shrink": True,
                     "resizeRequiresMount": True,
                 },
-                "vfat": {"create": bool(shutil.which("mkfs.vfat")), "grow": False, "shrink": False},
+                **{name: {"create": bool(shutil.which(FORMAT_COMMANDS[name][0])), "grow": False, "shrink": False}
+                   for name in ("vfat", "fat32", "ntfs")},
             },
         }
     if view == "smart":

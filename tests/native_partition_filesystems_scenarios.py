@@ -107,9 +107,10 @@ def main():
   report=invoke('recover','storage.recover',{'target':second})
   assert report['ok'] and report['data'].get('recoveryAction') is None,report
  print('PASS actual format then fstab/reload failures recover configuration without repeated formatting',flush=True)
- for filesystem in ('vfat','btrfs','xfs'):
+ for filesystem in ('vfat','fat32','ntfs','btrfs','xfs'):
   apply('filesystem.format',{'target':second,'format':filesystem})
-  assert command('blkid','-s','TYPE','-o','value',second)==filesystem
+  assert command('blkid','-s','TYPE','-o','value',second)==('vfat' if filesystem=='fat32' else filesystem)
+  if filesystem=='fat32':assert 'VERSION=FAT32' in command('blkid','-p','-o','export',second).splitlines()
   command('mount',second,'/mnt/data');data.write_bytes(b'GO09A mounted resize\n'*4096);mounted_hash=digest(data)
   if filesystem=='btrfs':
    apply('filesystem.resize',{'target':second,'sizeMiB':256});assert digest(data)==mounted_hash
@@ -119,7 +120,7 @@ def main():
    apply('filesystem.resize',{'target':second,'sizeMiB':0});assert digest(data)==mounted_hash
   command('umount','/mnt/data')
   assert digest(marker)==first_hash
- print('PASS actual FAT/Btrfs/XFS formats and mounted Btrfs/XFS resize identity',flush=True)
+ print('PASS actual FAT/FAT32/NTFS/Btrfs/XFS formats and mounted Btrfs/XFS resize identity',flush=True)
  apply('filesystem.remove',{'target':second});assert not command('wipefs','--no-act','--output','TYPE','--noheadings',second)
  apply('partition.delete',{'target':second});assert not Path('/sys/class/block/'+Path(second).name).exists()
  assert json.loads(command('sfdisk','--json',disk))['partitiontable']['partitions'][0]==before_first and digest(marker)==first_hash

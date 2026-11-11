@@ -51,7 +51,7 @@ func pinnedRunner(run runner, pins []*storagebase.PinnedDevice) runner {
 		utility := filepath.Base(args[0])
 		useDevice := false
 		switch utility {
-		case "sfdisk", "parted", "partx", "wipefs", "e2fsck", "resize2fs", "mkfs.ext4", "mkfs.xfs", "mkfs.btrfs", "mkfs.vfat":
+		case "sfdisk", "parted", "partx", "wipefs", "e2fsck", "resize2fs", "mkfs.ext4", "mkfs.xfs", "mkfs.btrfs", "mkfs.vfat", "mkfs.ntfs":
 			useDevice = true
 		}
 		if useDevice {

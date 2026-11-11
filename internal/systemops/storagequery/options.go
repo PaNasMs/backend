@@ -16,6 +16,27 @@ import (
 	"panasms.local/backend/internal/systemops/disksleep"
 )
 
+var filesystemFormats = []struct {
+	name    string
+	command []string
+}{
+	{"ext4", []string{"mkfs.ext4", "-F"}},
+	{"xfs", []string{"mkfs.xfs", "-f"}},
+	{"btrfs", []string{"mkfs.btrfs", "-f"}},
+	{"vfat", []string{"mkfs.vfat"}},
+	{"fat32", []string{"mkfs.vfat", "-F", "32"}},
+	{"ntfs", []string{"mkfs.ntfs", "--quick"}},
+}
+
+func FormatCommand(name string) []string {
+	for _, format := range filesystemFormats {
+		if format.name == name {
+			return append([]string(nil), format.command...)
+		}
+	}
+	return nil
+}
+
 type optionsEnvironment struct {
 	units, health string
 	now           time.Time
@@ -159,12 +180,13 @@ func (s *service) options(ctx context.Context, env optionsEnvironment) (any, err
 	}
 	formats := []string{}
 	capabilities := map[string]any{}
-	for _, fs := range []string{"ext4", "xfs", "btrfs", "vfat"} {
-		create := env.available("mkfs." + fs)
+	for _, format := range filesystemFormats {
+		fs := format.name
+		create := env.available(format.command[0])
 		if create {
 			formats = append(formats, fs)
 		}
-		cap := map[string]any{"create": create, "grow": fs != "vfat", "shrink": fs == "ext4" || fs == "btrfs"}
+		cap := map[string]any{"create": create, "grow": fs == "ext4" || fs == "btrfs" || fs == "xfs", "shrink": fs == "ext4" || fs == "btrfs"}
 		if fs == "ext4" {
 			cap["resizeRequiresUnmount"] = true
 		}

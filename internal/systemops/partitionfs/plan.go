@@ -206,12 +206,11 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 			return nil, err
 		}
 		format := text(params, "format")
-		switch format {
-		case "ext4", "xfs", "btrfs", "vfat":
-		default:
+		command := storagequery.FormatCommand(format)
+		if len(command) == 0 {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}
-		if _, err = s.find("mkfs." + format); err != nil {
+		if _, err = s.find(command[0]); err != nil {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}
 		if fs == "linux_raid_member" {

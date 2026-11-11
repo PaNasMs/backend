@@ -32,3 +32,23 @@ func TestRepairFailureDoesNotProceedOrClaimClean(t *testing.T) {
 		t.Fatalf("%v %q %d", clean, reason, calls)
 	}
 }
+
+func TestNTFSWritableProbeNeverOffersRepair(t *testing.T) {
+	for _, result := range []error{nil, errors.New("volume is hibernated")} {
+		calls := 0
+		s := &service{tool: func(name string) bool { return name == "ntfs-3g.probe" }, run: func(_ context.Context, args []string, opts systemops.CommandOptions) ([]byte, error) {
+			calls++
+			if !reflect.DeepEqual(args, []string{"ntfs-3g.probe", "--readwrite", "/proc/123/fd/4"}) || opts.Operation || !reflect.DeepEqual(opts.Accepted, []int{0}) {
+				t.Fatalf("unexpected probe: %v %+v", args, opts)
+			}
+			return nil, result
+		}}
+		clean, _ := s.checkFilesystem(context.Background(), "/proc/123/fd/4", "ntfs3", false, nil)
+		if clean != (result == nil) || s.repairAvailable("ntfs3") {
+			t.Fatalf("probe result %v, clean %v", result, clean)
+		}
+		if ok, _ := s.checkFilesystem(context.Background(), "/proc/123/fd/4", "ntfs3", true, nil); ok || calls != 1 {
+			t.Fatal("NTFS repair accepted")
+		}
+	}
+}

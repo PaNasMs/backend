@@ -865,8 +865,6 @@ def plan(action, p):
                     require(inv[target]["size"] // 1048576 >= minimum,
                             f'FAT32 requires at least {minimum} MiB on this device. Choose FAT (auto) for a smaller volume.')
                 details = [target, 'New file system: ' + p["format"]]
-                if p["format"] == "ntfs":
-                    details.append("For ntfs automatic checking is unavailable. You can mount the volume read-only.")
                 if inv[target].get("fstype"):
                     details.append('Current file system: ' + inv[target]["fstype"])
                 details.append('FORMATTING WILL DESTROY DATA')
@@ -1145,7 +1143,7 @@ def open_filesystem(target, p, user, inv):
             command(["umount", "--", point])
     unused(target, inventory())
     if not readonly:
-        if not filesystem_health.repair_available(fs):
+        if not filesystem_health.check_available(fs):
             return choice(
                 'For ' + fs + ' automatic checking is unavailable. You can mount the volume read-only.'
             )
@@ -1412,6 +1410,8 @@ def execute_unlocked(action, p, user=None):
                 directory.chmod(0o755)
         uuid = inv[target]["uuid"]
         opts = mount_options(p)
+        fs = inv[target]["fstype"]
+        driver = "ntfs3" if fs == "ntfs" else fs
         if inv[target]["fstype"] in ("vfat", "exfat", "ntfs", "ntfs3"):
             require(bool(user), 'No user specified for mounting the volume')
             owner = pwd.getpwnam(user)
@@ -1420,12 +1420,16 @@ def execute_unlocked(action, p, user=None):
             opts += ",noload"
         if action == "mount.attach":
             require(str(point) not in mount_targets(), 'The mount point is already used by another volume')
+        if action == "mount.attach" and driver == "ntfs3" and not p.get("readOnly"):
+            clean, reason = filesystem_health.check(target, fs)
+            require(clean, reason)
         escaped = str(point).replace("\\", "\\134").replace(" ", "\\040")
         fstab_change(
-            uuid, f'UUID={uuid} {escaped} {inv[target]["fstype"]} {opts} 0 0'
+            uuid, f'UUID={uuid} {escaped} {driver} {opts} 0 0'
         )
         if action == "mount.attach":
-            command(["mount", "-o", opts, "--", target, str(point)])
+            driver_args = ["-t", driver] if driver == "ntfs3" else []
+            command(["mount", *driver_args, "-o", opts, "--", target, str(point)])
         if not p.get("readOnly"):
             command(["/usr/lib/panasms/panasms-system-helper", "volume-access", "apply", str(point)])
     elif action == "mount.detach":

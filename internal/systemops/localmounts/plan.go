@@ -166,6 +166,11 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 		return nil, err
 	}
 	v := &plan{target: target, fs: text(row, "fstype"), conf: conf, preflight: pf, mounts: all, identities: map[string]storagequery.StorageIdentity{}}
+	// lsblk reports the on-disk signature. Use the kernel driver so mountinfo
+	// retains the block device number used for staging, detach and recovery.
+	if v.fs == "ntfs" {
+		v.fs = "ntfs3"
+	}
 	prior, revision, err := readJournal(s.root, target, s.owner)
 	if err != nil {
 		return nil, err
@@ -413,7 +418,7 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 				return nil, reject("Volume already mounted. Unmount it before repairing.")
 			}
 			if mode == "repair" || mode == "repair-only" {
-				if !s.checkAvailable(v.fs) {
+				if !s.repairAvailable(v.fs) {
 					return nil, reject("Automatic repair is unavailable for this file system")
 				}
 				if err = s.blockers(ctx, v.selected, all); err != nil {
@@ -472,6 +477,13 @@ func (s *service) prepare(ctx context.Context, action string, p map[string]any, 
 var checkers = map[string]string{"vfat": "fsck.fat", "exfat": "fsck.exfat", "ext2": "e2fsck", "ext3": "e2fsck", "ext4": "e2fsck"}
 
 func (s *service) checkAvailable(fs string) bool {
+	if fs == "ntfs3" {
+		return s.tool("ntfs-3g.probe")
+	}
+	return s.repairAvailable(fs)
+}
+
+func (s *service) repairAvailable(fs string) bool {
 	tool := checkers[fs]
 	return tool != "" && s.tool(tool)
 }

@@ -2,6 +2,8 @@ from common import *
 
 CHECKERS = {
     "vfat": ("fsck.fat", ["-n"], ["-a"]),
+    "ntfs": ("ntfs-3g.probe", ["--readwrite"], None),
+    "ntfs3": ("ntfs-3g.probe", ["--readwrite"], None),
     "exfat": ("fsck.exfat", ["-n"], ["-p"]),
     "ext2": ("e2fsck", ["-f", "-n"], ["-p"]),
     "ext3": ("e2fsck", ["-f", "-n"], ["-p"]),
@@ -9,12 +11,18 @@ CHECKERS = {
 }
 
 
+def check_available(fs):
+    if fs in ("ntfs", "ntfs3"):
+        return bool(shutil.which(CHECKERS[fs][0]))
+    return repair_available(fs)
+
+
 def repair_available(fs):
-    return fs in CHECKERS and bool(shutil.which(CHECKERS[fs][0]))
+    return fs in CHECKERS and CHECKERS[fs][2] is not None and bool(shutil.which(CHECKERS[fs][0]))
 
 
 def check(target, fs, repair=False):
-    require(repair_available(fs), 'Checking and repair are not yet available for this file system')
+    require(repair_available(fs) if repair else check_available(fs), 'Checking and repair are not yet available for this file system')
     tool, inspect, fix = CHECKERS[fs]
     print(
         json.dumps(
@@ -121,7 +129,7 @@ def inspect_added(name):
         old = cached(target)
         if old and old["status"] in ("clean", "errors", "unavailable"):
             return
-        supported = repair_available(row["fstype"])
+        supported = check_available(row["fstype"])
         save_state(target, "checking")
         clean, reason = (
             check(target, row["fstype"])
@@ -132,7 +140,7 @@ def inspect_added(name):
             target,
             "clean" if clean else "errors" if supported else "unavailable",
             reason,
-            supported and not row.get("ro"),
+            repair_available(row["fstype"]) and not row.get("ro"),
         )
     subprocess.run(["udevadm", "trigger", "--action=change", "/sys/class/block/" + name], check=False)
 

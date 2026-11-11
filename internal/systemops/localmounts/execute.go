@@ -94,6 +94,11 @@ func (s *service) execute(ctx context.Context, action string, p map[string]any, 
 		return nil, systemops.BeforeMutation(err)
 	}
 	defer pin.Close()
+	if action == "mount.attach" && v.fs == "ntfs3" && !strings.HasPrefix(v.options, "ro,") {
+		if clean, reason := s.checkFilesystem(ctx, pin.Path(), v.fs, false, r); !clean {
+			return nil, systemops.BeforeMutation(reject(reason))
+		}
+	}
 	desired, err := plannedFstab(action, v, p)
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)

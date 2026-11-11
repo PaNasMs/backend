@@ -1179,9 +1179,10 @@ def execute(action, p, user=None):
 
 
 def execute_locked(action, p, user=None):
-    if action in ("mount.open", "mount.attach", "mount.detach", "filesystem.remove"):
-        with filesystem_health.device_lock(os.path.realpath(p.get("target", ""))):
-            return execute_unlocked(action, p, user)
+    if action in ("mount.open", "mount.attach", "mount.detach", "filesystem.format", "filesystem.remove"):
+        target = os.path.realpath(p.get("target", ""))
+        with filesystem_health.device_lock(target):
+            return execute_unlocked(action, {**p, "target": target}, user)
     return execute_unlocked(action, p, user)
 
 
@@ -1368,6 +1369,9 @@ def execute_unlocked(action, p, user=None):
         if inv[target].get("uuid"):
             fstab_change(inv[target]["uuid"])
     elif action == "filesystem.format":
+        protected(target, inv)
+        unused(target, inv)
+        require(inv[target].get("fstype") != "linux_raid_member", 'Cannot format a RAID member')
         fs = p["format"]
         if fs == "ntfs":
             signatures = json_command(["wipefs", "--json", "--no-act", "--output", "TYPE,USAGE", "--", target])["signatures"]

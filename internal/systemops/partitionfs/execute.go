@@ -279,6 +279,29 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		if len(args) == 0 {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}
+		if format == "ntfs" {
+			output, err := s.run(ctx, []string{"wipefs", "--json", "--no-act", "--output", "TYPE,USAGE", "--", target}, systemops.CommandOptions{})
+			if err != nil {
+				return nil, err
+			}
+			var probe struct {
+				Signatures []struct{ Type, Usage string }
+			}
+			if err = json.Unmarshal(output, &probe); err != nil || probe.Signatures == nil {
+				return nil, reject("Could not read the partition table. No changes were made.")
+			}
+			var types []string
+			for _, sig := range probe.Signatures {
+				if sig.Usage == "filesystem" {
+					types = append(types, sig.Type)
+				}
+			}
+			if len(types) > 0 {
+				if err = run("remove-filesystem-signatures", []string{"wipefs", "--all", "--types", strings.Join(types, ","), "--", target}, ""); err != nil {
+					return nil, err
+				}
+			}
+		}
 		err = run("format-filesystem", append(args, target), "")
 	case "filesystem.resize":
 		if strings.HasPrefix(fs, "ext") {

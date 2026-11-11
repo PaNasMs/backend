@@ -107,14 +107,17 @@ def main():
   report=invoke('recover','storage.recover',{'target':second})
   assert report['ok'] and report['data'].get('recoveryAction') is None,report
  print('PASS actual format then fstab/reload failures recover configuration without repeated formatting',flush=True)
- for filesystem in ('vfat','fat32','ntfs','btrfs','xfs'):
+ for filesystem in ('vfat','fat32','btrfs','ntfs','xfs'):
+  command('sync','-f',str(marker))
   apply('filesystem.format',{'target':second,'format':filesystem})
   assert command('blkid','-s','TYPE','-o','value',second)==('vfat' if filesystem=='fat32' else filesystem)
   if filesystem=='fat32':assert 'VERSION=FAT32' in command('blkid','-p','-o','export',second).splitlines()
   if filesystem=='ntfs':
    payload=Path('/fixture/ntfs-data');payload.write_text('USB file on NTFS')
    command('ntfscp',second,str(payload),'/payload')
-   assert command('ntfscat',second,'/payload')==payload.read_text() and digest(marker)==first_hash
+   assert command('ntfscat',second,'/payload')==payload.read_text()
+   assert command('blkid','-p','-s','TYPE','-o','value',second)=='ntfs'
+   command('umount','/mnt/neighbor');command('mount',first,'/mnt/neighbor');assert digest(marker)==first_hash
    continue
   command('mount',second,'/mnt/data');data.write_bytes(b'GO09A mounted resize\n'*4096);mounted_hash=digest(data)
   if filesystem=='btrfs':

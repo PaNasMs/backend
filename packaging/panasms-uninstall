@@ -17,7 +17,7 @@ owned = ['/etc/panasms/panasms.env', '/etc/panasms/web.env', '/var/lib/panasms-a
          '/var/lib/panasms/state.db', '/var/lib/panasms/state.db-wal', '/var/lib/panasms/state.db-shm', '/var/lib/panasms/state.db.initialized']
 # Dependencies that keep user storage and shares working after the panel is gone.
 # apt would otherwise offer them for autoremove.
-tools = ['mdadm', 'parted', 'e2fsprogs', 'dosfstools', 'exfatprogs', 'xfsprogs', 'btrfs-progs', 'cryptsetup-bin',
+tools = ['mdadm', 'parted', 'e2fsprogs', 'dosfstools', 'ntfs-3g', 'exfatprogs', 'xfsprogs', 'btrfs-progs', 'cryptsetup-bin',
          'cifs-utils', 'nfs-common', 'nfs-kernel-server', 'samba', 'samba-common-bin', 'smbclient', 'smartmontools',
          'hdparm', 'rsync', 'acl', 'network-manager']
 print('PaNasMs services, binaries and UI will be removed; the PAM service file /etc/pam.d/panasms is removed on purge.')

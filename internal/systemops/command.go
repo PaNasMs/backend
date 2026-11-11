@@ -22,6 +22,7 @@ var stageForCommand = map[string]string{
 	"mkfs.ext4":        "Creating file system",
 	"mkfs.xfs":         "Creating file system",
 	"mkfs.btrfs":       "Creating file system",
+	"mkfs.ntfs":        "Creating file system",
 	"mkfs.vfat":        "Creating file system",
 	"sfdisk":           "Modifying partition",
 	"parted":           "Modifying partition table",

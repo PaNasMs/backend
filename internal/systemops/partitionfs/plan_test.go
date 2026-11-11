@@ -110,3 +110,11 @@ func TestUnknownActionAndInvalidGeometryAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestFat32MinimumMiB(t *testing.T) {
+	for sector, want := range map[uint64]uint64{512: 33, 1024: 65, 2048: 129, 4096: 257} {
+		if got := fat32MinimumMiB(sector); got != want {
+			t.Errorf("sector %d: got %d MiB, want %d", sector, got, want)
+		}
+	}
+}

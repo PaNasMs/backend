@@ -856,7 +856,17 @@ def plan(action, p):
                     not inv[target].get("fstype") == "linux_raid_member",
                     'Cannot format a RAID member',
                 )
+                if p["format"] == "fat32":
+                    sector = int(command(["blockdev", "--getss", target]).strip())
+                    require(sector in (512, 1024, 2048, 4096), 'Invalid storage geometry')
+                    clusters = 65525
+                    fat_sectors = ((clusters + 2) * 4 + sector - 1) // sector
+                    minimum = ((32 + 2 * fat_sectors + clusters) * sector + 1048575) // 1048576
+                    require(inv[target]["size"] // 1048576 >= minimum,
+                            f'FAT32 requires at least {minimum} MiB on this device. Choose FAT (auto) for a smaller volume.')
                 details = [target, 'New file system: ' + p["format"]]
+                if p["format"] == "ntfs":
+                    details.append("For ntfs automatic checking is unavailable. You can mount the volume read-only.")
                 if inv[target].get("fstype"):
                     details.append('Current file system: ' + inv[target]["fstype"])
                 details.append('FORMATTING WILL DESTROY DATA')
@@ -1031,8 +1041,18 @@ def removable_filesystem(target, inv):
             "Select a supported data file system, not a RAID member or encrypted container")
 
 
+FORMAT_COMMANDS = {
+    "ext4": ["mkfs.ext4", "-F"],
+    "xfs": ["mkfs.xfs", "-f"],
+    "btrfs": ["mkfs.btrfs", "-f"],
+    "vfat": ["mkfs.vfat"],
+    "fat32": ["mkfs.vfat", "-F", "32"],
+    "ntfs": ["mkfs.ntfs", "--quick"],
+}
+
+
 def supported_formats():
-    return [f for f in ("ext4", "xfs", "btrfs", "vfat") if shutil.which("mkfs." + f)]
+    return [name for name, args in FORMAT_COMMANDS.items() if shutil.which(args[0])]
 
 
 def without_array(config, uuid):
@@ -1351,12 +1371,12 @@ def execute_unlocked(action, p, user=None):
             fstab_change(inv[target]["uuid"])
     elif action == "filesystem.format":
         fs = p["format"]
-        args = {
-            "ext4": ["mkfs.ext4", "-F"],
-            "xfs": ["mkfs.xfs", "-f"],
-            "btrfs": ["mkfs.btrfs", "-f"],
-            "vfat": ["mkfs.vfat"],
-        }[fs]
+        if fs == "ntfs":
+            signatures = json_command(["wipefs", "--json", "--no-act", "--output", "TYPE,USAGE", "--", target])["signatures"]
+            types = [sig["type"] for sig in signatures if sig["usage"] == "filesystem"]
+            if types:
+                command(["wipefs", "--all", "--types", ",".join(types), "--", target])
+        args = FORMAT_COMMANDS[fs]
         command([*args, target], timeout=86400)
         # udev does not always re-read an md array after mkfs; without the new
         # signature in its database the volume stays invisible in the panel.
@@ -1710,7 +1730,8 @@ def query(view, target):
                     "shrink": True,
                     "resizeRequiresMount": True,
                 },
-                "vfat": {"create": bool(shutil.which("mkfs.vfat")), "grow": False, "shrink": False},
+                **{name: {"create": bool(shutil.which(FORMAT_COMMANDS[name][0])), "grow": False, "shrink": False}
+                   for name in ("vfat", "fat32", "ntfs")},
             },
         }
     if view == "smart":

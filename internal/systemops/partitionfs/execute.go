@@ -275,9 +275,32 @@ func (s *service) executePrepared(ctx context.Context, action string, params map
 		err = run("remove-filesystem", []string{"wipefs", "--all", "--types", fs, "--", target}, "")
 	case "filesystem.format":
 		format := text(params, "format")
-		args := map[string][]string{"ext4": {"mkfs.ext4", "-F"}, "xfs": {"mkfs.xfs", "-f"}, "btrfs": {"mkfs.btrfs", "-f"}, "vfat": {"mkfs.vfat"}}[format]
+		args := storagequery.FormatCommand(format)
 		if len(args) == 0 {
 			return nil, reject("The utility for creating this file system is unavailable")
+		}
+		if format == "ntfs" {
+			output, err := s.run(ctx, []string{"wipefs", "--json", "--no-act", "--output", "TYPE,USAGE", "--", target}, systemops.CommandOptions{})
+			if err != nil {
+				return nil, err
+			}
+			var probe struct {
+				Signatures []struct{ Type, Usage string }
+			}
+			if err = json.Unmarshal(output, &probe); err != nil || probe.Signatures == nil {
+				return nil, reject("Could not read the partition table. No changes were made.")
+			}
+			var types []string
+			for _, sig := range probe.Signatures {
+				if sig.Usage == "filesystem" {
+					types = append(types, sig.Type)
+				}
+			}
+			if len(types) > 0 {
+				if err = run("remove-filesystem-signatures", []string{"wipefs", "--all", "--types", strings.Join(types, ","), "--", target}, ""); err != nil {
+					return nil, err
+				}
+			}
 		}
 		err = run("format-filesystem", append(args, target), "")
 	case "filesystem.resize":

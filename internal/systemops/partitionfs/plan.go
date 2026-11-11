@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"panasms.local/backend/internal/systemops"
@@ -63,6 +64,14 @@ func Plan(ctx context.Context, action string, params map[string]any) (json.RawMe
 	}
 	return result.raw, nil
 }
+// FAT32 needs 65,525 data clusters, two FATs and 32 reserved sectors.
+// Near the minimum mkfs.fat uses one sector per cluster. Round up to a whole MiB.
+func fat32MinimumMiB(sector uint64) uint64 {
+	const clusters = 65525
+	fatSectors := ((clusters+2)*4 + sector - 1) / sector
+	return ((32+2*fatSectors+clusters)*sector + mib - 1) / mib
+}
+
 func mounted(row map[string]any) []string {
 	result := []string{}
 	values, _ := row["mountpoints"].([]any)
@@ -206,18 +215,34 @@ func (s *service) prepareTarget(ctx context.Context, action string, params map[s
 			return nil, err
 		}
 		format := text(params, "format")
-		switch format {
-		case "ext4", "xfs", "btrfs", "vfat":
-		default:
+		command := storagequery.FormatCommand(format)
+		if len(command) == 0 {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}
-		if _, err = s.find("mkfs." + format); err != nil {
+		if _, err = s.find(command[0]); err != nil {
 			return nil, reject("The utility for creating this file system is unavailable")
 		}
 		if fs == "linux_raid_member" {
 			return nil, reject("Cannot format a RAID member")
 		}
+		if format == "fat32" {
+			output, err := s.run(ctx, []string{"blockdev", "--getss", target}, systemops.CommandOptions{})
+			if err != nil {
+				return nil, err
+			}
+			sector, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
+			if err != nil || sector < 512 || sector > 4096 || sector&(sector-1) != 0 {
+				return nil, reject("Invalid storage geometry")
+			}
+			minimum := fat32MinimumMiB(sector)
+			if cap/mib < minimum {
+				return nil, reject(fmt.Sprintf("FAT32 requires at least %d MiB on this device. Choose FAT (auto) for a smaller volume.", minimum))
+			}
+		}
 		details = []string{target, "New file system: " + format}
+		if format == "ntfs" {
+			details = append(details, "For ntfs automatic checking is unavailable. You can mount the volume read-only.")
+		}
 		if fs != "" {
 			details = append(details, "Current file system: "+fs)
 		}

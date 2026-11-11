@@ -111,6 +111,11 @@ def main():
   apply('filesystem.format',{'target':second,'format':filesystem})
   assert command('blkid','-s','TYPE','-o','value',second)==('vfat' if filesystem=='fat32' else filesystem)
   if filesystem=='fat32':assert 'VERSION=FAT32' in command('blkid','-p','-o','export',second).splitlines()
+  if filesystem=='ntfs':
+   payload=Path('/fixture/ntfs-data');payload.write_text('USB file on NTFS')
+   command('ntfscp',second,str(payload),'/payload')
+   assert command('ntfscat',second,'/payload')==payload.read_text() and digest(marker)==first_hash
+   continue
   command('mount',second,'/mnt/data');data.write_bytes(b'GO09A mounted resize\n'*4096);mounted_hash=digest(data)
   if filesystem=='btrfs':
    apply('filesystem.resize',{'target':second,'sizeMiB':256});assert digest(data)==mounted_hash

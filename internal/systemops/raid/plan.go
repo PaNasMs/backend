@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"panasms.local/backend/internal/systemops"
+	"panasms.local/backend/internal/systemops/localmounts"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
 )
@@ -132,6 +133,14 @@ func (s *service) prepare(ctx context.Context, action string, params map[string]
 			return nil, err
 		}
 		p.Config = string(conf)
+		if action == "raid.delete" {
+			if _, err = storagebase.RemoveManagedFstabRows(p.Fstab, p.Delete.UUIDs); err != nil {
+				return nil, err
+			}
+			if err = localmounts.CheckRemovalSources(p.Fstab, pf, pf.Inventory.Descendants(p.Target)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, path := range p.Paths {
 		if _, ok := p.Identities[path]; ok {

@@ -74,3 +74,13 @@ func (s *service) checkPrepareSources(config string, pf *storagequery.Preflight,
 	}
 	return nil
 }
+
+// CheckRemovalSources also covers fstab rows that refer to an array through
+// a device alias, partition label or PARTUUID rather than the filesystem UUID.
+func CheckRemovalSources(config string, pf *storagequery.Preflight, paths []string) error {
+	selected := make(map[string]storagequery.StorageIdentity, len(paths))
+	for _, path := range paths {
+		selected[path] = storagequery.StorageIdentity{}
+	}
+	return defaultService().checkPrepareSources(config, pf, selected)
+}

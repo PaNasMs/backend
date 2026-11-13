@@ -104,8 +104,36 @@ func (m mutation) run(paths []string, args ...string) ([]byte, error) {
 	return m.s.run(m.ctx, args, m.opts)
 }
 
+func (m mutation) verifyBlank(path string) error {
+	id, err := m.identity(path)
+	if err != nil {
+		return err
+	}
+	pin, err := storagebase.PinDevice(id)
+	if err != nil {
+		return err
+	}
+	defer pin.Close()
+	// blkid -p returns 2 for no signature and 8 for an ambiguous probe.
+	raw, err := m.s.run(m.ctx, []string{"blkid", "-p", "-o", "export", pin.Path()}, systemops.CommandOptions{Accepted: []int{0, 2}})
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Fields(string(raw)) {
+		if strings.HasPrefix(line, "TYPE=") || strings.HasPrefix(line, "PTTYPE=") || strings.HasPrefix(line, "USAGE=") {
+			return reject("The selected member contains data or RAID metadata")
+		}
+	}
+	return nil
+}
+
 func (m mutation) apply(action string) (string, error) {
 	s, p := m.s, m.p
+	if p.Extra != "" {
+		if err := m.verifyBlank(p.Extra); err != nil {
+			return "", err
+		}
+	}
 	switch action {
 	case "raid.create":
 		return "", m.create()
@@ -198,6 +226,11 @@ func (m mutation) create() error {
 	target := "/dev/md/" + p.Target
 	if _, err := os.Lstat(target); !os.IsNotExist(err) {
 		return reject("Array name is already in use")
+	}
+	for _, member := range p.Paths {
+		if err := m.verifyBlank(member); err != nil {
+			return err
+		}
 	}
 	args := []string{"mdadm", "--create", target, "--run", "--metadata=1.2", "--name=" + p.Target, "--level=" + p.Level, "--raid-devices=" + strconv.Itoa(len(p.Paths))}
 	if _, err := m.run(p.Paths, append(args, p.Paths...)...); err != nil {

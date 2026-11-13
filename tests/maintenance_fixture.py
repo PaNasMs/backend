@@ -20,6 +20,7 @@ class MaintenanceFixture:
         (self.bin / "python3").symlink_to(sys.executable)
         for name in ("systemctl", "udevadm"):
             self.mock(name, 'printf "%s\\n" "' + name + ' $*" >> "$FIXTURE_SERVICE_LOG"\n'
+                      'if [ "$*" = "show --value --property=ActiveState panasms-raid-downgrade.service" ]; then echo inactive; fi\n'
                       'if [ "$1" = is-active ] && [ "${FIXTURE_INACTIVE:-}" = 1 ]; then exit 3; fi\n')
 
     def mock(self, name, body):

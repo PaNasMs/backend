@@ -272,7 +272,11 @@ class PackagingTest(unittest.TestCase):
                 db.execute("update jobs set status='succeeded'")
             db.close()
             subprocess.run([str(fixture.bin / "sh"), str(path), "remove"], env=env, capture_output=True, check=True)
-            self.assertIn("stop panasms-core.service panasms-agent.service", log.read_text())
+            calls = fixture.calls()
+            self.assertLess(calls.index("systemctl stop panasms-raid-downgrade.timer"),
+                            calls.index("systemctl show --value --property=ActiveState panasms-raid-downgrade.service"))
+            self.assertLess(calls.index("systemctl show --value --property=ActiveState panasms-raid-downgrade.service"),
+                            calls.index("systemctl stop panasms-core.service panasms-agent.service"))
             self.assertIn("helper network-access remove", log.read_text())
             self.assertTrue(owned.exists())
             env["FIXTURE_INACTIVE"] = "1"

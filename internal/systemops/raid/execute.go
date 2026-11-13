@@ -404,7 +404,14 @@ func (m mutation) convert() (string, error) {
 			return "", m.failedStart(backup, err)
 		}
 	}
-	_, err = m.run([]string{p.Target}, scoped("convert", "--grow", p.Target, "--level="+p.Level, "--raid-devices="+strconv.Itoa(p.NewCount), "--backup-file="+backup)...)
+	args := []string{"--grow", p.Target, "--level=" + p.Level, "--raid-devices=" + strconv.Itoa(p.NewCount)}
+	if p.State.Level == "raid5" && p.Level == "6" {
+		// Keep existing data stripes in place while MD builds the additional parity.
+		args = append(args, "--layout=preserve")
+	} else {
+		args = append(args, "--backup-file="+backup)
+	}
+	_, err = m.run([]string{p.Target}, scoped("convert", args...)...)
 	if err != nil {
 		return "", m.failedStart(backup, err)
 	}

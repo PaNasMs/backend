@@ -238,6 +238,9 @@ func (s *service) actionPlan(ctx context.Context, action string, params map[stri
 				return err
 			}
 			p.details = append(p.details, fmt.Sprintf("%s → RAID%s; members: %d → %d", strings.ToUpper(a.Level), p.Level, a.Count, p.NewCount), "File systems are not resized. Recovery data will remain on the system disk.")
+			if a.Level == "raid5" && p.Level == "6" {
+				p.details = append(p.details, "Existing stripes stay in place. The new disk holds the second parity block.")
+			}
 			if p.NewCount < a.Count {
 				if text(params, "replacement") != "" {
 					return reject("This conversion does not need an additional disk")

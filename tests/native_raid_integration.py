@@ -131,11 +131,16 @@ def run():
                 (md / "sync_speed_max").write_text("1000")
             worker.perform("convert", target=str(array), level=level, replacement=extra)
             if level == "6":
-                worker.perform("pause", target=str(array))
-                assert (md / "sync_action").read_text().strip() == "frozen"
-                assert subprocess.run([helper, "raid", "check-removal"]).returncode != 0
+                assert (md / "reshape_position").read_text().strip() == "none"
+                assert (md / "layout").read_text().strip() == "18"
+                uuid = (md / "uuid").read_text().strip()
+                command("mdadm", "--stop", str(array))
+                command("udevadm", "settle")
+                command(helper, "raid", "recover")
+                array = Path("/dev/md/panasms-recover-" + re.sub("[:-]", "", uuid)[:16])
+                md = Path("/sys/class/block") / array.resolve().name / "md"
+                command("mdadm", "--readwrite", str(array))
                 (md / "sync_speed_max").write_text("200000")
-                worker.perform("resume", target=str(array))
             idle(array, level)
             with array.open("rb") as stream:
                 assert stream.read(len(marker)) == marker

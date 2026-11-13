@@ -271,8 +271,11 @@ class PackagingTest(unittest.TestCase):
             with sqlite3.connect(dbpath) as db:
                 db.execute("update jobs set status='succeeded'")
             db.close()
+            (root / "activating").touch()
+            fixture.mock("sleep", "exit 0\n")
             subprocess.run([str(fixture.bin / "sh"), str(path), "remove"], env=env, capture_output=True, check=True)
             calls = fixture.calls()
+            self.assertEqual(calls.count("systemctl show --value --property=ActiveState panasms-raid-downgrade.service"), 2)
             self.assertLess(calls.index("systemctl stop panasms-raid-downgrade.timer"),
                             calls.index("systemctl show --value --property=ActiveState panasms-raid-downgrade.service"))
             self.assertLess(calls.index("systemctl show --value --property=ActiveState panasms-raid-downgrade.service"),

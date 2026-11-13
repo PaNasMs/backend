@@ -42,6 +42,35 @@ func TestLastManualSlotIsProtected(t *testing.T) {
 	}
 }
 
+func TestInterruptedNamedHeaderPublication(t *testing.T) {
+	folder := t.TempDir()
+	dir, _, err := headerDirectory(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	stage := filepath.Join(folder, ".panasms-stage-header")
+	if err = os.Mkdir(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(stage, "partial"), []byte("incomplete"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = publishStaged(dir, "header", strings.NewReader("complete"), -1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err = publishStaged(dir, "header", strings.NewReader("replacement"), -1, -1); err == nil {
+		t.Fatal("overwrote header")
+	}
+	data, err := os.ReadFile(filepath.Join(folder, "header"))
+	if err != nil || string(data) != "complete" {
+		t.Fatal("incorrect header")
+	}
+	if _, err = os.Lstat(stage); !os.IsNotExist(err) {
+		t.Fatal("staging remains", err)
+	}
+}
+
 func TestHeaderPublishNoReplaceOrSymlink(t *testing.T) {
 	root := t.TempDir()
 	dir, _, err := headerDirectory(root)

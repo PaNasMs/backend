@@ -77,20 +77,78 @@ func snapshotHeader(ctx context.Context, dir *os.File, name, uuid string) (*os.F
 // A pinned directory and fd-based source link keep the operation inside the
 // selected directory even if somebody renames or replaces a visible path.
 func publishFile(dir *os.File, name string, source io.Reader, uid, gid int) error {
-	fd, err := unix.Openat(int(dir.Fd()), ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, 0600)
-	var output *os.File
-	if err == nil {
-		output = os.NewFile(uintptr(fd), name)
-	} else if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EINVAL) {
-		output, err = os.CreateTemp(fdPath(dir), ".panasms-luks-*")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(output.Name())
-	} else {
+	dest := int(dir.Fd())
+	fd, err := unix.Openat(dest, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, 0600)
+	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EINVAL) {
+		return publishStaged(dir, name, source, uid, gid)
+	}
+	if err != nil {
 		return err
 	}
+	output := os.NewFile(uintptr(fd), name)
 	defer output.Close()
+	if err = writePrivate(output, source, uid, gid); err != nil {
+		return err
+	}
+	if err = unix.Linkat(unix.AT_FDCWD, fdPath(output), dest, name, unix.AT_SYMLINK_FOLLOW); err != nil {
+		return err
+	}
+	return dir.Sync()
+}
+
+// Filesystems without anonymous inodes use a private staging directory. The
+// reserved filename lets a retry reclaim its own partial copy after a crash.
+func publishStaged(dir *os.File, name string, source io.Reader, uid, gid int) error {
+	dest := int(dir.Fd())
+	stageName := ".panasms-stage-" + name
+	if err := unix.Mkdirat(dest, stageName, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	stageFD, err := unix.Openat(dest, stageName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	stage := os.NewFile(uintptr(stageFD), stageName)
+	defer stage.Close()
+	var st unix.Stat_t
+	if err = unix.Fstat(stageFD, &st); err != nil {
+		return err
+	}
+	if int(st.Uid) != os.Geteuid() || st.Mode&07777 != 0700 {
+		return reject("The filesystem cannot stage a private LUKS backup")
+	}
+	defer unix.Unlinkat(dest, stageName, unix.AT_REMOVEDIR)
+	const partial = "partial"
+	if err = unix.Unlinkat(stageFD, partial, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	fd, err := unix.Openat(stageFD, partial, unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	output := os.NewFile(uintptr(fd), partial)
+	defer output.Close()
+	defer unix.Unlinkat(stageFD, partial, 0)
+	if err = writePrivate(output, source, uid, gid); err != nil {
+		return err
+	}
+	if err = unix.Renameat2(stageFD, partial, dest, name, unix.RENAME_NOREPLACE); err != nil {
+		return err
+	}
+	if err = stage.Sync(); err != nil {
+		return err
+	}
+	return dir.Sync()
+}
+
+func writePrivate(output *os.File, source io.Reader, uid, gid int) error {
+	info, err := output.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return reject("The filesystem cannot store a private LUKS file")
+	}
 	if _, err = io.Copy(output, source); err != nil {
 		return err
 	}
@@ -99,13 +157,7 @@ func publishFile(dir *os.File, name string, source io.Reader, uid, gid int) erro
 			return err
 		}
 	}
-	if err = output.Sync(); err != nil {
-		return err
-	}
-	if err = unix.Linkat(unix.AT_FDCWD, fdPath(output), int(dir.Fd()), name, unix.AT_SYMLINK_FOLLOW); err != nil {
-		return err
-	}
-	return dir.Sync()
+	return output.Sync()
 }
 
 func executeHeader(ctx context.Context, action string, p *prepared, path string, s extraState, r *systemops.Reporter) error {

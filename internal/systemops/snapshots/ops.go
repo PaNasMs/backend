@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -218,15 +219,27 @@ func Execute(ctx context.Context, action string, params map[string]any, expected
 	}
 	defer domain.Close()
 	input, _ := params["target"].(string)
-	target, err := storagebase.RecoveryTarget(input)
+	initial, err := loadVolume(ctx, input)
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)
 	}
-	lock, err := storagebase.DeviceLock(ctx, target)
-	if err != nil {
-		return nil, systemops.BeforeMutation(err)
+	target, identity := initial.Target, initial.Identity
+	initial.Close()
+	// The same multi-device volume may be selected by any member. Acquire every
+	// backing-device lock in canonical order, also serializing with older workers.
+	var locks []*os.File
+	defer func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Close()
+		}
+	}()
+	for _, device := range identity.Devices {
+		lock, err := storagebase.DeviceLock(ctx, device.Path)
+		if err != nil {
+			return nil, systemops.BeforeMutation(err)
+		}
+		locks = append(locks, lock)
 	}
-	defer lock.Close()
 	var shares []accounts.StorageShare
 	if action != createAction {
 		var unlock func()
@@ -242,7 +255,7 @@ func Execute(ctx context.Context, action string, params map[string]any, expected
 	}
 	defer op.close()
 	v := op.volume
-	if target != v.Target || expected == "" || op.fingerprint != expected {
+	if target != v.Target || identity.BootID != v.Identity.BootID || !slices.Equal(identity.Devices, v.Identity.Devices) || expected == "" || op.fingerprint != expected {
 		return nil, systemops.BeforeMutation(reject("State has changed. Review a new operation plan."))
 	}
 	if authorize == nil {

@@ -208,6 +208,15 @@ def exercise(worker, root, point):
     command("btrfs", "subvolume", "create", nested)
     (nested / "private").write_bytes(before)
     assert worker.query() == {"target": worker.target, "point": str(point), "snapshots": []}
+    store.mkdir(mode=0o755)
+    store.chmod(0o755)
+    worker.refused("create", "private", name="untrusted")
+    assert not (store / "untrusted").exists()
+    store.rmdir()
+    store.symlink_to(nested)
+    result = worker.invoke("plan", worker.request("create", name="redirected"))
+    assert result.get("error") and result.get("noChanges") and not (nested / "redirected").exists(), result
+    store.unlink()
     worker.perform("create", name="first")
     snap = store / "first"
     assert read_only(snap) and store.stat().st_uid == 0 and store.stat().st_mode & 0o077 == 0
@@ -236,10 +245,15 @@ def exercise(worker, root, point):
         worker.refused("restore", "mount", **restore)
     finally:
         command("umount", snap / "folder")
+    command("btrfs", "subvolume", "snapshot", "-r", point, store / "previous_format")
     volume = command("blkid", "-s", "UUID", "-o", "value", worker.target)
     with shared_snapshot(root, point, snap / "folder", volume):
         worker.refused("delete", "share", snapshot="first")
         worker.refused("restore", "share", **restore)
+    # Btrfs command-line snapshots are the legacy on-disk format.
+    worker.perform("restore", snapshot="previous_format", name="legacy_copy")
+    assert (point / "legacy_copy/data").read_bytes() == after
+    worker.perform("delete", snapshot="previous_format")
     worker.perform("restore", **restore)
     assert not read_only(point / "copy")
     assert (point / "copy/data").read_bytes() == before

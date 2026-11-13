@@ -16,6 +16,7 @@ type Identity struct {
 	Username       string `json:"username"`
 	Name           string `json:"name"`
 	UID            int    `json:"uid"`
+	GID            int    `json:"-"`
 	Role           string `json:"role"`
 	Epoch          string `json:"epoch"`
 	Principal      string `json:"principal"`
@@ -40,6 +41,10 @@ func LookupPanel(username string, allowed map[string]bool) (Identity, error) {
 	if err != nil || !NormalAccount(username, uid) {
 		return Identity{}, errors.New("protected account")
 	}
+	gid, err := strconv.ParseUint(p[3], 10, 32)
+	if err != nil || gid == 1<<32-1 || int(gid) < 0 {
+		return Identity{}, errors.New("invalid primary group")
+	}
 	groups, err := exec.CommandContext(ctx, "/usr/bin/id", "-nG", username).Output()
 	if err != nil {
 		return Identity{}, err
@@ -58,7 +63,7 @@ func LookupPanel(username string, allowed map[string]bool) (Identity, error) {
 	if admin {
 		role = "admin"
 	}
-	return Identity{Username: username, Name: strings.Split(p[4], ",")[0], UID: uid, Role: role, Epoch: policy.Epoch, Principal: policy.Principal, Created: policy.Created}, nil
+	return Identity{Username: username, Name: strings.Split(p[4], ",")[0], UID: uid, GID: int(gid), Role: role, Epoch: policy.Epoch, Principal: policy.Principal, Created: policy.Created}, nil
 }
 
 func AccessPolicy(mode, users string) (map[string]bool, error) {

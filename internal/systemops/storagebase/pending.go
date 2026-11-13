@@ -30,7 +30,7 @@ type TransactionEnvelope struct {
 // Call under DomainLock after fresh identity capture. The owning domain must
 // inspect its own pending journal before any retry; this scan never clears one.
 func CheckPendingRoots(domain, target string, identity storagequery.StorageIdentity) error {
-	if (domain != "partitionfs" && domain != "localmounts" && domain != "raid") || identity.BootID == "" || len(identity.Devices) == 0 {
+	if (domain != "partitionfs" && domain != "localmounts" && domain != "raid" && domain != "luks") || identity.BootID == "" || len(identity.Devices) == 0 {
 		return reject("Storage transaction identity is invalid")
 	}
 	roots := append([]PendingRoot{{RAIDLifecycleRoot, "raid"}}, TransactionRoots...)

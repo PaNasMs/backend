@@ -1,0 +1,148 @@
+package luks
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const sampleUUID = "dd827c88-9414-426b-ad5a-88c7ea989e90"
+
+func TestMetadataCountsOnlyBoundPasswordSlots(t *testing.T) {
+	data := []byte(`{"keyslots":{"10":{"type":"luks2"},"0":{"type":"luks2"},"4":{"type":"reencrypt"}},"digests":{"0":{"keyslots":["10","4"],"segments":["0"]},"1":{"keyslots":["0"],"segments":[]}},"segments":{"0":{"type":"crypt"}}}`)
+	metadata, err := parseLUKSMetadata(sampleUUID, data)
+	if err != nil || !slices.Equal(metadata.Slots, []int{0, 4, 10}) || !slices.Equal(metadata.UsableSlots, []int{10}) {
+		t.Fatalf("%+v, %v", metadata, err)
+	}
+}
+func TestSlotReplacementChangesHeaderDigest(t *testing.T) {
+	raw := []byte(`{"keyslots":{"0":{"type":"luks2","kdf":{"salt":"before"}}},"digests":{"0":{"keyslots":["0"],"segments":["0"]}},"segments":{"0":{"type":"crypt"}}}`)
+	before, err := parseLUKSMetadata(sampleUUID, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := parseLUKSMetadata(sampleUUID, bytes.ReplaceAll(raw, []byte("before"), []byte("after")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(before.Slots, after.Slots) || before.HeaderDigest == after.HeaderDigest {
+		t.Fatal("replaced slot must invalidate a plan")
+	}
+}
+
+func TestRestoreIdentityBindsEncryptionGeometry(t *testing.T) {
+	fixture := `{"keyslots":{"0":{"type":"luks2"}},"digests":{"0":{"type":"pbkdf2","hash":"sha256","iterations":1000,"salt":"AAAA","digest":"BBBB","keyslots":["0"],"segments":["0"]}},"segments":{"0":{"type":"crypt","offset":"16777216","size":"dynamic","iv_tweak":"0","sector_size":4096,"encryption":"aes-xts-plain64"}}}`
+	identity := func(raw string) string {
+		t.Helper()
+		meta, err := parseLUKSMetadata(sampleUUID, []byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return meta.RestoreIdentity
+	}
+	original := identity(fixture)
+	if original == "" {
+		t.Fatal("missing restore identity")
+	}
+	for _, change := range [][2]string{{"aes-xts-plain64", "aes-cbc-plain64"}, {"16777216", "8388608"}, {"4096", "512"}, {"BBBB", "CCCC"}, {"AAAA", "DDDD"}} {
+		if identity(strings.Replace(fixture, change[0], change[1], 1)) == original {
+			t.Fatalf("ignores %s", change[0])
+		}
+	}
+}
+
+func TestMalformedLUKSMetadata(t *testing.T) {
+	for _, data := range []string{`{}`, `{"keyslots":{"01":{}},"digests":{},"segments":{"0":{}}}`, `{"keyslots":{},"digests":{"0":{"keyslots":["0"]}},"segments":{"0":{}}}`, `{"keyslots":{},"digests":{"0":{"segments":["1"]}},"segments":{"0":{}}}`} {
+		if _, err := parseLUKSMetadata(sampleUUID, []byte(data)); err == nil {
+			t.Errorf("accepted %s", data)
+		}
+	}
+}
+func TestLegacyQueryRecordAndMarker(t *testing.T) {
+	config, err := parseManagedConfig(sampleUUID, []byte(`{"uuid":"`+sampleUUID+`","name":"nas_data","slot":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "# PaNasMs " + sampleUUID
+	row := "nas_data UUID=" + sampleUUID + " /etc/panasms/luks/" + sampleUUID + ".key luks,nofail,headless,x-systemd.device-timeout=30s"
+	valid := []string{marker, row}
+	for _, test := range []struct {
+		name      string
+		config    *managedConfig
+		lines     []string
+		usable    []int
+		automatic bool
+		slot      string
+	}{
+		{"complete", config, valid, []int{0, 31}, true, "0"},
+		{"missing config", nil, valid, []int{0, 31}, false, "null"},
+		{"policy only", config, nil, []int{0, 31}, false, "0"},
+		{"missing row", config, []string{marker}, []int{0}, false, "0"},
+		{"row drift", config, []string{marker, row + " extra"}, []int{0}, false, "0"},
+		{"duplicate marker", config, []string{marker, row, marker, row}, []int{0}, false, "0"},
+		{"orphan row", config, []string{row}, []int{0}, false, "0"},
+		{"unusable managed slot", config, valid, []int{31}, false, "0"},
+		{"mapping conflict", config, []string{marker, row, "nas_data UUID=elsewhere none luks"}, []int{0}, false, "0"},
+	} {
+		metadata := luksMetadata{UUID: sampleUUID, Slots: []int{0, 31}, UsableSlots: test.usable}
+		raw, err := queryResult("/dev/loop0", metadata, test.config, test.lines)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if len(fields) != 5 || string(fields["target"]) != `"/dev/loop0"` || string(fields["uuid"]) != `"`+sampleUUID+`"` || string(fields["slots"]) != "[0,31]" || string(fields["managedSlot"]) != test.slot || (string(fields["automatic"]) == "true") != test.automatic {
+			t.Fatalf("%s: query = %s", test.name, raw)
+		}
+	}
+}
+func TestMalformedRecordsCannotClaimSlotZero(t *testing.T) {
+	for _, data := range []string{`{"uuid":"` + sampleUUID + `","name":"nas"}`, `{"uuid":"` + sampleUUID + `","name":"../a","slot":0}`, `{"uuid":"other","name":"nas","slot":0}`, `{"uuid":"` + sampleUUID + `","name":"nas","slot":32}`} {
+		if _, err := parseManagedConfig(sampleUUID, []byte(data)); err == nil {
+			t.Errorf("accepted %s", data)
+		}
+	}
+}
+
+func TestRealLUKS2HeaderQuery(t *testing.T) {
+	if _, err := exec.LookPath("cryptsetup"); err != nil {
+		t.Skip("cryptsetup is unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "volume.img")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err = file.Truncate(32 << 20); err != nil {
+		t.Fatal(err)
+	}
+	secret := make([]byte, 48)
+	if _, err = rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(secret)
+	ctx := context.Background()
+	format := exec.CommandContext(ctx, "cryptsetup", "luksFormat", "--batch-mode", "--type", "luks2", "--pbkdf", "pbkdf2", "--iter-time", "10", "--key-file", "-", path)
+	format.Stdin = bytes.NewReader(secret)
+	if output, err := format.CombinedOutput(); err != nil {
+		t.Fatalf("formatting temporary file: %v: %s", err, output)
+	}
+	metadata, err := readLUKSMetadata(ctx, fmt.Sprintf("/proc/%d/fd/%d", os.Getpid(), file.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !luksUUIDPattern.MatchString(metadata.UUID) || !slices.Equal(metadata.Slots, []int{0}) || !slices.Equal(metadata.UsableSlots, []int{0}) {
+		t.Fatalf("%+v", metadata)
+	}
+}

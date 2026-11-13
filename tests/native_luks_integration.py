@@ -181,6 +181,7 @@ def exercise(worker, root, loop):
     subprocess.run(["cryptsetup", "luksFormat", "--batch-mode", "--type", "luks1",
                     "--iter-time", "10", "--key-file", "-", loop], input=first.encode(), check=True)
     command("udevadm", "settle")
+    assert "require LUKS2" in worker.query(loop)["error"]
     worker.action("open", **params, name=mapping)
     worker.action("close", target=mapped)
 

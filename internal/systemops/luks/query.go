@@ -48,6 +48,9 @@ func readLUKSMetadata(ctx context.Context, path string) (luksMetadata, error) {
 	}
 	raw, err = systemops.Command(ctx, []string{"cryptsetup", "luksDump", "--dump-json-metadata", path}, systemops.CommandOptions{})
 	if err != nil {
+		if _, v1err := systemops.Command(ctx, []string{"cryptsetup", "isLuks", "--type", "luks1", path}, systemops.CommandOptions{}); v1err == nil {
+			return luksMetadata{}, reject("Key management, boot unlocking and header backups require LUKS2. This LUKS1 volume can be opened and closed.")
+		}
 		return luksMetadata{}, err
 	}
 	return parseLUKSMetadata(uuid, raw)

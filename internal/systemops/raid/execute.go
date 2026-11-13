@@ -384,7 +384,18 @@ func (m mutation) recordReshape(growth bool) (string, error) {
 	if growth {
 		level = strings.TrimPrefix(p.State.Level, "raid")
 	}
-	raw, err := json.Marshal(reshapeRecord{UUID: uuid, Target: p.Target, Level: level, Members: p.NewCount, SourceCount: p.State.Count, Backup: backup, Growth: growth})
+	rec := reshapeRecord{UUID: uuid, Target: p.Target, Level: level, Members: p.NewCount, SourceCount: p.State.Count, Backup: backup, Growth: growth, LayoutOffset: p.LayoutOffset}
+	if p.LayoutOffset != 0 {
+		rec.SourceOffset, err = s.offsets(p.Target, p.State)
+		if err != nil {
+			return "", err
+		}
+		rec.SourceSlots, err = s.memberUUIDs(m.ctx, p.State)
+		if err != nil {
+			return "", err
+		}
+	}
+	raw, err := json.Marshal(rec)
 	if err != nil {
 		return "", err
 	}
@@ -405,7 +416,9 @@ func (m mutation) convert() (string, error) {
 		}
 	}
 	args := []string{"--grow", p.Target, "--level=" + p.Level, "--raid-devices=" + strconv.Itoa(p.NewCount)}
-	if p.State.Level == "raid5" && p.Level == "6" {
+	if p.LayoutOffset != 0 {
+		args = []string{"--grow", p.Target, "--layout=left-symmetric-6", "--data-offset=" + strconv.FormatUint(p.LayoutOffset, 10) + "s"}
+	} else if p.State.Level == "raid5" && p.Level == "6" {
 		// Keep existing data stripes in place while MD builds the additional parity.
 		args = append(args, "--layout=preserve")
 	} else {
@@ -430,8 +443,18 @@ func (m mutation) failedStart(backup string, cause error) error {
 	if err != nil {
 		return errors.Join(cause, err)
 	}
-	if present || a.Reshaping || a.Sync != "idle" || a.UUID != before.UUID || a.Level != before.Level || a.Count != before.Count || !reflect.DeepEqual(a.Members, before.Members) {
+	if present || a.Reshaping || a.Sync != "idle" || a.UUID != before.UUID || a.Layout != before.Layout || a.Level != before.Level || a.Count != before.Count || !reflect.DeepEqual(a.Members, before.Members) {
 		return cause
+	}
+	if m.p.LayoutOffset != 0 {
+		rec, err := m.s.record(a.UUID)
+		if err != nil || rec == nil {
+			return errors.Join(cause, err)
+		}
+		offset, err := m.s.offsets(m.p.Target, a)
+		if err != nil || offset != rec.SourceOffset {
+			return errors.Join(cause, err)
+		}
 	}
 	if m.p.Record != nil {
 		raw, err := json.Marshal(m.p.Record)

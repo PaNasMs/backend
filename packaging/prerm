@@ -31,8 +31,10 @@ if p.exists():
             raise SystemExit('PaNasMs has active operations. Wait for completion or cancel queued tasks before package changes.')
 CHECK
  /usr/lib/panasms/panasms-system-helper network-services check-removal
- if [ "$1" = remove ]; then
+ if [ "$1" = remove ] || { [ "$1" = upgrade ] && [ -n "${2:-}" ] && dpkg --compare-versions "$2" lt "$(dpkg-query -W '-f=${Version}' panasms-prototype)"; }; then
   /usr/lib/panasms/panasms-system-helper raid check-removal
+ fi
+ if [ "$1" = remove ]; then
   systemctl disable --now panasms-network-access.service
   /usr/lib/panasms/panasms-system-helper network-access remove
  fi
@@ -67,6 +69,7 @@ CHECK
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' 'panasms-share-rollback-*.timer' panasms-network-recovery.service || true
   systemctl stop panasms-networkd-recovery.service || true
+  systemctl disable --now panasms-raid-downgrade.timer || true
   systemctl disable panasms-networkd-recovery.service panasms-network-recovery.service panasms-raid-recovery.service || true
   # disable accepts no globs: enumerate the module services and SMART timers.
   for unit in $(systemctl list-unit-files 'panasms-module-*.service' 'panasms-smart-*.timer' --no-legend 2>/dev/null | awk '{print $1}'); do

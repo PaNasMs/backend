@@ -65,6 +65,7 @@ case "${1:-}" in
   systemctl restart panasms-network-access.service
   systemctl enable panasms-networkd-recovery.service
   systemctl enable panasms-raid-recovery.service
+  systemctl enable --now panasms-raid-downgrade.timer
   systemctl enable panasms-update-recover.service
   systemctl enable --now panasms-update-check.timer
   if [ "$sharing_rollback" = 0 ] && { [ -z "${2:-}" ] || [ -f /var/lib/panasms-installer/sharing-package-install ]; }; then

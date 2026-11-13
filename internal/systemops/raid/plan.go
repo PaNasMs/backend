@@ -24,6 +24,7 @@ type prepared struct {
 	Delete                                   *deletion
 	Record                                   *reshapeRecord
 	NewCount                                 int
+	LayoutOffset                             uint64
 	details                                  []string
 	fingerprint                              string
 }
@@ -118,6 +119,13 @@ func (s *service) prepare(ctx context.Context, action string, params map[string]
 		for _, m := range p.State.Members {
 			p.Paths = append(p.Paths, m.Path)
 			p.details = append(p.details, m.Path)
+		}
+		rec, err := s.record(p.State.UUID)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil && rec.LayoutOffset != 0 && action != "raid.pause" && action != "raid.resume" {
+			return nil, reject("Wait for the pending RAID downgrade to finish")
 		}
 		if err = s.actionPlan(ctx, action, params, p, pf); err != nil {
 			return nil, err
@@ -234,6 +242,13 @@ func (s *service) actionPlan(ctx context.Context, action string, params map[stri
 				p.NewCount = a.Count + 1
 			case a.Level == "raid6" && p.Level == "5":
 				p.NewCount = a.Count - 1
+				if a.Layout == "2" {
+					offset, err := s.downgradeOffset(p.Target, a)
+					if err != nil {
+						return err
+					}
+					p.LayoutOffset = offset
+				}
 			default:
 				return reject("Supported conversions: two-disk RAID1 to RAID5, RAID5 to RAID6, RAID6 to RAID5")
 			}

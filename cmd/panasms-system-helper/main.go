@@ -34,6 +34,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "raid" && os.Args[2] == "advance" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.AdvanceDowngrades(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) >= 3 && os.Args[1] == "raid" && os.Args[2] == "export-downgrade" {
 		if err := raid.ExportDowngrade(context.Background(), os.Args[3:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)

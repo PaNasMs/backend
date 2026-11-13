@@ -105,7 +105,7 @@ or controller failure. Hardware standby and cooling need target-device acceptanc
 
 ### Exporting a stopped RAID6 downgrade
 
-For an interrupted four-or-more-member left-symmetric RAID6 downgrade with
+For an interrupted four-or-more-member RAID6 downgrade from rotating parity or parity-first with
 unchanged data offsets, work from immutable, whole-member image files of the
 stopped array. Keep every original disk, journal and mdadm backup. The helper
 reads Linux MD 1.2 metadata to identify the generation, member slots and both

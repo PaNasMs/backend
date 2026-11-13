@@ -186,15 +186,18 @@ func prepare(ctx context.Context, action string, params map[string]any) (*prepar
 }
 
 func checkBlank(ctx context.Context, path string) error {
-	// Return code 8 (ambiguous signatures) and every probe failure are unsafe.
-	raw, err := systemops.Command(ctx, []string{"blkid", "-p", "-o", "export", path}, systemops.CommandOptions{Accepted: []int{0, 2}})
+	raw, err := systemops.Command(ctx, []string{"wipefs", "--json", "--no-act", "--output", "TYPE,OFFSET", "--", path}, systemops.CommandOptions{})
 	if err != nil {
 		return err
 	}
-	for _, field := range strings.Fields(string(raw)) {
-		if strings.HasPrefix(field, "TYPE=") || strings.HasPrefix(field, "PTTYPE=") || strings.HasPrefix(field, "USAGE=") {
-			return reject("LUKS requires an empty device")
-		}
+	var result struct {
+		Signatures []json.RawMessage `json:"signatures"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || result.Signatures == nil {
+		return reject("Could not verify that the device is empty")
+	}
+	if len(result.Signatures) != 0 {
+		return reject("LUKS requires an empty device")
 	}
 	return nil
 }

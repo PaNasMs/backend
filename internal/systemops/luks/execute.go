@@ -97,6 +97,14 @@ func applyBasic(ctx context.Context, action string, params map[string]any, p *pr
 		if action == "luks.create" {
 			args = []string{"cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", "--key-file", "-", p.ReadPath}
 		} else {
+			// Only a failed read-only passphrase check proves that no mutation
+			// started. An activation failure may require inspecting device state.
+			if err := unlocks(ctx, p.ReadPath, password, -1); err != nil {
+				if code, ok := systemops.CommandExitCode(err); ok && code == 2 {
+					err = reject("The LUKS password did not unlock this volume")
+				}
+				return nil, systemops.BeforeMutation(err)
+			}
 			args = []string{"cryptsetup", "open", "--type", "luks", "--key-file", "-", p.ReadPath, p.Name}
 		}
 	case "luks.close":
@@ -120,17 +128,15 @@ func applyBasic(ctx context.Context, action string, params map[string]any, p *pr
 	}
 	if _, err := systemops.Command(ctx, args, opts); err != nil {
 		if code, ok := systemops.CommandExitCode(err); ok {
-			switch {
-			case action == "luks.open" && code == 2:
-				return nil, reject("The LUKS password did not unlock this volume")
-			case code == 5:
+			if code == 5 {
 				return nil, reject("The encrypted volume or mapping is busy")
 			}
 		}
 		return nil, err
 	}
+	message := "Operation complete. Background synchronization or SMART testing is shown in device status."
 	if _, err := systemops.Command(context.WithoutCancel(ctx), []string{"udevadm", "settle", "--timeout=30"}, systemops.CommandOptions{}); err != nil {
-		return nil, err
+		message = "The LUKS operation completed. Device inventory may be out of date. Refresh the device list."
 	}
-	return map[string]any{"target": p.Target, "message": "Operation complete. Background synchronization or SMART testing is shown in device status."}, nil
+	return map[string]any{"target": p.Target, "message": message}, nil
 }

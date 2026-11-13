@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import secrets
@@ -114,7 +115,9 @@ def exercise(worker, root, loop):
     worker.action("close", target=mapped)
     worker.action("header-backup", target=loop, folder=str(root))
     backup = root / (uuid + ".luks-header")
+    owner = pwd.getpwnam(worker.actor)
     assert backup.is_file() and backup.stat().st_mode & 0o777 == 0o600
+    assert (backup.stat().st_uid, backup.stat().st_gid) == (owner.pw_uid, owner.pw_gid)
     worker.action("key-remove", **params, slot=0, failure=("plan", "The last LUKS key cannot be removed"))
     worker.action("key-add", **params, password=second)
     worker.action("key-remove", **params, slot=0, failure=("execute", "Enter a password that unlocks a different key slot"))
@@ -173,6 +176,13 @@ def exercise(worker, root, loop):
             if file.is_file():
                 worker.check(file.read_bytes())
     worker.check(command("journalctl", "-b", "--no-pager", "-o", "cat").encode())
+
+    # Older containers retain basic open/close support.
+    subprocess.run(["cryptsetup", "luksFormat", "--batch-mode", "--type", "luks1",
+                    "--iter-time", "10", "--key-file", "-", loop], input=first.encode(), check=True)
+    command("udevadm", "settle")
+    worker.action("open", **params, name=mapping)
+    worker.action("close", target=mapped)
 
 
 def main():

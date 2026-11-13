@@ -86,7 +86,7 @@ func prepareExtra(ctx context.Context, action string, params map[string]any, p *
 
 func planExtraState(ctx context.Context, action string, params map[string]any, p *prepared, config *managedConfig, rows []string) (any, []string, error) {
 	var err error
-	s := extraState{Config: config, CrypttabHash: sha256.Sum256([]byte(strings.Join(rows, "\n")))}
+	s := extraState{Config: config, CrypttabHash: sha256.Sum256([]byte(strings.Join(rows, "")))}
 	d := []string{p.Target, "LUKS2: " + p.UUID}
 	switch action {
 	case "luks.key-add", "luks.key-remove", "luks.auto-enable", "luks.auto-disable":
@@ -108,7 +108,10 @@ func planExtraState(ctx context.Context, action string, params map[string]any, p
 		if err != nil {
 			return nil, nil, err
 		}
-		if !slices.Contains(p.Meta.Slots, slot) || !otherUsable(manualSlots(p.Meta.UsableSlots, config), slot) {
+		if !slices.Contains(p.Meta.Slots, slot) {
+			return nil, nil, reject("The selected LUKS key slot is no longer present")
+		}
+		if !otherUsable(manualSlots(p.Meta.UsableSlots, config), slot) {
 			return nil, nil, reject("The last LUKS key cannot be removed")
 		}
 		if config != nil && slot == config.Slot {
@@ -165,7 +168,7 @@ func planExtraState(ctx context.Context, action string, params map[string]any, p
 			}
 			d = append(d, "Store this backup separately. It can restore revoked keys and does not contain your files.")
 		} else {
-			cache, digest, err := snapshotHeader(ctx, dir, base, p.UUID)
+			cache, digest, err := snapshotHeader(ctx, dir, base, p.Meta)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -184,14 +187,32 @@ func managedCrypttabRow(name, uuid string) string {
 	return name + " UUID=" + uuid + " " + key + " luks,nofail,headless,x-systemd.device-timeout=30s"
 }
 
+// Keep each terminator with its original line; local comments and unrelated
+// mappings can then be retained byte for byte, including mixed line endings.
+func splitCrypttab(raw string) []string {
+	var rows []string
+	for raw != "" {
+		end := strings.IndexAny(raw, "\r\n")
+		if end < 0 {
+			return append(rows, raw)
+		}
+		if raw[end] == '\r' && end+1 < len(raw) && raw[end+1] == '\n' {
+			end++
+		}
+		rows = append(rows, raw[:end+1])
+		raw = raw[end+1:]
+	}
+	return rows
+}
+
 func inspectCrypttab(rows []string, uuid string, cfg *managedConfig, mapping string) (kept []string, found bool, err error) {
 	marker := "# PaNasMs " + uuid
 	result := make([]string, 0, len(rows)+2)
 
 	for i := 0; i < len(rows); i++ {
-		row := rows[i]
+		row := strings.TrimRight(rows[i], "\r\n")
 		if row == marker {
-			if found || cfg == nil || i+1 >= len(rows) || rows[i+1] != managedCrypttabRow(cfg.Name, uuid) {
+			if found || cfg == nil || i+1 >= len(rows) || strings.TrimRight(rows[i+1], "\r\n") != managedCrypttabRow(cfg.Name, uuid) {
 				return nil, false, reject("The managed crypttab entry changed; review the system configuration")
 			}
 			found = true
@@ -202,7 +223,7 @@ func inspectCrypttab(rows []string, uuid string, cfg *managedConfig, mapping str
 		if mapping != "" && len(fields) > 0 && !strings.HasPrefix(fields[0], "#") && (fields[0] == mapping || len(fields) > 1 && strings.EqualFold(fields[1], "UUID="+uuid)) {
 			return nil, false, reject("This LUKS volume or mapping already has an unmanaged crypttab entry")
 		}
-		result = append(result, row)
+		result = append(result, rows[i])
 	}
 	return result, found, nil
 }
@@ -212,10 +233,15 @@ func updatedCrypttab(rows []string, uuid string, cfg *managedConfig, mapping str
 	if err != nil {
 		return "", err
 	}
+	content := strings.Join(result, "")
 	if mapping != "" {
-		result = append(result, "# PaNasMs "+uuid, managedCrypttabRow(mapping, uuid))
+		entry := "# PaNasMs " + uuid + "\n" + managedCrypttabRow(mapping, uuid) + "\n"
+		if content != "" && !strings.HasSuffix(content, "\n") && !strings.HasSuffix(content, "\r") {
+			return entry + content, nil
+		}
+		content += entry
 	}
-	return strings.Join(result, "\n") + "\n", nil
+	return content, nil
 }
 
 func cryptAction(ctx context.Context, args []string, input string, mutate bool, r *systemops.Reporter) error {
@@ -275,49 +301,58 @@ func sealFile(f *os.File) error {
 func executeExtra(ctx context.Context, action string, params map[string]any, p *prepared, path string, r *systemops.Reporter) (map[string]any, error) {
 	s := p.Extra.(extraState)
 	secret, _ := params["passphrase"].(string)
+	// Authorization and credential probes have no side effects.
+	switch action {
+	case "luks.key-add", "luks.auto-enable":
+		if err := unlocks(ctx, path, secret, -1); err != nil {
+			if code, ok := systemops.CommandExitCode(err); ok && code == 2 {
+				err = reject("The LUKS password did not unlock this volume")
+			}
+			return nil, systemops.BeforeMutation(err)
+		}
+	}
 	var err error
 	switch action {
 	case "luks.key-add":
-		if err = unlocks(ctx, path, secret, -1); err != nil {
-			return nil, err
-		}
 		newKey, _ := params["password"].(string)
 		// Reconcile a previously completed key addition after worker interruption.
 		if err = unlocks(ctx, path, newKey, -1); err != nil {
 			if code, ok := systemops.CommandExitCode(err); !ok || code != 2 {
-				return nil, err
+				return nil, systemops.BeforeMutation(err)
 			}
 			f, e := anonymousFile("luks-input")
 			if e != nil {
-				return nil, e
+				return nil, systemops.BeforeMutation(e)
 			}
 			defer f.Close()
 			if _, e = f.WriteString(newKey); e != nil {
-				return nil, e
+				return nil, systemops.BeforeMutation(e)
 			}
 			if e = sealFile(f); e != nil {
-				return nil, e
+				return nil, systemops.BeforeMutation(e)
 			}
 			if err = cryptAction(ctx, []string{"luksAddKey", "--key-file", "-", path, fdPath(f)}, secret, true, r); err == nil {
 				err = unlocks(ctx, path, newKey, -1)
 			}
+		} else {
+			return map[string]any{"target": p.Target, "message": "The requested password already unlocks this volume.", "noChanges": true}, nil
 		}
 	case "luks.key-remove":
 		slot, e := slotParam(params["slot"])
 		if e != nil {
-			return nil, e
+			return nil, systemops.BeforeMutation(e)
 		}
-		if err = authorizeOther(ctx, path, secret, manualSlots(p.Meta.UsableSlots, s.Config), slot); err == nil {
-			err = killSlot(ctx, path, secret, slot, r)
+		if err = authorizeOther(ctx, path, secret, manualSlots(p.Meta.UsableSlots, s.Config), slot); err != nil {
+			return nil, systemops.BeforeMutation(err)
 		}
+		err = killSlot(ctx, path, secret, slot, r)
 	case "luks.auto-enable":
-		if err = unlocks(ctx, path, secret, -1); err == nil {
-			err = enableAuto(ctx, p, path, s.Config, secret, r)
-		}
+		err = enableAuto(ctx, p, path, s.Config, secret, r)
 	case "luks.auto-disable":
-		if err = authorizeOther(ctx, path, secret, p.Meta.UsableSlots, s.Config.Slot); err == nil {
-			err = disableAuto(ctx, p, path, s.Config, secret, r)
+		if err = authorizeOther(ctx, path, secret, p.Meta.UsableSlots, s.Config.Slot); err != nil {
+			return nil, systemops.BeforeMutation(err)
 		}
+		err = disableAuto(ctx, p, path, s.Config, secret, r)
 	case "luks.header-backup", "luks.header-restore":
 		err = executeHeader(ctx, action, p, path, s, r)
 	default:
@@ -450,11 +485,11 @@ func disableAuto(ctx context.Context, p *prepared, path string, cfg *managedConf
 	if occupied {
 		f, err := managedKey(key)
 		if err != nil {
-			return reject("The reserved slot is occupied. Restore its original root-only managed key file before retrying.")
+			return systemops.BeforeMutation(reject("The reserved slot is occupied. Restore its original root-only managed key file before retrying."))
 		}
 		defer f.Close()
 		if err = verifyManaged(ctx, path, f, cfg.Slot); err != nil {
-			return err
+			return systemops.BeforeMutation(err)
 		}
 	}
 	if err := changeBootConfig(ctx, cfg, "", r); err != nil {

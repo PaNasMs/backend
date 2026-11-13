@@ -31,7 +31,7 @@ func headerDirectory(folder string) (*os.File, storagebase.TargetWitness, error)
 
 const headerLimit = 128 << 20
 
-func snapshotHeader(ctx context.Context, dir *os.File, name, uuid string) (*os.File, string, error) {
+func snapshotHeader(ctx context.Context, dir *os.File, name string, target luksMetadata) (*os.File, string, error) {
 	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, "", reject("LUKS header backup not found")
@@ -60,7 +60,7 @@ func snapshotHeader(ctx context.Context, dir *os.File, name, uuid string) (*os.F
 	if err == nil {
 		var meta luksMetadata
 		meta, err = readLUKSMetadata(ctx, fdPath(cache))
-		if err == nil && meta.UUID != uuid {
+		if err == nil && (meta.UUID != target.UUID || target.RestoreIdentity == "" || meta.RestoreIdentity != target.RestoreIdentity) {
 			err = reject("The backup belongs to another LUKS volume")
 		} else if err == nil && len(meta.UsableSlots) == 0 {
 			err = reject("The backup has no usable LUKS password slot")
@@ -101,8 +101,11 @@ func publishFile(dir *os.File, name string, source io.Reader, uid, gid int) erro
 func publishStaged(dir *os.File, name string, source io.Reader, uid, gid int) error {
 	dest := int(dir.Fd())
 	stageName := ".panasms-stage-" + name
-	if err := unix.Mkdirat(dest, stageName, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
-		return err
+	mkdirErr := unix.Mkdirat(dest, stageName, 0700)
+	if mkdirErr == nil {
+		defer unix.Unlinkat(dest, stageName, unix.AT_REMOVEDIR)
+	} else if !errors.Is(mkdirErr, unix.EEXIST) {
+		return mkdirErr
 	}
 	stageFD, err := unix.Openat(dest, stageName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -117,7 +120,9 @@ func publishStaged(dir *os.File, name string, source io.Reader, uid, gid int) er
 	if int(st.Uid) != os.Geteuid() || st.Mode&07777 != 0700 {
 		return reject("The filesystem cannot stage a private LUKS backup")
 	}
-	defer unix.Unlinkat(dest, stageName, unix.AT_REMOVEDIR)
+	if mkdirErr != nil {
+		defer unix.Unlinkat(dest, stageName, unix.AT_REMOVEDIR)
+	}
 	// Use a destination-specific partial name, so moving an unrelated
 	// root-owned directory here cannot make a retry unlink ordinary files.
 	var parent unix.Stat_t
@@ -170,53 +175,53 @@ func executeHeader(ctx context.Context, action string, p *prepared, path string,
 	folder := s.Folder.Ancestor
 	dir, w, err := headerDirectory(folder)
 	if err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	defer dir.Close()
 	if w != s.Folder {
-		return reject("The backup folder changed; review a new operation plan")
+		return systemops.BeforeMutation(reject("The backup folder changed; review a new operation plan"))
 	}
 	name := p.UUID + ".luks-header"
 	if action == "luks.header-restore" {
-		f, digest, err := snapshotHeader(ctx, dir, name, p.UUID)
+		f, digest, err := snapshotHeader(ctx, dir, name, p.Meta)
 		if err != nil {
-			return err
+			return systemops.BeforeMutation(err)
 		}
 		defer f.Close()
 		if digest != s.HeaderHash {
-			return reject("The header backup changed; review a new operation plan")
+			return systemops.BeforeMutation(reject("The header backup changed; review a new operation plan"))
 		}
 		return cryptAction(ctx, []string{"luksHeaderRestore", "--batch-mode", "--header-backup-file", fdPath(f), path}, "", true, r)
 	}
 	if p.Actor.UID <= 0 || p.Actor.GID < 0 {
-		return reject("The backup owner could not be verified")
+		return systemops.BeforeMutation(reject("The backup owner could not be verified"))
 	}
 	// cryptsetup creates its backup file itself. A private tmpfs directory
 	// isolates that pathname from the destination directory's owner.
 	const work = "/run/panasms-luks-headers"
 	if err := storagebase.SecureDirectory(work, 0, true); err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	header := filepath.Join(work, "header")
 	// The global storage lock serializes backups. Reap a partial header left by
 	// a worker that died before it could unlink its scratch file.
 	if err := os.Remove(header); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	defer os.Remove(header)
 	if err = cryptAction(ctx, []string{"luksHeaderBackup", "--header-backup-file", header, path}, "", false, r); err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	source, err := os.Open(header)
 	if err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	defer source.Close()
 	if err = os.Remove(header); err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	if err = storagebase.SameDirectory(dir, folder); err != nil {
-		return err
+		return systemops.BeforeMutation(err)
 	}
 	return publishFile(dir, name, source, p.Actor.UID, p.Actor.GID)
 }

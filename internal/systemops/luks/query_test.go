@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,27 @@ func TestSlotReplacementChangesHeaderDigest(t *testing.T) {
 	}
 	if !slices.Equal(before.Slots, after.Slots) || before.HeaderDigest == after.HeaderDigest {
 		t.Fatal("replaced slot must invalidate a plan")
+	}
+}
+
+func TestRestoreIdentityBindsEncryptionGeometry(t *testing.T) {
+	fixture := `{"keyslots":{"0":{"type":"luks2"}},"digests":{"0":{"type":"pbkdf2","hash":"sha256","iterations":1000,"salt":"AAAA","digest":"BBBB","keyslots":["0"],"segments":["0"]}},"segments":{"0":{"type":"crypt","offset":"16777216","size":"dynamic","iv_tweak":"0","sector_size":4096,"encryption":"aes-xts-plain64"}}}`
+	identity := func(raw string) string {
+		t.Helper()
+		meta, err := parseLUKSMetadata(sampleUUID, []byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return meta.RestoreIdentity
+	}
+	original := identity(fixture)
+	if original == "" {
+		t.Fatal("missing restore identity")
+	}
+	for _, change := range [][2]string{{"aes-xts-plain64", "aes-cbc-plain64"}, {"16777216", "8388608"}, {"4096", "512"}, {"BBBB", "CCCC"}, {"AAAA", "DDDD"}} {
+		if identity(strings.Replace(fixture, change[0], change[1], 1)) == original {
+			t.Fatalf("ignores %s", change[0])
+		}
 	}
 }
 

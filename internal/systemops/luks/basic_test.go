@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"panasms.local/backend/internal/systemops"
 )
 
 func TestBasicPassphraseIsPassedOnlyThroughStdin(t *testing.T) {
@@ -40,16 +42,41 @@ func TestBasicPassphraseIsPassedOnlyThroughStdin(t *testing.T) {
 	}
 }
 
-func TestBasicOpenRedactsWrongKeyAndBusyErrors(t *testing.T) {
-	for _, tc := range []struct{ code, want string }{{"2", "password"}, {"5", "busy"}} {
+func TestBasicOpenRedactsFailuresAndReportsNoChangesOnlyBeforeActivation(t *testing.T) {
+	for _, tc := range []struct {
+		check, activate, want string
+		unchanged             bool
+	}{
+		{"2", "0", "password", true},
+		{"0", "5", "busy", false},
+		{"0", "2", "code 2", false},
+	} {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "cryptsetup"), []byte("#!/bin/sh\ncat >&2\nexit "+tc.code+"\n"), 0700); err != nil {
+		script := "#!/bin/sh\ncat >&2\nif [ \"$2\" = --test-passphrase ]; then exit " + tc.check + "; fi\nexit " + tc.activate + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "cryptsetup"), []byte(script), 0700); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 		_, err := applyBasic(context.Background(), "luks.open", map[string]any{"passphrase": "secret marker"}, &prepared{}, nil)
-		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret marker") {
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret marker") || systemops.Unchanged(err) != tc.unchanged {
 			t.Fatalf("unexpected failure: %v", err)
+		}
+	}
+}
+
+func TestCompletedLUKSOperationSurvivesInventoryFailure(t *testing.T) {
+	dir := t.TempDir()
+	for name, script := range map[string]string{"cryptsetup": "#!/bin/sh\nexit 0\n", "udevadm": "#!/bin/sh\nexit 1\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	p := &prepared{Target: "/dev/loop0", ReadPath: "/proc/0/fd/4", Name: "data"}
+	for _, action := range []string{"luks.create", "luks.open"} {
+		result, err := applyBasic(context.Background(), action, map[string]any{"passphrase": "test"}, p, nil)
+		if err != nil || result["target"] != p.Target || !strings.Contains(result["message"].(string), "Refresh the device list") {
+			t.Fatalf("unexpected completion: %v, %v", result, err)
 		}
 	}
 }
@@ -59,10 +86,14 @@ func TestLUKSCreationRequiresUnambiguousBlankSignature(t *testing.T) {
 		response string
 		accepted bool
 	}{
-		{"exit 2", true}, {"echo TYPE=ext4", false}, {"echo PTTYPE=gpt", false}, {"exit 8", false}, {"exit 1", false},
+		{`echo '{"signatures":[]}'`, true},
+		{`echo '{"signatures":[{"type":"gpt","offset":"0x200"}]}'`, false},
+		{`echo '{"signatures":null}'`, false}, {`echo '{}'`, false},
+		{`echo '{"signatures":"unknown"}'`, false}, {`echo '{"signatures":[]} invalid'`, false},
+		{`echo '{"signatures":[]}'; exit 2`, false}, {"exit 1", false}, {"exit 0", false},
 	} {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "blkid"), []byte("#!/bin/sh\n"+tc.response+"\n"), 0700); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "wipefs"), []byte("#!/bin/sh\n"+tc.response+"\n"), 0700); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))

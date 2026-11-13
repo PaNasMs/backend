@@ -27,6 +27,7 @@ var luksUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{
 type luksMetadata struct {
 	UUID               string
 	HeaderDigest       string
+	RestoreIdentity    string
 	Slots, UsableSlots []int
 }
 
@@ -52,11 +53,33 @@ func readLUKSMetadata(ctx context.Context, path string) (luksMetadata, error) {
 	return parseLUKSMetadata(uuid, raw)
 }
 
+type volumeDigest struct {
+	Type       string
+	Hash       string
+	Iterations uint64
+	Salt       string
+	Digest     string
+}
+
+type luksSegment struct {
+	Type       string
+	Offset     string
+	Size       string
+	IVTweak    string `json:"iv_tweak"`
+	Encryption string
+	SectorSize uint64 `json:"sector_size"`
+	Integrity  json.RawMessage
+	Flags      []string
+}
+
 func parseLUKSMetadata(uuid string, data []byte) (luksMetadata, error) {
 	var header struct {
-		Keyslots map[string]struct{ Type string }                 `json:"keyslots"`
-		Digests  map[string]struct{ Keyslots, Segments []string } `json:"digests"`
-		Segments map[string]struct{ Type string }                 `json:"segments"`
+		Keyslots map[string]struct{ Type string } `json:"keyslots"`
+		Digests  map[string]struct {
+			volumeDigest
+			Keyslots, Segments []string
+		} `json:"digests"`
+		Segments map[string]luksSegment `json:"segments"`
 	}
 	invalid := reject("Invalid LUKS2 header metadata")
 	if json.Unmarshal(data, &header) != nil || header.Keyslots == nil || header.Digests == nil || len(header.Segments) == 0 {
@@ -67,10 +90,29 @@ func parseLUKSMetadata(uuid string, data []byte) (luksMetadata, error) {
 	sum := sha256.Sum256(data)
 	result := luksMetadata{UUID: uuid, HeaderDigest: hex.EncodeToString(sum[:]), Slots: []int{}, UsableSlots: []int{}}
 	bound := map[string]bool{}
+	// Keyslot enrollment changes the slot list attached to a digest, while
+	// the digest of the volume key and the data encryption geometry persist.
+	segment := header.Segments["0"]
+	normalSegment := len(header.Segments) == 1 && segment.Type == "crypt"
+	comparable := normalSegment && segment.Encryption != "" && segment.Offset != "" && segment.Size != "" && segment.IVTweak != "" && segment.SectorSize > 0
+	var digestIDs []string
 	for _, digest := range header.Digests {
 		for _, id := range digest.Segments {
 			if _, ok := header.Segments[id]; !ok {
 				return luksMetadata{}, invalid
+			}
+		}
+		onData := normalSegment && slices.Contains(digest.Segments, "0")
+		if onData {
+			// Unknown digest types cannot be safely compared using PBKDF2 fields.
+			if digest.Type != "pbkdf2" || digest.Hash == "" || digest.Iterations == 0 || digest.Salt == "" || digest.Digest == "" {
+				comparable = false
+			} else {
+				encoded, err := json.Marshal(digest.volumeDigest)
+				if err != nil {
+					return luksMetadata{}, err
+				}
+				digestIDs = append(digestIDs, string(encoded))
 			}
 		}
 		for _, id := range digest.Keyslots {
@@ -80,10 +122,22 @@ func parseLUKSMetadata(uuid string, data []byte) (luksMetadata, error) {
 			}
 			// Only count standard keys for a normal single-segment encrypted volume.
 			// Unbound or reencryption slots cannot establish another working password.
-			if slot.Type == "luks2" && len(header.Segments) == 1 && slices.Contains(digest.Segments, "0") && header.Segments["0"].Type == "crypt" {
+			if slot.Type == "luks2" && onData {
 				bound[id] = true
 			}
 		}
+	}
+	if comparable && len(digestIDs) > 0 {
+		slices.Sort(digestIDs)
+		encoded, err := json.Marshal(struct {
+			Segment luksSegment
+			Digests []string
+		}{segment, digestIDs})
+		if err != nil {
+			return luksMetadata{}, err
+		}
+		sum := sha256.Sum256(encoded)
+		result.RestoreIdentity = hex.EncodeToString(sum[:])
 	}
 	for key := range header.Keyslots {
 		id, err := strconv.Atoi(key)
@@ -163,12 +217,7 @@ func readCrypttab() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 {
-		return []string{}, nil
-	}
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	content = strings.ReplaceAll(content, "\r", "\n")
-	return strings.Split(strings.TrimSuffix(content, "\n"), "\n"), nil
+	return splitCrypttab(string(data)), nil
 }
 
 func queryResult(path string, metadata luksMetadata, config *managedConfig, lines []string) (json.RawMessage, error) {

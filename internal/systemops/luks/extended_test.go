@@ -16,20 +16,34 @@ import (
 func TestManagedCrypttabRetainsUnownedRows(t *testing.T) {
 	const uuid = "3bb716f4-5a44-4f12-9252-a5aea677ece2"
 	cfg := &managedConfig{UUID: uuid, Name: "vault", Slot: 31}
-	base := []string{"# local policy", "home UUID=other none luks", ""}
+	const original = "# local policy\r\nhome UUID=other none luks\n\r\n"
+	base := splitCrypttab(original)
 	value, err := updatedCrypttab(base, uuid, nil, "vault")
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSuffix(value, "\n"), "\n")
+	lines := splitCrypttab(value)
 	again, err := updatedCrypttab(lines, uuid, cfg, "vault")
 	if err != nil || again != value {
 		t.Fatalf("non-idempotent update: %v", err)
 	}
 	disabled, err := updatedCrypttab(lines, uuid, cfg, "")
-	if err != nil || disabled != strings.Join(base, "\n")+"\n" {
+	if err != nil || disabled != original {
 		t.Fatalf("unexpected disable: %q %v", disabled, err)
 	}
+	const unterminated = "# local override without final newline"
+	withEntry, err := updatedCrypttab(splitCrypttab(unterminated), uuid, nil, "vault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored, err := updatedCrypttab(splitCrypttab(withEntry), uuid, cfg, ""); err != nil || restored != unterminated {
+		t.Fatalf("unterminated row changed: %q %v", restored, err)
+	}
+	onlyManaged := splitCrypttab("# PaNasMs " + uuid + "\n" + managedCrypttabRow(cfg.Name, uuid) + "\n")
+	if disabled, err = updatedCrypttab(onlyManaged, uuid, cfg, ""); err != nil || disabled != "" {
+		t.Fatalf("complete removal: %q %v", disabled, err)
+	}
+
 	for _, rows := range [][]string{{"vault /dev/external none luks"}, {"other UUID=" + uuid + " none luks"}, {"# PaNasMs " + uuid, "other UUID=foreign none luks"}, append(slices.Clone(lines), lines...)} {
 		if _, err = updatedCrypttab(rows, uuid, cfg, "vault"); err == nil {
 			t.Errorf("accepted conflicting rows: %q", rows)
@@ -167,6 +181,12 @@ func TestDisposableLUKSKeysAndHeader(t *testing.T) {
 	if err = unlocks(ctx, path, pass, -1); err == nil {
 		t.Fatal("revoked key still works")
 	}
+	// A normal header restored after revocation must match the current volume,
+	// although its backup contains a different set of enrolled keyslots.
+	p.Meta, err = readLUKSMetadata(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	params["folder"] = folder
 	state, _, err := planExtraState(ctx, "luks.header-restore", params, p, nil, nil)
 	if err != nil {
@@ -179,6 +199,39 @@ func TestDisposableLUKSKeysAndHeader(t *testing.T) {
 	if err = unlocks(ctx, path, pass, -1); err != nil {
 		t.Fatal("restored key unavailable", err)
 	}
+	// Formatting an independent image creates a different volume key, even
+	// when the admin explicitly selects the same UUID, password and geometry.
+	foreign := filepath.Join(folder, "foreign.img")
+	foreignFile, err := os.Create(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = foreignFile.Truncate(32 << 20); err != nil {
+		t.Fatal(err)
+	}
+	if err = foreignFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	foreignArgs := append(slices.Clone(args[:len(args)-1]), "--uuid", p.UUID, foreign)
+	if err = cryptAction(ctx, foreignArgs, pass, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(backup); err != nil {
+		t.Fatal(err)
+	}
+	if err = cryptAction(ctx, []string{"luksHeaderBackup", "--header-backup-file", backup, foreign}, "", false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = planExtraState(ctx, "luks.header-restore", params, p, nil, nil); err == nil {
+		t.Fatal("accepted header with a different volume key and the same UUID")
+	}
+	if _, err = executeExtra(ctx, "luks.header-restore", params, p, path, nil); err == nil {
+		t.Fatal("executed restore after backup substitution")
+	}
+	if err = unlocks(ctx, path, newPass, -1); err != nil {
+		t.Fatal("substituted backup affected target", err)
+	}
+
 	// A genuine cryptsetup backup can have the right UUID but no keys.
 	if err = cryptAction(ctx, []string{"luksErase", "--batch-mode", path}, "", true, nil); err != nil {
 		t.Fatal(err)

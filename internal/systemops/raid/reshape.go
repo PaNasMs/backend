@@ -386,10 +386,10 @@ func (s *service) recoverRecord(ctx context.Context, name string, boot bool) err
 		if err != nil {
 			return err
 		}
-		// mdadm 4.4 can return success with incorrect stripes when reassembling
-		// an interrupted RAID5-to-RAID6 conversion from its backup.
-		if present && rec.Level == "6" && !rec.Growth {
-			return reject("RAID6 conversion backup present. Preserve the member disks and backup for offline recovery before assembling this array.")
+		// mdadm 4.4 backups for interrupted RAID5/6 restripes can contain
+		// incorrect logical data. Preserve the original members for recovery.
+		if present && !rec.Growth && (rec.Level == "6" || rec.SourceCount > rec.Members || rec.SourceCount == 0) {
+			return reject("RAID conversion backup present. Preserve the member disks and backup for offline recovery before assembling this array.")
 		}
 		if present {
 			args = append(args, "--backup-file="+rec.Backup)

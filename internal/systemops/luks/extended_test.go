@@ -2,12 +2,15 @@ package luks
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestManagedCrypttabRetainsUnownedRows(t *testing.T) {
@@ -53,7 +56,12 @@ func TestInterruptedNamedHeaderPublication(t *testing.T) {
 	if err = os.Mkdir(stage, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(stage, "partial"), []byte("incomplete"), 0600); err != nil {
+	var st unix.Stat_t
+	if err = unix.Fstat(int(dir.Fd()), &st); err != nil {
+		t.Fatal(err)
+	}
+	partial := fmt.Sprintf(".panasms-luks-%x-%x-header.partial", st.Dev, st.Ino)
+	if err = os.WriteFile(filepath.Join(stage, partial), []byte("incomplete"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err = publishStaged(dir, "header", strings.NewReader("complete"), -1, -1); err != nil {

@@ -118,7 +118,13 @@ func publishStaged(dir *os.File, name string, source io.Reader, uid, gid int) er
 		return reject("The filesystem cannot stage a private LUKS backup")
 	}
 	defer unix.Unlinkat(dest, stageName, unix.AT_REMOVEDIR)
-	const partial = "partial"
+	// Use a destination-specific partial name, so moving an unrelated
+	// root-owned directory here cannot make a retry unlink ordinary files.
+	var parent unix.Stat_t
+	if err = unix.Fstat(dest, &parent); err != nil {
+		return err
+	}
+	partial := fmt.Sprintf(".panasms-luks-%x-%x-%s.partial", parent.Dev, parent.Ino, name)
 	if err = unix.Unlinkat(stageFD, partial, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}

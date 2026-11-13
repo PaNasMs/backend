@@ -35,7 +35,7 @@ func TestStorageQueryMemberAuthorizationAndRedaction(t *testing.T) {
 		if strings.Contains(string(result), "private-") != admin {
 			t.Fatalf("admin=%v result=%s", admin, result)
 		}
-		for _, view := range []string{"raid-candidates", "storage-luks"} {
+		for _, view := range []string{"raid-candidates", "storage-luks", "storage-snapshots"} {
 			calls = 0
 			_, err = d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: view, Target: "requested"}, reporter())
 			if admin && (err != nil || calls != 1) || !admin && (err == nil || calls != 0) {

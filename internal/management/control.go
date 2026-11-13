@@ -72,6 +72,11 @@ func recoveryContext(req Request) string {
 			result[key] = value
 		}
 	}
+	if req.Action == "filesystem.snapshot-delete" || req.Action == "filesystem.snapshot-restore" {
+		if snapshot, ok := req.Params["snapshot"].(string); ok && len(snapshot) <= 1024 {
+			result["snapshot"] = snapshot
+		}
+	}
 	raw, _ := json.Marshal(result)
 	return string(raw)
 }

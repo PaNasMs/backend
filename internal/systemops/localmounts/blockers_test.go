@@ -1,12 +1,13 @@
 package localmounts
 
 import (
+	"panasms.local/backend/internal/systemops/storagebase"
 	"reflect"
 	"testing"
 )
 
 func TestParseExportsEscapes(t *testing.T) {
-	got := parseExports([]byte("/mnt/with\\040space host(options)\n/mnt/tab\\011name host(options)\n"))
+	got := storagebase.ParseExports([]byte("/mnt/with\\040space host(options)\n/mnt/tab\\011name host(options)\n"))
 	want := []string{"/mnt/with space", "/mnt/tab\tname"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q", got)

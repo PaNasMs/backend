@@ -12,6 +12,7 @@ import (
 	"panasms.local/backend/internal/systemops/networkmounts"
 	"panasms.local/backend/internal/systemops/partitionfs"
 	"panasms.local/backend/internal/systemops/raid"
+	"panasms.local/backend/internal/systemops/snapshots"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
 	"strings"
@@ -194,6 +195,8 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	case "modules":
 		member, _ := ctx.Value(moduleMemberKey{}).(bool)
 		return modulelifecycle.Query(member)
+	case "storage-snapshots":
+		return snapshots.Query(ctx, target)
 	case "storage-luks":
 		return luks.Query(ctx, target)
 	case "storage-options", "raid-candidates":
@@ -226,6 +229,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if snapshots.IsAction(action) {
+		return snapshots.Plan(ctx, action, p)
+	}
 	if luks.IsAction(action) {
 		return luks.Plan(ctx, action, p)
 	}
@@ -278,6 +284,11 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if snapshots.IsAction(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
+		return snapshots.Execute(ctx, action, p, expected, authorize, r)
+	}
 	if luks.IsAction(action) {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		actor, ok := ctx.Value(authorizedIdentityKey{}).(auth.Identity)

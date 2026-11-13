@@ -57,7 +57,7 @@ func TestConfiguredAliasesProtectUnmount(t *testing.T) {
 	if e := os.Symlink(loop, loop); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := configuredInside(loop, volume); e == nil {
+	if _, e := ConfiguredInside(loop, volume); e == nil {
 		t.Fatal("unresolvable configured path accepted")
 	}
 }

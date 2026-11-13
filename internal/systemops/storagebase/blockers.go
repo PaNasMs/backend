@@ -20,7 +20,7 @@ type StoragePath struct{ Name, Path string }
 func inside(path, root string) bool {
 	return path == root || strings.HasPrefix(path, strings.TrimRight(root, "/")+"/")
 }
-func configuredInside(path, root string) (bool, error) {
+func ConfiguredInside(path, root string) (bool, error) {
 	if inside(path, root) {
 		return true, nil
 	}
@@ -109,7 +109,7 @@ func inspectBlockers(ctx context.Context, proc string, selected, all []folders.L
 			}
 		}
 		for _, home := range homes {
-			used, err := configuredInside(home.Path, m.Target)
+			used, err := ConfiguredInside(home.Path, m.Target)
 			if err != nil {
 				return err
 			}
@@ -118,7 +118,7 @@ func inspectBlockers(ctx context.Context, proc string, selected, all []folders.L
 			}
 		}
 		for _, share := range shares {
-			used, err := configuredInside(share.Path, m.Target)
+			used, err := ConfiguredInside(share.Path, m.Target)
 			if err != nil {
 				return err
 			}
@@ -127,7 +127,7 @@ func inspectBlockers(ctx context.Context, proc string, selected, all []folders.L
 			}
 		}
 		for _, path := range exports {
-			used, err := configuredInside(path, m.Target)
+			used, err := ConfiguredInside(path, m.Target)
 			if err != nil {
 				return err
 			}

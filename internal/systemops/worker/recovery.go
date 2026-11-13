@@ -17,6 +17,7 @@ import (
 	"panasms.local/backend/internal/systemops/networkmounts"
 	"panasms.local/backend/internal/systemops/partitionfs"
 	"panasms.local/backend/internal/systemops/raid"
+	"panasms.local/backend/internal/systemops/snapshots"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
@@ -31,6 +32,8 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case snapshots.IsAction(req.Action):
+		return snapshots.Recovery(ctx, target, req.Params)
 	case luks.IsAction(req.Action):
 		route = "/storage/disks"
 		add("Target", target)

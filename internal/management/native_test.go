@@ -46,12 +46,12 @@ func TestMigratedAndLegacyDomainsDispatchExactlyOnce(t *testing.T) {
 			check(mode, Request{Action: action}, want)
 		}
 	}
-	for _, action := range []string{"luks.create", "luks.open", "luks.close", "luks.key-add", "luks.key-remove", "luks.auto-enable", "luks.auto-disable", "luks.header-backup", "luks.header-restore", "folder.permissions", "smb.mount", "smb.unmount", "nfs.mount", "nfs.unmount", "user.create", "user.home", "user.security", "group.edit", "homes.move", "homes.recover", "share.save", "share.remove", "share.recover", "share.account", "share.disconnect", "nfs.export", "nfs.export-remove", "system.web-port", "updates.repair", "system.reboot"} {
+	for _, action := range []string{"filesystem.snapshot-create", "filesystem.snapshot-delete", "filesystem.snapshot-restore", "luks.create", "luks.open", "luks.close", "luks.key-add", "luks.key-remove", "luks.auto-enable", "luks.auto-disable", "luks.header-backup", "luks.header-restore", "folder.permissions", "smb.mount", "smb.unmount", "nfs.mount", "nfs.unmount", "user.create", "user.home", "user.security", "group.edit", "homes.move", "homes.recover", "share.save", "share.remove", "share.recover", "share.account", "share.disconnect", "nfs.export", "nfs.export-remove", "system.web-port", "updates.repair", "system.reboot"} {
 		if actionModules[action] != goNative {
 			t.Fatal("migrated route missing", action)
 		}
 	}
-	for _, action := range []string{"filesystem.snapshot-create", "system.update.install"} {
+	for _, action := range []string{"smart.short", "system.update.install"} {
 		if actionModules[action] != legacy {
 			t.Fatal("unmigrated route activated", action)
 		}

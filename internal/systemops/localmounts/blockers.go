@@ -2,30 +2,17 @@ package localmounts
 
 import (
 	"context"
-	"os"
+
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/storagebase"
-	"regexp"
+
 	"slices"
-	"strconv"
+
 	"strings"
 )
 
-var exportEscape = regexp.MustCompile(`\\([0-7]{3})`)
-
-func parseExports(raw []byte) []string {
-	paths := []string{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		paths = append(paths, exportEscape.ReplaceAllStringFunc(fields[0], func(s string) string { n, _ := strconv.ParseUint(s[1:], 8, 8); return string(rune(n)) }))
-	}
-	return paths
-}
 func defaultBlockers(ctx context.Context, selected, all []folders.LiveMount) error {
 	if len(selected) == 0 {
 		return nil
@@ -61,11 +48,10 @@ func CheckStorageBlockers(ctx context.Context, selected, all []folders.LiveMount
 			homes = append(homes, storagebase.StoragePath{Name: fields[0], Path: fields[5]})
 		}
 	}
-	exports, err := os.ReadFile("/var/lib/nfs/etab")
-	if err != nil && !os.IsNotExist(err) {
+	active, err := storagebase.ActiveNFSExports()
+	if err != nil {
 		return err
 	}
-	active := parseExports(exports)
 	active = slices.DeleteFunc(active, func(path string) bool { return ignoreExports[path] })
 	return storagebase.CheckRAIDRemovalBlockers(ctx, selected, all, homes, paths, active, closingSMB)
 }

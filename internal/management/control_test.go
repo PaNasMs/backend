@@ -48,6 +48,19 @@ func TestRecoveryContextContainsNoSecrets(t *testing.T) {
 	}
 }
 
+func TestSnapshotRecoveryContext(t *testing.T) {
+	params := map[string]any{"target": "/dev/loop2", "name": "copy", "snapshot": "backup"}
+	for _, action := range []string{"filesystem.snapshot-delete", "filesystem.snapshot-restore", "filesystem.snapshot-create"} {
+		var refs map[string]string
+		if err := json.Unmarshal([]byte(recoveryContext(Request{Action: action, Params: params})), &refs); err != nil {
+			t.Fatal(err)
+		}
+		if refs["target"] != "/dev/loop2" || refs["name"] != "copy" || (refs["snapshot"] == "backup") != (action != "filesystem.snapshot-create") {
+			t.Fatalf("unexpected recovery references for %s: %v", action, refs)
+		}
+	}
+}
+
 func TestRecoveryInspectionAndBusyGuard(t *testing.T) {
 	m, err := Open(filepath.Join(t.TempDir(), "jobs.db"))
 	if err != nil {

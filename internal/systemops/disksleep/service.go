@@ -305,3 +305,6 @@ func Command(mode string, input io.Reader, output io.Writer) error {
 		return fmt.Errorf("unknown disk sleep command")
 	}
 }
+
+// WithStorageLock serializes RAID commands with the installed disk standby worker.
+func WithStorageLock(fn func() error) error { return defaultService().locked(false, fn) }

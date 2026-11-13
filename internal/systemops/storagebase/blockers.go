@@ -62,7 +62,13 @@ func resolveConfigured(path string, depth int) (string, error) {
 func CheckBlockers(ctx context.Context, selected, all []folders.LiveMount, homes, shares []StoragePath, exports []string) error {
 	return checkBlockers(ctx, "/proc", selected, all, homes, shares, exports)
 }
+func CheckRAIDRemovalBlockers(ctx context.Context, selected, all []folders.LiveMount, homes, shares []StoragePath, exports []string, closingSMB map[string]bool) error {
+	return inspectBlockers(ctx, "/proc", selected, all, homes, shares, exports, closingSMB)
+}
 func checkBlockers(ctx context.Context, proc string, selected, all []folders.LiveMount, homes, shares []StoragePath, exports []string) error {
+	return inspectBlockers(ctx, proc, selected, all, homes, shares, exports, nil)
+}
+func inspectBlockers(ctx context.Context, proc string, selected, all []folders.LiveMount, homes, shares []StoragePath, exports []string, closingSMB map[string]bool) error {
 	if len(selected) == 0 {
 		return nil
 	}
@@ -263,6 +269,9 @@ func checkBlockers(ctx context.Context, proc string, selected, all []folders.Liv
 		}
 		uid := status.Sys().(*syscall.Stat_t).Uid
 		for point := range busy {
+			if closingSMB[point] && strings.TrimSpace(string(comm)) == "smbd" {
+				continue
+			}
 			problems = append(problems, fmt.Sprintf("Volume “%s” is busy: %s (PID %d, UID %d). Close the files or stop the relevant service; if this is a terminal, leave the volume's directory.", point, name, pid, uid))
 		}
 	}

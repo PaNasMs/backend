@@ -23,6 +23,7 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networknative"
+	"panasms.local/backend/internal/systemops/raid"
 	"panasms.local/backend/internal/systemops/volumeaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"panasms.local/backend/internal/systemops/worker"
@@ -33,6 +34,17 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "raid" && (os.Args[2] == "recover" || os.Args[2] == "check-removal") {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.RecoveryCommand(context.Background(), os.Args[2] == "recover"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "modules" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

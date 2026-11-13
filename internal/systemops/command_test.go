@@ -25,6 +25,9 @@ func TestCommandNonzeroIsRejectedAndRedacted(t *testing.T) {
 	if !IsRejected(err) {
 		t.Fatalf("false: got %v, want rejection", err)
 	}
+	if code, ok := CommandExitCode(err); !ok || code != 1 {
+		t.Fatalf("false: exit status = %d, %t", code, ok)
+	}
 	if !strings.Contains(err.Error(), "code 1") {
 		t.Errorf("error should name the exit code: %q", err)
 	}

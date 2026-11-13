@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"panasms.local/backend/internal/systemops/localmounts"
+	"panasms.local/backend/internal/systemops/luks"
 	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
@@ -191,6 +192,8 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	case "modules":
 		member, _ := ctx.Value(moduleMemberKey{}).(bool)
 		return modulelifecycle.Query(member)
+	case "storage-luks":
+		return luks.Query(ctx, target)
 	case "storage-options", "raid-candidates":
 		return storagequery.Query(ctx, view, target)
 	case "home-folders", "data-folders", "mount-folders":
@@ -221,6 +224,9 @@ func query(ctx context.Context, view, target, user string) (json.RawMessage, err
 	return host.Query(ctx, view, target)
 }
 func plan(ctx context.Context, action string, p map[string]any, user string) (json.RawMessage, error) {
+	if luks.IsAction(action) {
+		return luks.Plan(ctx, action, p)
+	}
 	if raid.IsAction(action) {
 		return raid.Plan(ctx, action, p)
 	}
@@ -270,6 +276,12 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 	return host.Plan(ctx, action, p)
 }
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
+	if luks.IsAction(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		actor, _ := ctx.Value(networkUserKey{}).(string)
+		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
+		return luks.Execute(ctx, action, p, expected, actor, authorize, r)
+	}
 	if raid.IsAction(action) {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
 		return raid.Execute(ctx, action, p, expected, r)

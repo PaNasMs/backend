@@ -69,6 +69,22 @@ type CommandOptions struct {
 	Operation bool
 }
 
+type commandExitError struct {
+	*Rejected
+	code int
+}
+
+func (e *commandExitError) Unwrap() error { return e.Rejected }
+
+// CommandExitCode reports a utility's unsuccessful exit without exposing its output.
+func CommandExitCode(err error) (int, bool) {
+	var failure *commandExitError
+	if errors.As(err, &failure) {
+		return failure.code, true
+	}
+	return 0, false
+}
+
 // Command runs an argument-vector subprocess and returns its stdout. It
 // reproduces backend/management/common.command: a fixed environment of
 // LC_ALL=C and DEBIAN_FRONTEND=noninteractive, a bounded timeout, and a
@@ -147,9 +163,9 @@ func Command(ctx context.Context, args []string, opts CommandOptions) ([]byte, e
 				return stdout.Bytes(), nil
 			}
 		}
-		return nil, reject(fmt.Sprintf(
+		return nil, &commandExitError{&Rejected{Message: fmt.Sprintf(
 			"Command %s exited with code %d. Check the object's state and system journal.",
-			filepath.Base(args[0]), code))
+			filepath.Base(args[0]), code)}, code}
 	}
 	return nil, reject(fmt.Sprintf("Command %s could not run", filepath.Base(args[0])))
 }

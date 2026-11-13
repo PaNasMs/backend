@@ -10,6 +10,7 @@ import (
 	"panasms.local/backend/internal/systemops/host"
 	"panasms.local/backend/internal/systemops/hostname"
 	"panasms.local/backend/internal/systemops/localmounts"
+	"panasms.local/backend/internal/systemops/luks"
 	"panasms.local/backend/internal/systemops/modulelifecycle"
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
@@ -30,6 +31,16 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case luks.IsAction(req.Action):
+		route = "/storage/disks"
+		add("Target", target)
+		state, err := luks.Query(ctx, target)
+		if err == nil {
+			add("Encryption state", state)
+		} else {
+			add("Encryption state", "Unavailable. Inspect the device, header and active mappings.")
+		}
+		message = "Inspect the device and active mappings. Verify a known working key before changing slots or boot unlock settings. The interrupted operation has not been repeated."
 	case raid.IsAction(req.Action):
 		route = "/storage/disks"
 		raw, err := systemops.Command(ctx, []string{"lsblk", "--json", "--bytes", "--output", "NAME,PATH,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS"}, systemops.CommandOptions{})

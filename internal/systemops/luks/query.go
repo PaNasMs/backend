@@ -173,10 +173,15 @@ func readCrypttab() ([]string, error) {
 
 func queryResult(path string, metadata luksMetadata, config *managedConfig, lines []string) (json.RawMessage, error) {
 	var slot *int
+	automatic := false
 	if config != nil {
 		slot = &config.Slot
+		if config.UUID == metadata.UUID && slices.Contains(metadata.UsableSlots, config.Slot) {
+			_, found, err := inspectCrypttab(lines, metadata.UUID, config, config.Name)
+			automatic = found && err == nil
+		}
 	}
-	return json.Marshal(map[string]any{"target": path, "uuid": metadata.UUID, "slots": metadata.Slots, "managedSlot": slot, "automatic": config != nil && slices.Contains(lines, "# PaNasMs "+metadata.UUID)})
+	return json.Marshal(map[string]any{"target": path, "uuid": metadata.UUID, "slots": metadata.Slots, "managedSlot": slot, "automatic": automatic})
 }
 
 func Query(ctx context.Context, target string) (json.RawMessage, error) {

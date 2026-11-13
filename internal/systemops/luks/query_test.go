@@ -50,14 +50,28 @@ func TestLegacyQueryRecordAndMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker := "# PaNasMs " + sampleUUID
-	metadata := luksMetadata{UUID: sampleUUID, Slots: []int{0, 31}}
+	row := "nas_data UUID=" + sampleUUID + " /etc/panasms/luks/" + sampleUUID + ".key luks,nofail,headless,x-systemd.device-timeout=30s"
+	valid := []string{marker, row}
 	for _, test := range []struct {
+		name      string
 		config    *managedConfig
-		line      string
+		lines     []string
+		usable    []int
 		automatic bool
 		slot      string
-	}{{nil, marker, false, "null"}, {config, " " + marker, false, "0"}, {config, marker, true, "0"}} {
-		raw, err := queryResult("/dev/loop0", metadata, test.config, []string{test.line})
+	}{
+		{"complete", config, valid, []int{0, 31}, true, "0"},
+		{"missing config", nil, valid, []int{0, 31}, false, "null"},
+		{"policy only", config, nil, []int{0, 31}, false, "0"},
+		{"missing row", config, []string{marker}, []int{0}, false, "0"},
+		{"row drift", config, []string{marker, row + " extra"}, []int{0}, false, "0"},
+		{"duplicate marker", config, []string{marker, row, marker, row}, []int{0}, false, "0"},
+		{"orphan row", config, []string{row}, []int{0}, false, "0"},
+		{"unusable managed slot", config, valid, []int{31}, false, "0"},
+		{"mapping conflict", config, []string{marker, row, "nas_data UUID=elsewhere none luks"}, []int{0}, false, "0"},
+	} {
+		metadata := luksMetadata{UUID: sampleUUID, Slots: []int{0, 31}, UsableSlots: test.usable}
+		raw, err := queryResult("/dev/loop0", metadata, test.config, test.lines)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,7 +80,7 @@ func TestLegacyQueryRecordAndMarker(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(fields) != 5 || string(fields["target"]) != `"/dev/loop0"` || string(fields["uuid"]) != `"`+sampleUUID+`"` || string(fields["slots"]) != "[0,31]" || string(fields["managedSlot"]) != test.slot || (string(fields["automatic"]) == "true") != test.automatic {
-			t.Fatalf("query = %s", raw)
+			t.Fatalf("%s: query = %s", test.name, raw)
 		}
 	}
 }

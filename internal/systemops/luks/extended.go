@@ -179,19 +179,20 @@ func planExtraState(ctx context.Context, action string, params map[string]any, p
 	return s, d, nil
 }
 
-func updatedCrypttab(rows []string, uuid string, cfg *managedConfig, mapping string) (string, error) {
-	marker := "# PaNasMs " + uuid
+func managedCrypttabRow(name, uuid string) string {
 	key := filepath.Join(managedConfigDir, uuid+".key")
-	line := func(name string) string {
-		return name + " UUID=" + uuid + " " + key + " luks,nofail,headless,x-systemd.device-timeout=30s"
-	}
+	return name + " UUID=" + uuid + " " + key + " luks,nofail,headless,x-systemd.device-timeout=30s"
+}
+
+func inspectCrypttab(rows []string, uuid string, cfg *managedConfig, mapping string) (kept []string, found bool, err error) {
+	marker := "# PaNasMs " + uuid
 	result := make([]string, 0, len(rows)+2)
-	found := false
+
 	for i := 0; i < len(rows); i++ {
 		row := rows[i]
 		if row == marker {
-			if found || cfg == nil || i+1 >= len(rows) || rows[i+1] != line(cfg.Name) {
-				return "", reject("The managed crypttab entry changed; review the system configuration")
+			if found || cfg == nil || i+1 >= len(rows) || rows[i+1] != managedCrypttabRow(cfg.Name, uuid) {
+				return nil, false, reject("The managed crypttab entry changed; review the system configuration")
 			}
 			found = true
 			i++
@@ -199,12 +200,20 @@ func updatedCrypttab(rows []string, uuid string, cfg *managedConfig, mapping str
 		}
 		fields := strings.Fields(row)
 		if mapping != "" && len(fields) > 0 && !strings.HasPrefix(fields[0], "#") && (fields[0] == mapping || len(fields) > 1 && strings.EqualFold(fields[1], "UUID="+uuid)) {
-			return "", reject("This LUKS volume or mapping already has an unmanaged crypttab entry")
+			return nil, false, reject("This LUKS volume or mapping already has an unmanaged crypttab entry")
 		}
 		result = append(result, row)
 	}
+	return result, found, nil
+}
+
+func updatedCrypttab(rows []string, uuid string, cfg *managedConfig, mapping string) (string, error) {
+	result, _, err := inspectCrypttab(rows, uuid, cfg, mapping)
+	if err != nil {
+		return "", err
+	}
 	if mapping != "" {
-		result = append(result, marker, line(mapping))
+		result = append(result, "# PaNasMs "+uuid, managedCrypttabRow(mapping, uuid))
 	}
 	return strings.Join(result, "\n") + "\n", nil
 }

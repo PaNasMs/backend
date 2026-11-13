@@ -35,15 +35,20 @@ class Worker:
         self.check(result.stdout + result.stderr)
         return json.loads(result.stdout)
 
-    def action(self, action, expect_error=False, **params):
+    def action(self, action, failure=None, **params):
         request = dict(action="luks." + action, params=params)
         command("udevadm", "settle")
-        result = self.invoke("plan", request)
+        phase = "plan"
+        result = self.invoke(phase, request)
         if "error" not in result:
             request.update({field: result[field] for field in ("confirmation", "fingerprint")})
-            result = self.invoke("execute", request)
-        assert bool(result.get("error")) == expect_error, (action, result)
-        print("PASS", action, "rejected" if expect_error else "completed", flush=True)
+            phase = "execute"
+            result = self.invoke(phase, request)
+        if failure:
+            assert (phase, result.get("error")) == failure, (action, phase, result)
+        else:
+            assert "error" not in result, (action, phase, result)
+        print("PASS", action, "rejected" if failure else "completed", flush=True)
 
     def query(self, target):
         return self.invoke("query", dict(view="storage-luks", target=target))
@@ -61,22 +66,26 @@ class Worker:
 def replaced_device(worker, root, loop, restore):
     # A block-for-block clone has the same UUID, header and key slots.
     clone = root / "clone.img"
-    shutil.copyfile(root / "disk.img", clone)
-    other = command("losetup", "--find", "--show", clone)
-    assert re.fullmatch(r"/dev/loop[0-9]+", other) and other != loop
+    other = None
     alias = Path("/dev") / ("panasms_test_restore_" + str(os.getpid()))
+    alias.symlink_to(loop)
     try:
-        alias.symlink_to(loop)
         request = dict(action=restore["action"], params=dict(restore["params"], target=str(alias)))
         plan = worker.invoke("plan", request)
+        assert "fingerprint" in plan, plan
+        shutil.copyfile(root / "disk.img", clone)
+        other = command("losetup", "--find", "--show", clone)
+        assert re.fullmatch(r"/dev/loop[0-9]+", other) and other != loop
+        command("udevadm", "settle")
         alias.unlink()
         alias.symlink_to(other)
         result = worker.invoke("execute", dict(request, fingerprint=plan["fingerprint"], confirmation=plan["confirmation"]))
-        assert result.get("error") and result.get("noChanges")
-        assert worker.query(other)["slots"] == worker.query(loop)["slots"]
+        assert result.get("error") == "State has changed. Review a new operation plan." and result.get("noChanges"), result
+        assert command("cryptsetup", "luksDump", "--dump-json-metadata", other) == command("cryptsetup", "luksDump", "--dump-json-metadata", loop)
     finally:
         alias.unlink(missing_ok=True)
-        command("losetup", "--detach", other)
+        if other:
+            command("losetup", "--detach", other)
         command("udevadm", "settle")
 
 
@@ -91,7 +100,7 @@ def exercise(worker, root, loop):
     original = worker.query(loop)
     uuid = original["uuid"]
     assert original == dict(target=loop, uuid=uuid, slots=[0], automatic=False, managedSlot=None)
-    worker.action("open", target=loop, name=mapping, passphrase=wrong, expect_error=True)
+    worker.action("open", target=loop, name=mapping, passphrase=wrong, failure=("execute", "The LUKS password did not unlock this volume"))
     worker.action("open", **params, name=mapping)
     command("mkfs.ext4", "-q", mapped)
     mount = root / "mount"
@@ -99,19 +108,19 @@ def exercise(worker, root, loop):
     command("mount", mapped, mount)
     try:
         (mount / "marker").write_text(uuid)
-        worker.action("close", target=mapped, expect_error=True)
+        worker.action("close", target=mapped, failure=("plan", "Unmount file systems first"))
     finally:
         command("umount", mount)
     worker.action("close", target=mapped)
     worker.action("header-backup", target=loop, folder=str(root))
     backup = root / (uuid + ".luks-header")
     assert backup.is_file() and backup.stat().st_mode & 0o777 == 0o600
-    worker.action("key-remove", **params, slot=0, expect_error=True)
+    worker.action("key-remove", **params, slot=0, failure=("plan", "The last LUKS key cannot be removed"))
     worker.action("key-add", **params, password=second)
-    worker.action("key-remove", **params, slot=0, expect_error=True)
+    worker.action("key-remove", **params, slot=0, failure=("execute", "Enter a password that unlocks a different key slot"))
     slot, = set(worker.query(loop)["slots"]) - {0}
     worker.action("key-remove", **params, slot=slot)
-    worker.action("open", target=loop, name=mapping, passphrase=second, expect_error=True)
+    worker.action("open", target=loop, name=mapping, passphrase=second, failure=("execute", "The LUKS password did not unlock this volume"))
     worker.action("key-add", **params, password=second)
     restore = dict(action="luks.header-restore", params=dict(target=loop, folder=str(root)))
     replaced_device(worker, root, loop, restore)
@@ -119,10 +128,12 @@ def exercise(worker, root, loop):
     assert "fingerprint" in plan, plan
     moved = backup.with_suffix(".original")
     backup.rename(moved)
-    # A replacement with the same LUKS UUID but different bytes needs fresh consent.
-    backup.write_bytes(moved.read_bytes() + bytes(1))
+    # Back up the current two-slot volume. Both backups are genuine.
+    command("cryptsetup", "luksHeaderBackup", "--header-backup-file", backup, loop)
+    assert command("cryptsetup", "luksUUID", backup) == uuid
     stale = worker.invoke("execute", dict(**restore, confirmation=plan["confirmation"], fingerprint=plan["fingerprint"]))
-    assert "error" in stale and worker.query(loop)["slots"] == [0, slot]
+    assert stale.get("error") == "State has changed. Review a new operation plan." and stale.get("noChanges"), stale
+    assert worker.query(loop)["slots"] == [0, slot]
     backup.unlink()
     moved.rename(backup)
     worker.action("header-restore", target=loop, folder=str(root))
@@ -143,7 +154,7 @@ def exercise(worker, root, loop):
     assert policy["automatic"] and policy["managedSlot"] in policy["slots"]
     key = Path("/etc/panasms/luks") / (uuid + ".key")
     assert key.stat().st_mode & 0o777 == 0o600 and key.stat().st_uid == 0
-    worker.action("key-remove", **params, slot=policy["managedSlot"], expect_error=True)
+    worker.action("key-remove", **params, slot=policy["managedSlot"], failure=("plan", "Disable automatic unlocking before removing its key"))
     unit = "systemd-cryptsetup@" + mapping + ".service"
     command("systemctl", "start", unit)
     command("mount", mapped, mount)

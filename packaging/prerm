@@ -43,7 +43,10 @@ CHECK
  fi
  systemctl stop panasms-raid-downgrade.timer
  # A running finalization owns the storage lock until mdadm returns.
- while systemctl is-active --quiet panasms-raid-downgrade.service; do sleep 1; done
+ while :; do
+  state=$(systemctl show --value --property=ActiveState panasms-raid-downgrade.service)
+  case "$state" in inactive|failed) break;; activating|active|deactivating|reloading) sleep 1;; *) exit 1;; esac
+ done
  systemctl stop panasms-oled.service || true
  if [ "$1" = remove ]; then systemctl disable panasms-oled.service || true; fi
  systemctl stop 'panasms-fs-check@*.service' || true

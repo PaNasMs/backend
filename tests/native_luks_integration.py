@@ -103,8 +103,8 @@ def exercise(worker, root, loop):
     worker.action("open", target=loop, name=mapping, passphrase=wrong, failure=("execute", "The LUKS password did not unlock this volume"))
     worker.action("open", **params, name=mapping)
     command("mkfs.ext4", "-q", mapped)
-    mount = root / "mount"
-    mount.mkdir()
+    mount = Path("/mnt") / mapping
+    mount.mkdir(mode=0o700)
     command("mount", mapped, mount)
     try:
         (mount / "marker").write_text(uuid)
@@ -163,6 +163,7 @@ def exercise(worker, root, loop):
     finally:
         command("umount", mount)
     command("systemctl", "stop", unit)
+    mount.rmdir()
     worker.action("auto-disable", **params)
     assert worker.query(loop) == original and not key.exists()
     report = worker.invoke("recover", dict(action="luks.key-add", params=dict(target=loop)))

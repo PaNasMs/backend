@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
-	"strconv"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/systemops"
@@ -132,29 +130,22 @@ func executeHeader(ctx context.Context, action string, p *prepared, path string,
 		}
 		return cryptAction(ctx, []string{"luksHeaderRestore", "--batch-mode", "--header-backup-file", fdPath(f), path}, "", true, r)
 	}
-	uid, gid := -1, -1
-	if p.Actor != "" {
-		account, err := user.Lookup(p.Actor)
-		if err != nil {
-			return err
-		}
-		uid, err = strconv.Atoi(account.Uid)
-		if err != nil {
-			return err
-		}
-		gid, err = strconv.Atoi(account.Gid)
-		if err != nil {
-			return err
-		}
+	if p.Actor.UID <= 0 || p.Actor.GID < 0 {
+		return reject("The backup owner could not be verified")
 	}
 	// cryptsetup creates its backup file itself. A private tmpfs directory
 	// isolates that pathname from the destination directory's owner.
-	work, err := os.MkdirTemp("/run", "panasms-luks-")
-	if err != nil {
+	const work = "/run/panasms-luks-headers"
+	if err := storagebase.SecureDirectory(work, 0, true); err != nil {
 		return err
 	}
-	defer os.RemoveAll(work)
 	header := filepath.Join(work, "header")
+	// The global storage lock serializes backups. Reap a partial header left by
+	// a worker that died before it could unlink its scratch file.
+	if err := os.Remove(header); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	defer os.Remove(header)
 	if err = cryptAction(ctx, []string{"luksHeaderBackup", "--header-backup-file", header, path}, "", false, r); err != nil {
 		return err
 	}
@@ -163,8 +154,11 @@ func executeHeader(ctx context.Context, action string, p *prepared, path string,
 		return err
 	}
 	defer source.Close()
+	if err = os.Remove(header); err != nil {
+		return err
+	}
 	if err = storagebase.SameDirectory(dir, folder); err != nil {
 		return err
 	}
-	return publishFile(dir, name, source, uid, gid)
+	return publishFile(dir, name, source, p.Actor.UID, p.Actor.GID)
 }

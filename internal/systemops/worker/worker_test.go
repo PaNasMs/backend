@@ -293,3 +293,22 @@ func TestLocalStorageModesRequireAdministrator(t *testing.T) {
 		}
 	}
 }
+
+func TestLUKSBackupUsesAuthorizedNumericOwner(t *testing.T) {
+	d, _ := setup()
+	id := auth.Identity{Username: "backup-admin", UID: 7100, GID: 8200, Role: "admin"}
+	d.Authorize = func(string) (auth.Identity, error) { return id, nil }
+	d.Execute = func(ctx context.Context, _ string, _ map[string]any, _ *systemops.Reporter) (json.RawMessage, error) {
+		owner, ok := ctx.Value(authorizedIdentityKey{}).(auth.Identity)
+		if !ok || owner.UID != 7100 || owner.GID != 8200 {
+			t.Fatal("missing numeric backup owner")
+		}
+		id.GID++
+		return nil, ctx.Value(moduleAuthorizationKey{}).(func() error)()
+	}
+	req := request()
+	req.Action = "luks.header-backup"
+	if _, err := d.Handle(systemops.ModeExecute, id.Username, req, reporter()); !systemops.IsRejected(err) {
+		t.Fatalf("accepted an actor whose primary group changed: %v", err)
+	}
+}

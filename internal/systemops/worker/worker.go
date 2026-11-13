@@ -28,6 +28,7 @@ import (
 type networkUserKey struct{}
 type validatedPlanKey struct{}
 type moduleAuthorizationKey struct{}
+type authorizedIdentityKey struct{}
 type moduleMemberKey struct{}
 
 type Dispatcher struct {
@@ -144,6 +145,7 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	mutated = true
 	ctx := context.WithValue(context.Background(), networkUserKey{}, user)
 	ctx = context.WithValue(ctx, validatedPlanKey{}, p.Fingerprint)
+	ctx = context.WithValue(ctx, authorizedIdentityKey{}, id)
 	ctx = context.WithValue(ctx, moduleAuthorizationKey{}, func() error {
 		fresh, err := d.Authorize(user)
 		if err != nil {
@@ -278,7 +280,10 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 func execute(ctx context.Context, action string, p map[string]any, r *systemops.Reporter) (json.RawMessage, error) {
 	if luks.IsAction(action) {
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)
-		actor, _ := ctx.Value(networkUserKey{}).(string)
+		actor, ok := ctx.Value(authorizedIdentityKey{}).(auth.Identity)
+		if !ok {
+			return nil, systemops.BeforeMutation(deny("Account authorization is unavailable"))
+		}
 		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
 		return luks.Execute(ctx, action, p, expected, actor, authorize, r)
 	}

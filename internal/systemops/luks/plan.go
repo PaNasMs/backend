@@ -8,18 +8,20 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/storagequery"
 )
 
 type prepared struct {
-	Target, ReadPath, UUID, Name, Actor, MappingUUID string
-	Meta                                             luksMetadata
-	Extra                                            any
-	pin                                              *storagebase.PinnedDevice
-	details                                          []string
-	fingerprint                                      string
+	Target, ReadPath, UUID, Name, MappingUUID string
+	Actor                                     auth.Identity
+	Meta                                      luksMetadata
+	Extra                                     any
+	pin                                       *storagebase.PinnedDevice
+	details                                   []string
+	fingerprint                               string
 }
 
 func reject(message string) error { return &systemops.Rejected{Message: message} }

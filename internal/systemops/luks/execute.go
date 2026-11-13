@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/disksleep"
 	"panasms.local/backend/internal/systemops/storagebase"
 )
 
-func Execute(ctx context.Context, action string, params map[string]any, expected, actor string, authorize func() error, r *systemops.Reporter) (json.RawMessage, error) {
+func Execute(ctx context.Context, action string, params map[string]any, expected string, actor auth.Identity, authorize func() error, r *systemops.Reporter) (json.RawMessage, error) {
 	domain, err := storagebase.DomainLock(ctx)
 	if err != nil {
 		return nil, systemops.BeforeMutation(err)

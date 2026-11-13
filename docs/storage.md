@@ -102,3 +102,25 @@ Coverage includes LUKS keys/header roundtrips, systemd unlock/automount units,
 Btrfs snapshots, RAID conversion/pause/resume/reassembly, degraded replacement,
 ENOSPC and read-only filesystems. These do not certify every physical power-loss
 or controller failure. Hardware standby and cooling need target-device acceptance.
+
+### Exporting a stopped RAID6 downgrade
+
+For an interrupted four-or-more-member RAID6 downgrade from rotating parity or parity-first with
+unchanged data offsets, work from immutable, whole-member image files of the
+stopped array. Keep every original disk, journal and mdadm backup. The helper
+reads Linux MD 1.2 metadata to identify the generation, member slots and both
+layouts. It verifies P and Q for each stripe before writing logical data.
+
+Run the export in a new private directory on independent storage with enough
+space for the entire logical device. For example, for four member images:
+
+```sh
+umask 077
+set -C
+panasms-system-helper raid export-downgrade member-{0,1,2,3}.img > recovered.raw
+```
+
+A nonzero exit leaves an incomplete output. Use the image only after a
+successful exit and independent verification against a trusted checksum or
+application data. Keep the source images until the restored volume has been
+read back and verified.

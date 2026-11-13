@@ -23,6 +23,7 @@ import (
 	"panasms.local/backend/internal/systemops/network"
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networknative"
+	"panasms.local/backend/internal/systemops/raid"
 	"panasms.local/backend/internal/systemops/volumeaccess"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"panasms.local/backend/internal/systemops/worker"
@@ -33,6 +34,54 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "raid" && os.Args[2] == "advance" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.AdvanceDowngrades(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) >= 3 && os.Args[1] == "raid" && os.Args[2] == "export-downgrade" {
+		if err := raid.ExportDowngrade(context.Background(), os.Args[3:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 5 && os.Args[1] == "raid" && os.Args[2] == "archive" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.ArchiveLifecycle(context.Background(), os.Args[3], os.Args[4]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 4 && os.Args[1] == "raid" && os.Args[2] == "finish" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.FinishLifecycle(context.Background(), os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "raid" && (os.Args[2] == "recover" || os.Args[2] == "check-removal") {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.RecoveryCommand(context.Background(), os.Args[2] == "recover"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "modules" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

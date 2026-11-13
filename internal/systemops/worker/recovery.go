@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/folders"
@@ -14,6 +15,7 @@ import (
 	"panasms.local/backend/internal/systemops/networkaccess"
 	"panasms.local/backend/internal/systemops/networkmounts"
 	"panasms.local/backend/internal/systemops/partitionfs"
+	"panasms.local/backend/internal/systemops/raid"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"panasms.local/backend/internal/systemops/webaccess"
 	"strings"
@@ -28,6 +30,30 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 	add := func(label string, value any) { checks = append(checks, map[string]any{"label": label, "value": value}) }
 	target, _ := req.Params["target"].(string)
 	switch {
+	case raid.IsAction(req.Action):
+		route = "/storage/disks"
+		raw, err := systemops.Command(ctx, []string{"lsblk", "--json", "--bytes", "--output", "NAME,PATH,TYPE,SIZE,FSTYPE,UUID,MOUNTPOINTS"}, systemops.CommandOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if !json.Valid(raw) {
+			return nil, deny("Invalid storage inventory")
+		}
+		add("Storage state", json.RawMessage(raw))
+		stat, err := os.ReadFile("/proc/mdstat")
+		if err != nil {
+			return nil, err
+		}
+		lifecycle, err := raid.LifecycleReport()
+		if err != nil {
+			return nil, err
+		}
+		add("RAID lifecycle journal", lifecycle)
+		add("RAID state", string(stat[:min(len(stat), 16384)]))
+		message = "Check array members and maintenance progress. Use the array pause/resume controls for an existing operation; do not recreate or reformat the array."
+		if string(lifecycle) != "[]" {
+			message = "Inspect the recorded RAID operation and its mounts and shares. As root, use panasms-system-helper raid finish UUID to finish a verified registration or stopped-array cleanup. After inspecting and resolving the live storage and configuration manually, use raid archive UUID SHA256 to retain the journal and release the block."
+		}
 	case modulelifecycle.IsAction(req.Action) || req.Action == "module.catalog-install":
 		route = "/modules"
 		raw, err := modulelifecycle.Inspect()

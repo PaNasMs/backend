@@ -31,14 +31,22 @@ if p.exists():
             raise SystemExit('PaNasMs has active operations. Wait for completion or cancel queued tasks before package changes.')
 CHECK
  /usr/lib/panasms/panasms-system-helper network-services check-removal
+ if [ "$1" = remove ] || { [ "$1" = upgrade ] && [ -n "${2:-}" ] && dpkg --compare-versions "$2" lt "$(dpkg-query -W '-f=${Version}' panasms-prototype)"; }; then
+  /usr/lib/panasms/panasms-system-helper raid check-removal
+ fi
  if [ "$1" = remove ]; then
-  python3 /usr/lib/panasms/management/storage_reshape.py --check-removal
   systemctl disable --now panasms-network-access.service
   /usr/lib/panasms/panasms-system-helper network-access remove
  fi
  if [ "$1" = upgrade ]; then
   python3 /usr/lib/panasms/management/sharing_compat.py package-stop "$2"
  fi
+ systemctl stop panasms-raid-downgrade.timer
+ # A running finalization owns the storage lock until mdadm returns.
+ while :; do
+  state=$(systemctl show --value --property=ActiveState panasms-raid-downgrade.service)
+  case "$state" in inactive|failed) break;; activating|active|deactivating|reloading) sleep 1;; *) exit 1;; esac
+ done
  systemctl stop panasms-oled.service || true
  if [ "$1" = remove ]; then systemctl disable panasms-oled.service || true; fi
  systemctl stop 'panasms-fs-check@*.service' || true
@@ -67,6 +75,7 @@ CHECK
   systemctl disable panasms-network-sharing.service || true
   systemctl stop 'panasms-wifi-rollback-*.timer' 'panasms-share-rollback-*.timer' panasms-network-recovery.service || true
   systemctl stop panasms-networkd-recovery.service || true
+  systemctl disable --now panasms-raid-downgrade.timer || true
   systemctl disable panasms-networkd-recovery.service panasms-network-recovery.service panasms-raid-recovery.service || true
   # disable accepts no globs: enumerate the module services and SMART timers.
   for unit in $(systemctl list-unit-files 'panasms-module-*.service' 'panasms-smart-*.timer' --no-legend 2>/dev/null | awk '{print $1}'); do

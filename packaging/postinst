@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 case "${1:-}" in
+ abort-upgrade|abort-remove|abort-deconfigure)
+  systemctl enable --now panasms-raid-downgrade.timer
+ ;;
+esac
+case "${1:-}" in
  abort-upgrade)
   if [ -e /var/lib/panasms-agent/sharing-restore.json ] || [ -L /var/lib/panasms-agent/sharing-restore.json ]; then
    echo 'Sharing rollback is incomplete. Recover the system update before continuing.' >&2
@@ -65,6 +70,7 @@ case "${1:-}" in
   systemctl restart panasms-network-access.service
   systemctl enable panasms-networkd-recovery.service
   systemctl enable panasms-raid-recovery.service
+  systemctl enable --now panasms-raid-downgrade.timer
   systemctl enable panasms-update-recover.service
   systemctl enable --now panasms-update-check.timer
   if [ "$sharing_rollback" = 0 ] && { [ -z "${2:-}" ] || [ -f /var/lib/panasms-installer/sharing-package-install ]; }; then

@@ -8,6 +8,7 @@ import (
 	"panasms.local/backend/internal/systemops/folders"
 	"panasms.local/backend/internal/systemops/storagebase"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -33,6 +34,12 @@ func defaultBlockers(ctx context.Context, selected, all []folders.LiveMount) err
 	if err != nil {
 		return err
 	}
+	return CheckStorageBlockers(ctx, selected, all, shares, nil, nil)
+}
+
+// ignoreExports contains managed exports scheduled for removal before unmount.
+// The caller repeats this check without exclusions once sharing has been updated.
+func CheckStorageBlockers(ctx context.Context, selected, all []folders.LiveMount, shares []accounts.StorageShare, ignoreExports, closingSMB map[string]bool) error {
 	paths := make([]storagebase.StoragePath, 0, len(shares))
 	for _, share := range shares {
 		paths = append(paths, storagebase.StoragePath{Name: share.Name, Path: share.Path})
@@ -58,5 +65,7 @@ func defaultBlockers(ctx context.Context, selected, all []folders.LiveMount) err
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return storagebase.CheckBlockers(ctx, selected, all, homes, paths, parseExports(exports))
+	active := parseExports(exports)
+	active = slices.DeleteFunc(active, func(path string) bool { return ignoreExports[path] })
+	return storagebase.CheckRAIDRemovalBlockers(ctx, selected, all, homes, paths, active, closingSMB)
 }

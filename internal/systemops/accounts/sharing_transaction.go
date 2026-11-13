@@ -362,6 +362,10 @@ func (s *sharingService) removeShares(ctx context.Context, names []string) ([]sh
 		return nil, err
 	}
 	defer unlock()
+	return s.removeSharesLocked(ctx, names)
+}
+
+func (s *sharingService) removeSharesLocked(ctx context.Context, names []string) ([]sharedFolder, error) {
 	pending, err := sharingExists(s.journal)
 	if err != nil {
 		return nil, err

@@ -190,3 +190,17 @@ func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
 		}
 	}
 }
+
+func TestRAIDRoutesNeverRetryLegacy(t *testing.T) {
+	failure := errors.New("native RAID failure")
+	for _, action := range []string{"raid.create", "raid.delete", "raid.add", "raid.grow", "raid.replace", "raid.pause", "raid.resume", "raid.check", "raid.check-stop", "raid.convert"} {
+		for _, mode := range []string{"plan", "execute", "recover"} {
+			legacyHit := false
+			runner := route(func(context.Context, string, string, any) (json.RawMessage, error) { return nil, failure }, recordingRunner(&legacyHit))
+			_, err := runner(context.Background(), mode, "admin", map[string]any{"action": action, "params": map[string]any{}})
+			if !errors.Is(err, failure) || legacyHit {
+				t.Fatalf("%s %s: %v, legacy=%v", action, mode, err, legacyHit)
+			}
+		}
+	}
+}

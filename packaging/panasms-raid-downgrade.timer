@@ -1,0 +1,10 @@
+[Unit]
+Description=Check staged PaNasMs RAID downgrades
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -7,7 +7,7 @@ ConditionDirectoryNotEmpty=/var/lib/panasms-agent/raid-reshape
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 -B /usr/lib/panasms/management/storage_reshape.py --recover
+ExecStart=/usr/lib/panasms/panasms-system-helper raid recover
 TimeoutStartSec=10min
 
 [Install]

@@ -16,7 +16,7 @@ func ParseExports(raw []byte) []string {
 		if len(fields) == 0 {
 			continue
 		}
-		paths = append(paths, exportEscape.ReplaceAllStringFunc(fields[0], func(s string) string { n, _ := strconv.ParseUint(s[1:], 8, 8); return string(rune(n)) }))
+		paths = append(paths, exportEscape.ReplaceAllStringFunc(fields[0], func(s string) string { n, _ := strconv.ParseUint(s[1:], 8, 8); return string([]byte{byte(n)}) }))
 	}
 	return paths
 }

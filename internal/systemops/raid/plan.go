@@ -155,7 +155,31 @@ func (s *service) prepare(ctx context.Context, action string, params map[string]
 		}
 		p.Identities[path] = id
 	}
-	raw, err := json.Marshal(p)
+	if err := checkIntentOverlap(p); err != nil {
+		return nil, err
+	}
+	m := mutation{s: s, p: p, ctx: ctx}
+	if action == "raid.create" {
+		for _, member := range p.Paths {
+			if err := m.verifyBlank(member); err != nil {
+				return nil, err
+			}
+		}
+	} else if p.Extra != "" {
+		if err := m.verifyBlank(p.Extra); err != nil {
+			return nil, err
+		}
+	}
+	fingerprintPlan := *p
+	if p.State != nil {
+		state := *p.State
+		switch state.Array {
+		case "clean", "active", "active-idle", "write-pending":
+			state.Array = "writable"
+		}
+		fingerprintPlan.State = &state
+	}
+	raw, err := json.Marshal(&fingerprintPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +279,20 @@ func (s *service) actionPlan(ctx context.Context, action string, params map[stri
 			p.Old = old
 		}
 		if action == "raid.grow" {
+			record, err := s.record(a.UUID)
+			if err != nil {
+				return err
+			}
+			p.Record = record
+			if record != nil {
+				exists, err := backupPresent(record.Backup, s.owner)
+				if err != nil {
+					return err
+				}
+				if exists && (a.Level != "raid"+record.Level || a.Count != record.Members) {
+					return reject("Inspect the previous RAID conversion before growing the array")
+				}
+			}
 			if (a.Level != "raid5" && a.Level != "raid6") || a.Metadata != "1.2" || !synchronized(a) {
 				return reject("Expansion requires synchronized RAID5 or RAID6 members with MD 1.2 metadata and no spares")
 			}
@@ -272,6 +310,11 @@ func (s *service) actionPlan(ctx context.Context, action string, params map[stri
 		remove, ok := params["removeShares"].(bool)
 		if _, exists := params["removeShares"]; exists && !ok {
 			return reject("Choose whether to stop sharing folders on this array")
+		}
+		record, err := s.record(a.UUID)
+		p.Record = record
+		if err != nil {
+			return err
 		}
 		d, err := s.deletionPlan(ctx, p, pf, remove)
 		if err != nil {

@@ -115,7 +115,8 @@ func (s *service) readArray(name string) (*arrayState, error) {
 		}
 		values[key] = v
 	}
-	count, err := strconv.Atoi(values["raid_disks"])
+	countText, _, _ := strings.Cut(values["raid_disks"], " ")
+	count, err := strconv.Atoi(countText)
 	if err != nil || count < 2 || count > 4096 {
 		return nil, reject("Could not verify array membership")
 	}
@@ -127,7 +128,8 @@ func (s *service) readArray(name string) (*arrayState, error) {
 	if err != nil {
 		return nil, err
 	}
-	chunk, err := uintValue(values["chunk_size"])
+	chunkText, _, _ := strings.Cut(values["chunk_size"], " ")
+	chunk, err := uintValue(chunkText)
 	if err != nil {
 		return nil, err
 	}

@@ -25,6 +25,7 @@ type reshapeRecord struct {
 	Members     int    `json:"members"`
 	SourceCount int    `json:"sourceCount,omitempty"`
 	Backup      string `json:"backup"`
+	Growth      bool   `json:"growth,omitempty"`
 }
 
 func (s *service) backup(uuid string) string {
@@ -43,16 +44,36 @@ func (s *service) record(uuid string) (*reshapeRecord, error) {
 		}
 		return nil, err
 	}
-	backup := s.backup(uuid)
-	path := recordPath(backup)
-	st, err := os.Lstat(path)
-	if os.IsNotExist(err) {
+	// Both kernel and mdadm UUID spellings have been persisted by older workers.
+	rawUUID := compactUUID(uuid)
+	candidates := []string{strings.Join([]string{rawUUID[:8], rawUUID[8:12], rawUUID[12:16], rawUUID[16:20], rawUUID[20:]}, "-"), strings.Join([]string{rawUUID[:8], rawUUID[8:16], rawUUID[16:24], rawUUID[24:]}, ":")}
+	var backup, path string
+	var st os.FileInfo
+	for _, form := range candidates {
+		candidate := s.backup(form)
+		info, e := os.Lstat(recordPath(candidate))
+		if os.IsNotExist(e) {
+			if exists, e := backupPresent(candidate, s.owner); e != nil {
+				return nil, e
+			} else if exists {
+				return nil, reject("RAID backup has no matching recovery record")
+			}
+			continue
+		}
+		if e != nil {
+			return nil, e
+		}
+		if st != nil {
+			return nil, reject("Ambiguous RAID recovery record")
+		}
+		st = info
+		backup = candidate
+		path = recordPath(candidate)
+	}
+	if st == nil {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if !st.Mode().IsRegular() || st.Mode().Perm()&0022 != 0 || int(st.Sys().(*syscall.Stat_t).Uid) != s.owner || st.Size() > 65536 {
+	if !st.Mode().IsRegular() || st.Sys().(*syscall.Stat_t).Nlink != 1 || st.Mode().Perm()&0022 != 0 || int(st.Sys().(*syscall.Stat_t).Uid) != s.owner || st.Size() > 65536 {
 		return nil, reject("Invalid RAID recovery record")
 	}
 	raw, err := os.ReadFile(path)
@@ -63,7 +84,7 @@ func (s *service) record(uuid string) (*reshapeRecord, error) {
 	if err = json.Unmarshal(raw, &rec); err != nil {
 		return nil, err
 	}
-	if rec.UUID != uuid || rec.Backup != backup || (rec.Level != "5" && rec.Level != "6") || rec.Members < 3 || rec.Members > 4096 || rec.SourceCount < 0 || rec.SourceCount > 4096 || (rec.SourceCount != 0 && rec.SourceCount != rec.Members-1 && rec.SourceCount != rec.Members+1) {
+	if !uuidPattern.MatchString(rec.UUID) || compactUUID(rec.UUID) != compactUUID(uuid) || s.backup(rec.UUID) != backup || rec.Backup != backup || (rec.Level != "5" && rec.Level != "6") || rec.Members < 3 || rec.Members > 4096 || rec.SourceCount < 0 || rec.SourceCount > 4096 || (rec.SourceCount != 0 && rec.SourceCount != rec.Members-1 && rec.SourceCount != rec.Members+1) {
 		return nil, reject("RAID recovery record does not match this array")
 	}
 	if _, err = backupPresent(backup, s.owner); err != nil {
@@ -93,11 +114,14 @@ func (s *service) conversionBackup(ctx context.Context, p *prepared) error {
 		return err
 	}
 	backup := s.backup(a.UUID)
+	if rec != nil {
+		backup = rec.Backup
+	}
 	present, err := backupPresent(backup, s.owner)
 	if err != nil {
 		return err
 	}
-	if present || rec != nil {
+	if present {
 		if rec == nil || a.Level != "raid"+rec.Level || a.Count != rec.Members {
 			return reject("Verify the previous RAID conversion before starting another one")
 		}
@@ -167,10 +191,16 @@ func usesArray(node, target string, seen map[string]bool) (bool, error) {
 }
 
 func safeResume(a *arrayState, rec *reshapeRecord) bool {
+	if rec == nil {
+		return a.Degraded == 0 && a.Sync == "frozen" && a.Array != "readonly" && a.Array != "read-auto"
+	}
+	if compactUUID(a.UUID) != compactUUID(rec.UUID) {
+		return false
+	}
 	if a.Degraded == 0 {
 		return true
 	}
-	if rec == nil || a.UUID != rec.UUID || len(a.Members) != rec.Members {
+	if len(a.Members) != rec.Members {
 		return false
 	}
 	count := rec.SourceCount
@@ -207,7 +237,7 @@ func (s *service) resume(ctx context.Context, target string, a *arrayState, rec 
 		return reject("The array is not ready to resume reshape")
 	}
 	opts := systemops.CommandOptions{Operation: true, Reporter: r}
-	if a.Array == "read-auto" || a.Array == "readonly" {
+	if (a.Array == "read-auto" || a.Array == "readonly") && (rec == nil || a.Sync == "frozen") {
 		if _, err := s.run(ctx, []string{"mdadm", "--readwrite", target}, opts); err != nil {
 			return err
 		}
@@ -231,7 +261,7 @@ func (s *service) resume(ctx context.Context, target string, a *arrayState, rec 
 		err = os.WriteFile(filepath.Join(md, "sync_action"), []byte("reshape"), 0)
 	case "idle":
 		args := []string{"--grow", target, "--continue"}
-		if rec != nil {
+		if rec != nil && !rec.Growth {
 			present, e := backupPresent(rec.Backup, s.owner)
 			if e != nil {
 				return e
@@ -275,7 +305,14 @@ func RecoveryCommand(ctx context.Context, boot bool) error {
 }
 
 func (s *service) recoverRecords(ctx context.Context, boot bool) error {
-	err := storagebase.SecureDirectory(s.reshapeRoot, s.owner, false)
+	intents, err := readIntents()
+	if err != nil {
+		return err
+	}
+	if !boot && len(intents) > 0 {
+		return reject("Inspect the pending RAID lifecycle journals before removing PaNasMs")
+	}
+	err = storagebase.SecureDirectory(s.reshapeRoot, s.owner, false)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -289,6 +326,9 @@ func (s *service) recoverRecords(ctx context.Context, boot bool) error {
 	var failures []error
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if slices.ContainsFunc(intents, func(j *intent) bool { return j.blocks(strings.TrimSuffix(entry.Name(), ".json")) }) {
 			continue
 		}
 		if err = s.recoverRecord(ctx, entry.Name(), boot); err != nil {
@@ -307,7 +347,7 @@ func (s *service) recoverRecord(ctx context.Context, name string, boot bool) err
 	if err != nil {
 		return err
 	}
-	if rec == nil {
+	if rec == nil || filepath.Base(recordPath(rec.Backup)) != name {
 		return reject("Missing RAID recovery record")
 	}
 	entries, err := os.ReadDir(s.sys)
@@ -326,7 +366,7 @@ func (s *service) recoverRecord(ctx context.Context, name string, boot bool) err
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(string(b)) == uuid {
+		if compactUUID(strings.TrimSpace(string(b))) == compactUUID(uuid) {
 			if target != "" {
 				return reject("Ambiguous RAID UUID")
 			}
@@ -361,11 +401,15 @@ func (s *service) recoverRecord(ctx context.Context, name string, boot bool) err
 	if err != nil {
 		return err
 	}
-	if a.UUID != uuid {
+	if compactUUID(a.UUID) != compactUUID(uuid) {
 		return reject("RAID identity changed")
 	}
 	if !a.Reshaping {
-		if a.Level != "raid"+rec.Level || a.Count != rec.Members || (!boot && a.Sync != "idle") {
+		present, err := backupPresent(rec.Backup, s.owner)
+		if err != nil {
+			return err
+		}
+		if present && (a.Level != "raid"+rec.Level || a.Count != rec.Members) || (!boot && a.Sync != "idle") {
 			return reject("Finish or recover the RAID conversion before removing PaNasMs")
 		}
 		return nil

@@ -53,6 +53,9 @@ func TestLegacyReshapeRecord(t *testing.T) {
 	if err != nil || got.SourceCount != 0 || got.Members != 3 {
 		t.Fatalf("%+v %v", got, err)
 	}
+	if got, err := s.record("08b18fee:4bd00854:2c14f992:d6945192"); err != nil || got == nil {
+		t.Fatalf("legacy UUID spelling: %v", err)
+	}
 	old["backup"] = "/tmp/outside"
 	b, _ = json.Marshal(old)
 	if err = os.WriteFile(path, b, 0600); err != nil {
@@ -90,6 +93,15 @@ func TestRAID0KernelState(t *testing.T) {
 	if err != nil || !synchronized(a) || a.Sync != "idle" {
 		t.Fatalf("%v %v", a, err)
 	}
+	for name, value := range map[string]string{"raid_disks": "3 (2)", "chunk_size": "65536 (524288)", "reshape_position": "2048"} {
+		if err = os.WriteFile(filepath.Join(md, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err = s.readArray("md127")
+	if err != nil || a.Count != 3 || a.Chunk != 65536 || !a.Reshaping {
+		t.Fatalf("reshape geometry: %+v %v", a, err)
+	}
 	for _, k := range []string{"uuid", "raid_disks"} {
 		p := filepath.Join(md, k)
 		if err = os.WriteFile(p, []byte("bad"), 0600); err != nil {
@@ -99,5 +111,20 @@ func TestRAID0KernelState(t *testing.T) {
 			t.Fatal("accepted " + k)
 		}
 		os.WriteFile(p, []byte(files[k]), 0600)
+	}
+}
+
+func TestLegacyResumeWithoutRecord(t *testing.T) {
+	a := &arrayState{Sync: "idle", Array: "active"}
+	if safeResume(a, nil) {
+		t.Fatal("idle reshape needs its journal")
+	}
+	a.Sync = "frozen"
+	if !safeResume(a, nil) {
+		t.Fatal("legacy running reshape can be unfrozen")
+	}
+	a.Array = "readonly"
+	if safeResume(a, nil) {
+		t.Fatal("cannot reactivate an unrecorded reshape")
 	}
 }

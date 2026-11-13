@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -27,7 +28,7 @@ class Worker:
         )
         return json.loads(result.stdout)
 
-    def perform(self, action, **params):
+    def plan(self, action, params):
         # A previous command can finish before its last metadata-change event.
         for attempt in range(6):
             command("udevadm", "settle")
@@ -36,9 +37,34 @@ class Worker:
                 break
             time.sleep(0.5)
         assert "error" not in plan, (action, plan)
+        return plan
+
+    def perform(self, action, **params):
+        plan = self.plan(action, params)
         result = self.invoke("execute", action, params, fingerprint=plan["fingerprint"], confirmation=plan["confirmation"])
         assert "error" not in result, (action, result)
         print("PASS", action, flush=True)
+
+
+def interrupt_config(worker, action, **params):
+    config = "/etc/mdadm/mdadm.conf"
+    command("mount", "--bind", config, config)
+    try:
+        plan = worker.plan(action, params)
+        result = worker.invoke("execute", action, params, fingerprint=plan["fingerprint"], confirmation=plan["confirmation"])
+        assert "error" in result, result
+        journals = list(Path("/var/lib/panasms-agent/raid-lifecycle").glob("*.json"))
+        assert len(journals) == 1, journals
+        record = json.loads(journals[0].read_text())
+        assert record["action"] == "raid." + action
+        assert record["step"] == {"create": "register", "delete": "stopped"}[action], record["step"]
+        assert subprocess.run([worker.helper, "raid", "check-removal"]).returncode != 0
+    finally:
+        command("umount", config)
+    command(worker.helper, "raid", "finish", record["uuid"])
+    assert not journals[0].exists()
+    command(worker.helper, "raid", "check-removal")
+    print("PASS", action, "interrupted configuration update and recovery", flush=True)
 
 
 def idle(array, level=None):
@@ -67,69 +93,86 @@ def run():
     assert hashlib.sha256(helper.read_bytes()).hexdigest() == os.environ["PANASMS_RAID_HELPER_SHA256"]
     assert not list(Path("/var/lib/panasms-agent/raid-reshape").glob("*.json"))
     worker = Worker(helper, os.environ["PANASMS_TEST_ADMIN"])
-    with tempfile.TemporaryDirectory(prefix="panasms-raid-", dir="/var/tmp") as temp:
-        loops = []
-        array = Path("/dev/md") / ("panasms_test_" + str(os.getpid()))
-        assert not os.path.lexists(array)
-        try:
-            for i in range(6):
-                image = Path(temp) / str(i)
-                with image.open("xb") as stream:
-                    stream.truncate(128 << 20)
-                loop = command("losetup", "--find", "--show", "--partscan", str(image))
-                assert re.fullmatch(r"/dev/loop[0-9]+", loop)
-                loops.append(loop)
-            worker.perform("create", name=array.name, level="1", members=loops[:2])
-            md = idle(array)
-            marker = os.urandom(1 << 20)
-            with array.open("r+b", buffering=0) as stream:
-                stream.write(marker)
-                os.fsync(stream.fileno())
-            for level, extra in [("5", loops[2]), ("6", loops[3]), ("5", "")]:
-                if level == "6":
-                    (md / "sync_speed_max").write_text("1000")
-                worker.perform("convert", target=str(array), level=level, replacement=extra)
-                if level == "6":
-                    worker.perform("pause", target=str(array))
-                    assert (md / "sync_action").read_text().strip() == "frozen"
-                    assert subprocess.run([helper, "raid", "check-removal"]).returncode != 0
-                    (md / "sync_speed_max").write_text("200000")
-                    worker.perform("resume", target=str(array))
-                idle(array, level)
-                with array.open("rb") as stream:
-                    assert stream.read(len(marker)) == marker
-            array_uuid = (md / "uuid").read_text().strip()
-            command("mdadm", "--stop", str(array))
-            command("udevadm", "settle")
-            for _ in range(2):
-                command(helper, "raid", "recover")
-            command(helper, "raid", "check-removal")
-            array = Path("/dev/md/panasms-recover-" + re.sub("[:-]", "", array_uuid)[:16])
-            md = idle(array)
-            for entry in md.glob("dev-*"):
-                if (entry / "slot").read_text().strip() == "none":
-                    spare = "/dev/" + entry.name[4:]
-                    assert spare in loops
-                    command("mdadm", "--manage", str(array), "--remove", spare)
-            old = next("/dev/" + e.name[4:] for e in md.glob("dev-*") if (e / "slot").read_text().strip() == "0")
-            assert old in loops
-            command("mdadm", "--manage", str(array), "--fail", old)
-            worker.perform("replace", target=str(array), member=old, replacement=loops[4])
-            idle(array)
-            worker.perform("grow", target=str(array), replacement=loops[5])
-            idle(array)
+    temp = tempfile.mkdtemp(prefix="panasms-raid-", dir="/var/tmp")
+    loops = []
+    array = Path("/dev/md") / ("panasms_test_" + str(os.getpid()))
+    assert not os.path.lexists(array)
+    try:
+        for i in range(7):
+            image = Path(temp) / str(i)
+            with image.open("xb") as stream:
+                stream.truncate(128 << 20)
+            loop = command("losetup", "--find", "--show", "--partscan", str(image))
+            assert re.fullmatch(r"/dev/loop[0-9]+", loop)
+            loops.append(loop)
+        interrupt_config(worker, "create", name=array.name, level="1", members=loops[:2])
+        md = idle(array)
+        marker = os.urandom(1 << 20)
+        with array.open("r+b", buffering=0) as stream:
+            stream.write(marker)
+            os.fsync(stream.fileno())
+        for level, extra in [("5", loops[2]), ("6", loops[3]), ("5", "")]:
+            if level == "6":
+                (md / "sync_speed_max").write_text("1000")
+            worker.perform("convert", target=str(array), level=level, replacement=extra)
+            if level == "6":
+                worker.perform("pause", target=str(array))
+                assert (md / "sync_action").read_text().strip() == "frozen"
+                assert subprocess.run([helper, "raid", "check-removal"]).returncode != 0
+                (md / "sync_speed_max").write_text("200000")
+                worker.perform("resume", target=str(array))
+            idle(array, level)
             with array.open("rb") as stream:
                 assert stream.read(len(marker)) == marker
-            (md / "sync_speed_max").write_text("1000")
-            worker.perform("check", target=str(array))
-            worker.perform("check-stop", target=str(array))
-            idle(array)
-            worker.perform("delete", target=str(array))
-        finally:
-            if array.exists():
-                command("mdadm", "--stop", str(array))
-            for loop in reversed(loops):
-                command("losetup", "--detach", loop)
+        array_uuid = (md / "uuid").read_text().strip()
+        command("mdadm", "--stop", str(array))
+        command("udevadm", "settle")
+        for _ in range(2):
+            command(helper, "raid", "recover")
+        command(helper, "raid", "check-removal")
+        array = Path("/dev/md/panasms-recover-" + re.sub("[:-]", "", array_uuid)[:16])
+        md = idle(array)
+        for entry in md.glob("dev-*"):
+            if (entry / "slot").read_text().strip() == "none":
+                spare = "/dev/" + entry.name[4:]
+                assert spare in loops
+                command("mdadm", "--manage", str(array), "--remove", spare)
+        old = next("/dev/" + e.name[4:] for e in md.glob("dev-*") if (e / "slot").read_text().strip() == "0")
+        assert old in loops
+        command("mdadm", "--manage", str(array), "--fail", old)
+        worker.perform("replace", target=str(array), member=old, replacement=loops[4])
+        idle(array)
+        (md / "sync_speed_max").write_text("1000")
+        assert (md / ("dev-" + Path(loops[4]).name)).is_dir()
+        worker.perform("grow", target=str(array), replacement=loops[5])
+        worker.perform("pause", target=str(array))
+        (md / "sync_speed_max").write_text("200000")
+        worker.perform("resume", target=str(array))
+        idle(array)
+        command(helper,"raid","check-removal")
+        with array.open("rb") as stream:
+            assert stream.read(len(marker)) == marker
+        (md / "sync_speed_max").write_text("1000")
+        worker.perform("check", target=str(array))
+        worker.perform("check-stop", target=str(array))
+        idle(array)
+        worker.perform("add", target=str(array), replacement=loops[6])
+        assert (md / ("dev-" + Path(loops[6]).name)).is_dir()
+        interrupt_config(worker, "delete", target=str(array))
+    finally:
+        errors = []
+        if array.exists():
+            if subprocess.run(["mdadm", "--stop", str(array)]).returncode:
+                errors.append(str(array))
+        for loop in reversed(loops):
+            if subprocess.run(["losetup", "--detach", loop]).returncode:
+                errors.append(loop)
+        for image in Path(temp).iterdir():
+            if command("losetup", "-j", str(image)):
+                errors.append(str(image))
+        if errors:
+            raise RuntimeError(f"Disks still active. Inspect {temp}: {errors}")
+        shutil.rmtree(temp)
 
 
 if __name__ == "__main__":

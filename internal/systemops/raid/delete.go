@@ -2,11 +2,13 @@ package raid
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"panasms.local/backend/internal/systemops/accounts"
 	"panasms.local/backend/internal/systemops/folders"
@@ -144,6 +146,15 @@ func (s *service) retireRecord(uuid string) error {
 	rec, err := s.record(uuid)
 	if err != nil || rec == nil {
 		return err
+	}
+	present, err := backupPresent(rec.Backup, s.owner)
+	if err != nil {
+		return err
+	}
+	if present {
+		if err = os.Rename(rec.Backup, fmt.Sprintf("%s.%d.retired", rec.Backup, time.Now().UnixNano())); err != nil {
+			return err
+		}
 	}
 	path := recordPath(rec.Backup)
 	if err = os.Rename(path, strings.TrimSuffix(path, ".json")+".retired"); err != nil {

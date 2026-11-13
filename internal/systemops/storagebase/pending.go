@@ -12,6 +12,8 @@ import (
 	"syscall"
 )
 
+const RAIDLifecycleRoot = "/var/lib/panasms-agent/raid-lifecycle"
+
 type PendingRoot struct{ Path, Domain string }
 
 var TransactionRoots = []PendingRoot{{"/var/lib/panasms-agent/storage", "partitionfs"}, {"/var/lib/panasms-agent/local-mounts", "localmounts"}}
@@ -31,7 +33,8 @@ func CheckPendingRoots(domain, target string, identity storagequery.StorageIdent
 	if (domain != "partitionfs" && domain != "localmounts" && domain != "raid") || identity.BootID == "" || len(identity.Devices) == 0 {
 		return reject("Storage transaction identity is invalid")
 	}
-	return checkPendingRoots(TransactionRoots, 0, domain, target, identity)
+	roots := append([]PendingRoot{{RAIDLifecycleRoot, "raid"}}, TransactionRoots...)
+	return checkPendingRoots(roots, 0, domain, target, identity)
 }
 func checkPendingRoots(roots []PendingRoot, owner int, domain, target string, identity storagequery.StorageIdentity) error {
 	for _, root := range roots {

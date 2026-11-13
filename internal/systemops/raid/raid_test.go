@@ -128,3 +128,10 @@ func TestLegacyResumeWithoutRecord(t *testing.T) {
 		t.Fatal("cannot reactivate an unrecorded reshape")
 	}
 }
+
+func TestConfiguredNameBeforeCreate(t *testing.T) {
+	config := "# ARRAY /dev/md/unused\nARRAY /dev/md/data metadata=1.2 UUID=old\n"
+	if !configuredName(config, "data") || configuredName(config, "unused") || configuredName(config, "da") {
+		t.Fatal("incorrect configured array name match")
+	}
+}

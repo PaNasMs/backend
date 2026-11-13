@@ -133,6 +133,9 @@ func (s *service) prepare(ctx context.Context, action string, params map[string]
 			return nil, err
 		}
 		p.Config = string(conf)
+		if action == "raid.create" && configuredName(p.Config, p.Target) {
+			return nil, reject("An array with this name is already configured in mdadm.conf")
+		}
 		if action == "raid.delete" {
 			if _, err = storagebase.RemoveManagedFstabRows(p.Fstab, p.Delete.UUIDs); err != nil {
 				return nil, err
@@ -341,4 +344,14 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func configuredName(config, name string) bool {
+	for _, line := range strings.Split(config, "\n") {
+		fields := strings.Fields(strings.SplitN(line, "#", 2)[0])
+		if len(fields) >= 2 && fields[0] == "ARRAY" && fields[1] == "/dev/md/"+name {
+			return true
+		}
+	}
+	return false
 }

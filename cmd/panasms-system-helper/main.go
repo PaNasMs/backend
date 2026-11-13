@@ -34,6 +34,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 5 && os.Args[1] == "raid" && os.Args[2] == "archive" {
+		if os.Geteuid() != 0 {
+			os.Exit(1)
+		}
+		if err := raid.ArchiveLifecycle(context.Background(), os.Args[3], os.Args[4]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 4 && os.Args[1] == "raid" && os.Args[2] == "finish" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

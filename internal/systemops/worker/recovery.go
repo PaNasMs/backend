@@ -52,7 +52,7 @@ func recoverOperation(ctx context.Context, req *systemops.Request) (json.RawMess
 		add("RAID state", string(stat[:min(len(stat), 16384)]))
 		message = "Check array members and maintenance progress. Use the array pause/resume controls for an existing operation; do not recreate or reformat the array."
 		if string(lifecycle) != "[]" {
-			message = "Inspect the recorded RAID operation and its mounts and shares. As root, use panasms-system-helper raid finish UUID to finish a verified registration or stopped-array cleanup."
+			message = "Inspect the recorded RAID operation and its mounts and shares. As root, use panasms-system-helper raid finish UUID to finish a verified registration or stopped-array cleanup. After inspecting and resolving the live storage and configuration manually, use raid archive UUID SHA256 to retain the journal and release the block."
 		}
 	case modulelifecycle.IsAction(req.Action) || req.Action == "module.catalog-install":
 		route = "/modules"

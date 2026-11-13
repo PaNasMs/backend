@@ -217,12 +217,12 @@ func (m mutation) apply(action string) (string, error) {
 	return "", nil
 }
 
-func (m mutation) config(desired string) error {
+func (m mutation) config(expected, desired string) error {
 	raw, err := os.ReadFile(m.s.config)
 	if err != nil {
 		return err
 	}
-	if string(raw) != desired && string(raw) != m.p.Config {
+	if string(raw) != desired && string(raw) != expected {
 		return reject("MD configuration changed. Inspect array state before retrying.")
 	}
 	if string(raw) != desired {
@@ -332,7 +332,26 @@ func (m mutation) register(j *intent) error {
 	if len(lines) != 1 || withoutArray(lines[0]+"\n", j.UUID) != "" {
 		return reject("Could not confirm created array configuration")
 	}
-	if err = m.config(strings.TrimRight(m.p.Config, "\n") + "\n" + lines[0] + "\n"); err != nil {
+	raw, err := os.ReadFile(m.s.config)
+	if err != nil {
+		return err
+	}
+	current := string(raw)
+	desired := current
+	row := lines[0]
+	for _, existing := range strings.Split(current, "\n") {
+		if existing == row {
+			continue
+		}
+		fields := strings.Fields(existing)
+		if withoutArray(existing+"\n", j.UUID) == "" || len(fields) > 1 && fields[0] == "ARRAY" && fields[1] == strings.Fields(row)[1] {
+			return reject("Conflicting MD configuration for the created array")
+		}
+	}
+	if !slices.Contains(strings.Split(current, "\n"), row) {
+		desired = strings.TrimRight(current, "\n") + "\n" + row + "\n"
+	}
+	if err = m.config(current, desired); err != nil {
 		return err
 	}
 	return j.finish()
@@ -489,7 +508,7 @@ func (m mutation) remove() error {
 }
 func (m mutation) finishDelete(j *intent) error {
 	p := m.p
-	desired, err := storagebase.RemoveManagedFstabRows(p.Fstab, p.Delete.UUIDs)
+	originalDesired, err := storagebase.RemoveManagedFstabRows(p.Fstab, p.Delete.UUIDs)
 	if err != nil {
 		return err
 	}
@@ -509,12 +528,20 @@ func (m mutation) finishDelete(j *intent) error {
 	if err != nil {
 		return err
 	}
-	if current != desired {
-		if err = storagebase.WriteFstab(m.ctx, storagebase.Hash(p.Fstab), desired, m.opts.Reporter); err != nil {
+	desired, err := storagebase.RemoveManagedFstabRows(current, p.Delete.UUIDs)
+	if err != nil {
+		return err
+	}
+	if current != desired || p.Fstab != originalDesired {
+		if err = storagebase.WriteFstab(m.ctx, storagebase.Hash(current), desired, m.opts.Reporter); err != nil {
 			return err
 		}
 	}
-	if err = m.config(withoutArray(withoutArray(p.Config, j.UUID), j.MetadataUUID)); err != nil {
+	raw, err := os.ReadFile(m.s.config)
+	if err != nil {
+		return err
+	}
+	if err = m.config(string(raw), withoutArray(withoutArray(string(raw), j.UUID), j.MetadataUUID)); err != nil {
 		return err
 	}
 	return j.finish()

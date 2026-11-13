@@ -61,7 +61,22 @@ def interrupt_config(worker, action, **params):
         assert subprocess.run([worker.helper, "raid", "check-removal"]).returncode != 0
     finally:
         command("umount", config)
+    marker = "# unrelated change during recovery " + record["uuid"]
+    with Path(config).open("a") as stream:
+        stream.write("\n" + marker + "\n")
+    with Path("/etc/fstab").open("a") as stream:
+        stream.write("\n" + marker + "\n")
     command(worker.helper, "raid", "finish", record["uuid"])
+    assert marker in Path(config).read_text() and marker in Path("/etc/fstab").read_text()
+    # A retained pre-reboot record cannot authorize device writes against a new boot.
+    record["identity"]["bootId"] = "00000000-0000-0000-0000-000000000000"
+    raw = json.dumps(record).encode()
+    journals[0].touch(mode=0o600)
+    journals[0].write_bytes(raw)
+    assert subprocess.run([worker.helper, "raid", "finish", record["uuid"]]).returncode != 0
+    assert subprocess.run([worker.helper, "raid", "archive", record["uuid"], "stale"]).returncode != 0
+    command(worker.helper, "raid", "archive", record["uuid"], hashlib.sha256(raw).hexdigest())
+    assert any(p.read_bytes() == raw for p in journals[0].parent.glob(journals[0].name + ".history-*"))
     assert not journals[0].exists()
     command(worker.helper, "raid", "check-removal")
     print("PASS", action, "interrupted configuration update and recovery", flush=True)

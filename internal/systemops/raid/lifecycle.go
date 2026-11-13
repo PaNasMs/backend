@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"panasms.local/backend/internal/systemops"
 	"panasms.local/backend/internal/systemops/disksleep"
@@ -43,7 +44,7 @@ func readIntents() ([]*intent, error) {
 	}
 	var result []*intent
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".panasms-") {
+		if strings.Contains(entry.Name(), ".history-") || strings.HasPrefix(entry.Name(), ".panasms-") {
 			continue
 		}
 		p := filepath.Join(lifecycleRoot, entry.Name())
@@ -143,9 +144,53 @@ func LifecycleReport() (json.RawMessage, error) {
 	}
 	rows := []map[string]any{}
 	for _, j := range intents {
-		rows = append(rows, map[string]any{"action": j.Action, "target": j.Plan.Target, "uuid": j.UUID, "step": j.Step, "mountsAndShares": j.Plan.Delete})
+		raw, err := os.ReadFile(intentPath(j.UUID))
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, map[string]any{"path": intentPath(j.UUID), "sha256": storagebase.Hash(string(raw)), "action": j.Action, "target": j.Plan.Target, "uuid": j.UUID, "step": j.Step, "mountsAndShares": j.Plan.Delete})
 	}
 	return json.Marshal(rows)
+}
+
+// Archive only the operator-reviewed evidence. Device identities from an old
+// boot must never authorize a retry against a reused device name.
+func ArchiveLifecycle(ctx context.Context, uuid, digest string) error {
+	if !uuidPattern.MatchString(uuid) {
+		return reject("Invalid RAID UUID")
+	}
+	lock, err := storagebase.DomainLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	records, err := readIntents()
+	if err != nil {
+		return err
+	}
+	for _, j := range records {
+		if compactUUID(j.UUID) != compactUUID(uuid) {
+			continue
+		}
+		path := intentPath(uuid)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if digest != storagebase.Hash(string(raw)) {
+			return reject("Inspect the current journal and live storage, then confirm the journal SHA-256")
+		}
+		if err = os.Rename(path, path+fmt.Sprintf(".history-%d", time.Now().UnixNano())); err != nil {
+			return err
+		}
+		dir, err := os.Open(lifecycleRoot)
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		return dir.Sync()
+	}
+	return reject("No pending RAID lifecycle record for this UUID")
 }
 
 // Recovery is an explicit root operation. Boot never repeats a stop, wipe, or create.

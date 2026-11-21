@@ -16,8 +16,6 @@ import web_access
 import system_updates
 import sharing
 import module_manager
-import module_sources
-import module_catalog
 import network
 import job_control
 import job_recovery
@@ -81,9 +79,8 @@ def dispatch(mode, user, request):
             result = module_manager.list_modules()
             if not admin: result['installed'] = [m for m in result['installed'] if m['id'] == 'files' or m.get('memberAccess')]
             return result
-        if view == "module-sources": return {"sources": module_sources.sources()}
-        if view == "module-catalog":
-            return module_catalog.list_available()
+        if view in ("module-sources", "module-catalog"):
+            require(False, "Module repositories are managed by the native helper")
         extensions = module_manager.load_operations("queries", view)
         if extensions:
             return extensions[0].query(user, target)
@@ -101,10 +98,12 @@ def dispatch(mode, user, request):
             return result
         return host.query(view, target)
     action = request.get("action")
+    require(action not in ("module.source-add", "module.source-remove", "module.catalog-install"),
+            "Module repositories are managed by the native helper")
     require(not system_updates.changing() or action == "system.update.rollback", "A system update is in progress; wait for the panel to reconnect")
     params = request.get("params")
     require(isinstance(params, dict), 'Parameters must be an object')
-    builtins = (storage, storage_snapshots, storage_luks, storage_reshape, accounts, host, web_access, system_updates, sharing, network, module_manager, module_catalog, module_sources)
+    builtins = (storage, storage_snapshots, storage_luks, storage_reshape, accounts, host, web_access, system_updates, sharing, network, module_manager)
     module = next((m for m in builtins if action in m.ACTIONS), None)
     if module is None:
         extensions = module_manager.load_operations("actions", action)
@@ -128,8 +127,6 @@ def dispatch(mode, user, request):
     job_control.checkpoint()
     os.environ["PANASMS_OPERATION"] = "1"
     mutation_started = True
-    if module == module_catalog:
-        return module.execute(action, params, user, request.get('actor'))
     return (
         module.execute(action, params, user)
         if module != accounts

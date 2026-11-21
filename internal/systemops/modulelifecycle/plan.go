@@ -167,6 +167,9 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 	var identity any = installed
 	details := []string{}
 	if action == "module.install" {
+		if err = s.checkSourceTrust(); err != nil {
+			return nil, err
+		}
 		token := text(p, "upload")
 		file, sum, openErr := s.openUpload(token, name)
 		if openErr != nil {

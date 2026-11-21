@@ -52,8 +52,8 @@ var queryViews = map[string]impl{
 	"homes-check":       goNative,
 	"homes":             goNative,
 	"modules":           goNative,
-	"module-sources":    legacy,
-	"module-catalog":    legacy,
+	"module-sources":    goNative,
+	"module-catalog":    goNative,
 	"storage-options":   goNative,
 	"storage-snapshots": goNative,
 	"storage-luks":      goNative,
@@ -100,14 +100,14 @@ var actionModules = map[string]impl{
 	"luks.header-backup":          goNative,
 	"luks.header-restore":         goNative,
 
-	"module.catalog-install":    legacy,
+	"module.catalog-install":    goNative,
 	"module.disable":            goNative,
 	"module.enable":             goNative,
 	"module.install":            goNative,
 	"module.recover":            goNative,
 	"module.remove":             goNative,
-	"module.source-add":         legacy,
-	"module.source-remove":      legacy,
+	"module.source-add":         goNative,
+	"module.source-remove":      goNative,
 	"mount.attach":              goNative,
 	"mount.detach":              goNative,
 	"mount.open":                goNative,
@@ -294,9 +294,6 @@ func destination(mode string, body any) (impl, error) {
 		return routeQuery(view)
 	case "plan", "execute", "recover":
 		action := bodyString(body, "action")
-		if mode == "recover" && action == "module.catalog-install" {
-			return goNative, nil
-		}
 		if dst, ok := actionModules[action]; ok {
 			return dst, nil
 		}

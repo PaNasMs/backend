@@ -41,7 +41,7 @@ func TestRouteEmptyViewRejected(t *testing.T) {
 func TestRouteKnownViewGoesLegacy(t *testing.T) {
 	var hit bool
 	r := route(nil, recordingRunner(&hit))
-	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "module-catalog"}); err != nil {
+	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "system-updates"}); err != nil {
 		t.Fatalf("known view: %v", err)
 	}
 	if !hit {
@@ -163,9 +163,7 @@ func TestCatalogRecoveryNeverFallsBackToLegacyMutations(t *testing.T) {
 	if _, err := r(context.Background(), "recover", "admin", Request{Action: "module.catalog-install"}); err == nil || hit {
 		t.Fatal(err, hit)
 	}
-	if actionModules["module.catalog-install"] != legacy {
-		t.Fatal("catalog selection/download route changed")
-	}
+
 }
 
 func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
@@ -185,8 +183,15 @@ func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
 		}
 	}
 	for _, action := range []string{"module.catalog-install", "module.source-add", "module.source-remove"} {
-		if actionModules[action] != legacy {
-			t.Fatal("catalog selection/source ownership changed", action)
+		for _, mode := range []string{"plan", "execute", "recover"} {
+			if _, err := r(context.Background(), mode, "admin", Request{Action: action}); !errors.Is(err, failure) || hit {
+				t.Fatal(action, mode, err, hit)
+			}
+		}
+	}
+	for _, view := range []string{"module-sources", "module-catalog"} {
+		if _, err := r(context.Background(), "query", "admin", map[string]string{"view": view}); !errors.Is(err, failure) || hit {
+			t.Fatal(view, err, hit)
 		}
 	}
 }

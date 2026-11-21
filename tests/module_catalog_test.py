@@ -12,18 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import module_catalog as c
 from common import Rejected
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class Catalog(unittest.TestCase):
     def setUp(self):
-        self.key = patch.object(c.manager, 'KEYS', ROOT / 'backend/packaging')
+        self.key = patch.object(c.manager, 'KEYS', ROOT / 'packaging')
         self.key.start()
         self.addCleanup(self.key.stop)
 
     def test_published_catalog_signature_and_tampering(self):
-        raw = (ROOT / 'backend/tests/fixtures/module-catalog/catalog.json').read_bytes()
-        envelope = json.loads((ROOT / 'backend/tests/fixtures/module-catalog/catalog.sig').read_text())
+        raw = (ROOT / 'tests/fixtures/module-catalog/catalog.json').read_bytes()
+        envelope = json.loads((ROOT / 'tests/fixtures/module-catalog/catalog.sig').read_text())
         c.verify(raw, envelope)
         with self.assertRaisesRegex(Rejected, 'signature'):
             c.verify(raw + b' ', envelope)
@@ -49,7 +49,7 @@ class Catalog(unittest.TestCase):
                     c.verify(raw, {**envelope, 'signer': '../private'})
 
     def test_signed_catalog_parser(self):
-        with patch.object(c, 'download', side_effect=lambda url, limit: (ROOT / 'backend/tests/fixtures/module-catalog' / url.rsplit('/', 1)[1]).read_bytes()):
+        with patch.object(c, 'download', side_effect=lambda url, limit: (ROOT / 'tests/fixtures/module-catalog' / url.rsplit('/', 1)[1]).read_bytes()):
             self.assertEqual(set(c.catalog()), {'files', 'terminal'})
 
     def test_dependencies_and_no_downgrade(self):
@@ -106,7 +106,7 @@ class Catalog(unittest.TestCase):
 
 
 class CatalogDispatch(unittest.TestCase):
-    def test_native_no_change_error_and_actor_survive_catalog_dispatch(self):
+    def test_catalog_actions_cannot_mutate_through_python_dispatch(self):
         source = Path(__file__).resolve().parents[1] / 'management/main.py'
         function = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == 'dispatch')
         blank = SimpleNamespace(ACTIONS=set())
@@ -121,14 +121,9 @@ class CatalogDispatch(unittest.TestCase):
                   os=SimpleNamespace(getgrouplist=lambda name, gid: [27], environ={}), require=c.require,
                   job_control=SimpleNamespace(capability=lambda allowed: None, checkpoint=lambda: None))
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), 'exec'), ns)
-        actor = {'uid': 1000, 'epoch': 'original', 'principal': 'same'}
-        reply = {'error': 'State changed', 'noChanges': True}
-        with patch.object(c, 'plan', return_value={'fingerprint': 'fp', 'confirmation': 'files'}), \
-                patch.object(c, 'execute', return_value=reply) as execute:
-            result = ns['dispatch']('execute', 'alice', {'action': 'module.catalog-install', 'params': {},
-                                      'fingerprint': 'fp', 'confirmation': 'files', 'actor': actor})
-            self.assertEqual(result, reply)
-            execute.assert_called_once_with('module.catalog-install', {}, 'alice', actor)
+        for action in ('module.catalog-install', 'module.source-add', 'module.source-remove'):
+            with self.subTest(action=action), self.assertRaisesRegex(Rejected, 'native helper'):
+                ns['dispatch']('execute', 'alice', {'action': action, 'params': {}})
 
     def test_native_plan_refusal_preserves_no_change_proof_without_execution(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(c.manager, 'UPLOADS', Path(tmp)), \

@@ -192,6 +192,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "module-sources", "module-catalog":
+		return modulelifecycle.CatalogQuery(ctx, view)
 	case "modules":
 		member, _ := ctx.Value(moduleMemberKey{}).(bool)
 		return modulelifecycle.Query(member)
@@ -239,6 +241,9 @@ func plan(ctx context.Context, action string, p map[string]any, user string) (js
 		return raid.Plan(ctx, action, p)
 	}
 
+	if modulelifecycle.IsCatalogAction(action) {
+		return modulelifecycle.CatalogPlan(ctx, action, p)
+	}
 	if modulelifecycle.IsAction(action) {
 		return modulelifecycle.Plan(ctx, action, p, user)
 	}
@@ -303,6 +308,11 @@ func execute(ctx context.Context, action string, p map[string]any, r *systemops.
 		return raid.Execute(ctx, action, p, expected, r)
 	}
 
+	if modulelifecycle.IsCatalogAction(action) {
+		expected, _ := ctx.Value(validatedPlanKey{}).(string)
+		authorize, _ := ctx.Value(moduleAuthorizationKey{}).(func() error)
+		return modulelifecycle.CatalogExecute(ctx, action, p, expected, r, authorize)
+	}
 	if modulelifecycle.IsAction(action) {
 		user, _ := ctx.Value(networkUserKey{}).(string)
 		expected, _ := ctx.Value(validatedPlanKey{}).(string)

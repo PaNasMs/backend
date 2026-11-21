@@ -59,6 +59,35 @@ func TestModuleExecutionKeepsOriginalIdentityRecheckAfterSlowStages(t *testing.T
 	}
 }
 
+func TestCatalogRequiresAdminAndOriginalActor(t *testing.T) {
+	for _, view := range []string{"module-catalog", "module-sources"} {
+		d, _ := setup()
+		d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+		if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: view}, reporter()); err == nil {
+			t.Fatal("member query admitted", view)
+		}
+	}
+	for _, action := range []string{"module.catalog-install", "module.source-add", "module.source-remove"} {
+		for _, rejection := range []string{"actor", "confirmation", "member"} {
+			d, calls := setup()
+			req := request()
+			req.Action = action
+			switch rejection {
+			case "actor":
+				req.Actor = &systemops.Actor{UID: 1000, Principal: "principal", Epoch: "revoked"}
+			case "confirmation":
+				req.Confirmation = "wrong"
+			case "member":
+				d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+			}
+			_, err := d.Handle(systemops.ModeExecute, "alice", req, reporter())
+			if !systemops.Unchanged(err) || *calls != 0 {
+				t.Fatal(action, rejection, err, *calls)
+			}
+		}
+	}
+}
+
 func TestMemberModuleQueryPreservesTargetAndFilterContext(t *testing.T) {
 	d, _ := setup()
 	d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
@@ -160,7 +189,7 @@ func TestOrdinaryQueriesAreOwnerScoped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, view := range []string{"accounts", "homes", "homes-check", "sharing", "share-folders", "nfs"} {
+	for _, view := range []string{"accounts", "homes", "homes-check", "sharing", "share-folders", "nfs", "module-sources", "module-catalog"} {
 		if _, err := d.Handle(systemops.ModeQuery, "alice", &systemops.Request{View: view}, reporter()); err == nil {
 			t.Fatal("ordinary query allowed", view)
 		}
@@ -310,5 +339,28 @@ func TestLUKSBackupUsesAuthorizedNumericOwner(t *testing.T) {
 	req.Action = "luks.header-backup"
 	if _, err := d.Handle(systemops.ModeExecute, id.Username, req, reporter()); !systemops.IsRejected(err) {
 		t.Fatalf("accepted an actor whose primary group changed: %v", err)
+	}
+}
+
+func TestCatalogActionsRejectMemberStaleActorAndUnconfirmedTarget(t *testing.T) {
+	for _, action := range []string{"module.source-add", "module.source-remove", "module.catalog-install"} {
+		for _, reason := range []string{"member", "actor", "confirmation"} {
+			t.Run(action+"/"+reason, func(t *testing.T) {
+				d, calls := setup()
+				req := request()
+				req.Action = action
+				switch reason {
+				case "member":
+					d.Authorize = func(string) (auth.Identity, error) { return auth.Identity{Role: "user"}, nil }
+				case "actor":
+					req.Actor = &systemops.Actor{UID: 1000, Principal: "principal", Epoch: "stale"}
+				case "confirmation":
+					req.Confirmation = "different"
+				}
+				if _, err := d.Handle(systemops.ModeExecute, "admin", req, reporter()); err == nil || !systemops.Unchanged(err) || *calls != 0 {
+					t.Fatal(err, *calls)
+				}
+			})
+		}
 	}
 }

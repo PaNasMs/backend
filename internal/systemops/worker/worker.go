@@ -101,7 +101,15 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 			return nil, err
 		}
 	}
-	planned, err := d.Plan(context.Background(), req.Action, req.Params, user)
+	plan := func(ctx context.Context) (json.RawMessage, error) {
+		return d.Plan(ctx, req.Action, req.Params, user)
+	}
+	var planned json.RawMessage
+	if mode == systemops.ModeExecute && modulelifecycle.IsCatalogAction(req.Action) {
+		planned, err = systemops.WithCancellation(context.Background(), r, plan)
+	} else {
+		planned, err = plan(context.Background())
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -26,7 +26,7 @@ var officialProject = regexp.MustCompile(`^[a-z][a-z0-9-]*/releases/download$`)
 type catalogService struct {
 	lifecycle
 	config         string
-	download       func(context.Context, string, int64) ([]byte, error)
+	download       catalogDownload
 	sourceBoundary func(string) error
 }
 
@@ -173,9 +173,9 @@ func (c catalogService) readGeneration(gen generation, src source) (catalogIndex
 func (c catalogService) fetch(ctx context.Context, url string) (generation, error) {
 	gen := generation{URL: url}
 	var err error
-	gen.Raw, err = c.download(ctx, url+"catalog.json", maxCatalog)
+	gen.Raw, err = c.download(ctx, url+"catalog.json", maxCatalog, metadataDownload)
 	if err == nil {
-		gen.Envelope, err = c.download(ctx, url+"catalog.sig", 4096)
+		gen.Envelope, err = c.download(ctx, url+"catalog.sig", 4096, metadataDownload)
 	}
 	return gen, err
 }
@@ -183,7 +183,7 @@ func (c catalogService) fetch(ctx context.Context, url string) (generation, erro
 // Refresh each configured source independently; the raw signed bytes and
 // signature are replaced together. A fallback is authenticated again under
 // current trust and never changes the on-disk generation.
-func (c catalogService) refresh(ctx context.Context, dir *os.File, sources []source) (catalogIndex, []map[string]string) {
+func (c catalogService) refresh(ctx context.Context, dir *os.File, sources []source) (catalogIndex, []map[string]string, error) {
 	result := catalogIndex{modules: map[string][]release{}}
 	problems := []map[string]string{}
 	issue := func(src source, err error) {
@@ -211,6 +211,9 @@ func (c catalogService) refresh(ctx context.Context, dir *os.File, sources []sou
 	wg.Wait()
 	// Publish and merge strictly in configured order, irrespective of fetch order.
 	for i, src := range sources {
+		if err := context.Cause(ctx); err != nil {
+			return catalogIndex{}, nil, err
+		}
 		cache := catalogCacheName(src.ID)
 		gen, index, err := fetchedBySource[i].gen, fetchedBySource[i].index, fetchedBySource[i].err
 		if err == nil {
@@ -238,26 +241,33 @@ func (c catalogService) refresh(ctx context.Context, dir *os.File, sources []sou
 			result.modules[id] = index.modules[id]
 		}
 	}
-	return result, problems
+	return result, problems, context.Cause(ctx)
 }
 
 func catalogCacheName(id string) string { return ".catalog-" + id + ".json" }
 
 func (c catalogService) query(ctx context.Context, view string) (json.RawMessage, error) {
+	if view == "module-sources" {
+		// This is only a metadata snapshot. Config replacement is atomic and
+		// the source journal's commit point. Do not read keys, use cached
+		// releases, or repair the journal on this network-independent path.
+		configured, err := c.sources()
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"sources": configured})
+	}
 	dir, err := c.catalogLock(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(dir); err != nil {
+	if err = c.repairSources(ctx, dir, nil); err != nil {
 		return nil, err
 	}
 	configured, err := c.sources()
 	if err != nil {
 		return nil, err
-	}
-	if view == "module-sources" {
-		return json.Marshal(map[string]any{"sources": configured})
 	}
 	if err = c.refreshCore(); err != nil {
 		return nil, err
@@ -266,7 +276,10 @@ func (c catalogService) query(ctx context.Context, view string) (json.RawMessage
 	if err != nil {
 		return nil, err
 	}
-	index, problems := c.refresh(ctx, dir, sourceSpecs(configured))
+	index, problems, err := c.refresh(ctx, dir, sourceSpecs(configured))
+	if err != nil {
+		return nil, err
+	}
 	available := []Manifest{}
 	for _, id := range index.order {
 		releases := index.modules[id]

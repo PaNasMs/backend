@@ -1,11 +1,13 @@
 package systemops
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // ControlFDEnv names the environment variable that carries the cancellation
@@ -97,4 +99,48 @@ func (r *Reporter) Close() error {
 		return r.control.Close()
 	}
 	return nil
+}
+
+// WithCancellation bridges the reporter pipe to context-aware, pre-mutation
+// work. The callback must not poll the reporter itself. The watcher is joined
+// before returning so later checkpoints are the sole readers again.
+func WithCancellation[T any](ctx context.Context, r *Reporter, run func(context.Context) (T, error)) (T, error) {
+	if r == nil || r.control == nil {
+		return run(ctx)
+	}
+	var zero T
+	if err := r.Checkpoint(); err != nil {
+		return zero, err
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(25 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if err := r.Checkpoint(); err != nil {
+					cancel(err)
+					return
+				}
+			}
+		}
+	}()
+	value, err := run(ctx)
+	close(stop)
+	<-done
+	if cause := context.Cause(ctx); cause != nil {
+		return zero, cause
+	}
+	if cancelErr := r.Checkpoint(); cancelErr != nil {
+		return zero, cancelErr
+	}
+	return value, err
 }

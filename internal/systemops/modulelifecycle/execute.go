@@ -531,10 +531,13 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		return nil, err
 	}
 	rollback = false
-	if err = s.recovery().cleanup(state, true); err != nil {
-		return nil, err
+	cleanupErr := s.recovery().cleanup(state, true)
+	if cleanupErr != nil && !s.catalogCommitWarnings {
+		return nil, cleanupErr
 	}
-	s.removeUpload(plan)
+	if cleanupErr == nil {
+		s.removeUpload(plan)
+	}
 	message := map[string]string{"module.remove": "Module removed", "module.disable": "Module disabled"}[action]
 	if message == "" {
 		message = "Modules installed and enabled"
@@ -542,5 +545,9 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 	if action == "module.install" && state.After[plan.target]["enabled"] == false {
 		message = "Module updated; remains disabled"
 	}
-	return json.Marshal(map[string]any{"message": message, "modules": plan.order})
+	body := map[string]any{"message": message, "modules": plan.order}
+	if cleanupErr != nil {
+		body["warnings"] = []string{committedRecovery}
+	}
+	return json.Marshal(body)
 }

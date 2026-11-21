@@ -24,6 +24,7 @@ type lifecycle struct {
 	compare                                                         versionCompare
 	health                                                          healthCheck
 	mounts                                                          func() ([]string, error)
+	catalogCommitWarnings                                           bool
 }
 
 type prepared struct {

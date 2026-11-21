@@ -44,13 +44,19 @@ func packageArchitecture(ctx context.Context, run command) (string, error) {
 	return architecture, nil
 }
 
+const installedModuleKeys = "/etc/panasms/module-keys"
+
+func installedModuleStore() store {
+	return store{root: "/var/lib/panasms-modules", owner: 0}
+}
+
 func installedLifecycle() (lifecycle, error) {
 	architecture, err := packageArchitecture(context.Background(), systemops.Command)
 	if err != nil {
 		return lifecycle{}, err
 	}
-	s := lifecycle{store: store{root: "/var/lib/panasms-modules", owner: 0}, coreFile: "/usr/lib/panasms/VERSION", architecture: architecture,
-		units: "/etc/systemd/system", uploads: "/var/lib/panasms-agent/module-uploads", keys: "/etc/panasms/module-keys", maintenance: "/run/lock/panasms-maintenance.lock",
+	s := lifecycle{store: installedModuleStore(), coreFile: "/usr/lib/panasms/VERSION", architecture: architecture,
+		units: "/etc/systemd/system", uploads: "/var/lib/panasms-agent/module-uploads", keys: installedModuleKeys, maintenance: "/run/lock/panasms-maintenance.lock",
 		run: systemops.Command, compare: compareDebian, health: health, mounts: func() ([]string, error) {
 			rows, err := folders.ReadMounts()
 			if err != nil {

@@ -16,15 +16,16 @@ func IsCatalogAction(action string) bool {
 }
 
 func installedCatalog(needLifecycle bool) (catalogService, error) {
-	c := catalogService{config: "/etc/panasms/module-sources.json", download: newCatalogDownload()}
-	if needLifecycle {
-		lc, err := installedLifecycle()
-		c.lifecycle = lc
-		return c, err
+	c := catalogService{
+		lifecycle: lifecycle{store: installedModuleStore(), keys: installedModuleKeys},
+		config:    "/etc/panasms/module-sources.json", download: newCatalogDownload(),
 	}
-	c.root = "/var/lib/panasms-modules"
-	c.keys = "/etc/panasms/module-keys"
-	return c, nil
+	if !needLifecycle {
+		return c, nil
+	}
+	var err error
+	c.lifecycle, err = installedLifecycle()
+	return c, err
 }
 
 func CatalogQuery(ctx context.Context, view string) (json.RawMessage, error) {
@@ -49,7 +50,7 @@ func (c catalogService) planCatalog(ctx context.Context, action string, p map[st
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(dir); err != nil {
+	if err = c.repairSources(ctx, dir, nil); err != nil {
 		return nil, err
 	}
 	if action == "module.catalog-install" {
@@ -94,12 +95,14 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(dir); err != nil {
+	if err = c.repairSources(ctx, dir, r); err != nil {
 		return nil, err
 	}
 	stale := reject("State has changed. Review a new operation plan.")
 	if action == "module.catalog-install" {
-		plan, err := c.selectRelease(ctx, dir, p)
+		plan, err := systemops.WithCancellation(ctx, r, func(ctx context.Context) (catalogInstallPlan, error) {
+			return c.selectRelease(ctx, dir, p)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +112,9 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		pendingMutation = true // The installer classifies pre-mutation and lifecycle errors.
 		return c.install(ctx, dir, plan, r, authorize)
 	}
-	plan, err := c.planSource(ctx, action, p)
+	plan, err := systemops.WithCancellation(ctx, r, func(ctx context.Context) (sourcePlan, error) {
+		return c.planSource(ctx, action, p)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -132,18 +137,23 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		return nil, err
 	}
 	pendingMutation = true
-	if err = c.applySource(dir, plan); err != nil {
+	cleanupErr, err := c.applySource(dir, plan)
+	if err != nil {
 		return nil, err
 	}
 	message := "Module repository removed"
 	if plan.change.Add {
 		message = "Module repository added"
 	}
-	return json.Marshal(map[string]any{"message": message})
+	body := map[string]any{"message": message}
+	if cleanupErr != nil {
+		body["warnings"] = []string{"Repository change saved, but cleanup is incomplete. Review the module repositories before retrying."}
+	}
+	return json.Marshal(body)
 }
 
 func CatalogRecovery(ctx context.Context, action string) (json.RawMessage, error) {
-	c, err := installedCatalog(action == "module.catalog-install")
+	c, err := installedCatalog(false)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +166,7 @@ func (c catalogService) recoverCatalog(ctx context.Context, action string) (json
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(dir); err != nil {
+	if err = c.repairSources(ctx, dir, nil); err != nil {
 		return nil, err
 	}
 	var next any

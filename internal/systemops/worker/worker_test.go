@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"panasms.local/backend/internal/auth"
-	"panasms.local/backend/internal/systemops"
 	"strconv"
 	"testing"
+	"time"
+
+	"panasms.local/backend/internal/auth"
+	"panasms.local/backend/internal/systemops"
 )
 
 func setup() (Dispatcher, *int) {
@@ -362,5 +364,33 @@ func TestCatalogActionsRejectMemberStaleActorAndUnconfirmedTarget(t *testing.T) 
 				}
 			})
 		}
+	}
+}
+
+func TestCatalogExecuteCancelsWhileWorkerReplans(t *testing.T) {
+	d, calls := setup()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer write.Close()
+	r := systemops.NewReporter(io.Discard, func(string) string { return strconv.FormatUint(uint64(read.Fd()), 10) })
+	defer r.Close()
+	d.Plan = func(ctx context.Context, _ string, _ map[string]any, _ string) (json.RawMessage, error) {
+		if _, err := write.Write([]byte{1}); err != nil {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil, errors.New("replan context was not cancelled")
+		}
+	}
+	req := request()
+	req.Action = "module.source-add"
+	_, err = d.Handle(systemops.ModeExecute, "admin", req, r)
+	if !errors.Is(err, systemops.ErrCancelled) || !systemops.Unchanged(err) || *calls != 0 {
+		t.Fatal(err, *calls)
 	}
 }

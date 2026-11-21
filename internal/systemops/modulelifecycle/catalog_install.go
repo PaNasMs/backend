@@ -41,90 +41,25 @@ func (c catalogService) selectRelease(ctx context.Context, dir *os.File, p map[s
 	if err != nil {
 		return out, err
 	}
-	index, _ := c.refresh(ctx, dir, sourceSpecs(configured))
+	index, _, err := c.refresh(ctx, dir, sourceSpecs(configured))
+	if err != nil {
+		return out, err
+	}
 	out.installed, err = c.registry()
 	if err != nil {
 		return out, err
 	}
-	out.chosen = map[string]release{}
-	out.details = []string{}
-	visiting := map[string]bool{}
-	var visit func(string, string, bool) error
-	visit = func(id, constraint string, root bool) error {
-		if visiting[id] {
-			return reject("Dependency cycle: " + id)
-		}
-		if selected, ok := out.chosen[id]; ok {
-			match, err := satisfies(text(selected.manifest, "version"), constraint)
-			if err != nil {
-				return err
-			}
-			if !match {
-				return reject("Conflicting module dependency: " + id)
-			}
-			return nil
-		}
-		current := out.installed[id]
-		if current != nil && !root {
-			match, err := satisfies(text(current, "version"), constraint)
-			if err != nil {
-				return err
-			}
-			if match {
-				return nil
-			}
-		}
-		for _, entry := range index.modules[id] {
-			if validateManifest(entry.manifest, c.core, c.architecture, true) != nil {
-				continue
-			}
-			version := text(entry.manifest, "version")
-			match, err := satisfies(version, constraint)
-			if err != nil {
-				return err
-			}
-			if !match {
-				continue
-			}
-			if current != nil {
-				n, err := compareVersions(version, text(current, "version"))
-				if err != nil {
-					return err
-				}
-				if n < 0 || text(current, "signer") != text(entry.manifest, "signer") {
-					continue
-				}
-			}
-			out.chosen[id] = entry
-			out.order = append(out.order, id)
-			out.details = append(out.details, "Install: "+text(entry.manifest, "title")+" "+version)
-			visiting[id] = true
-			deps, err := dependencies(entry.manifest)
-			if err != nil {
-				return err
-			}
-			for _, dep := range names(deps) {
-				if err = visit(dep, deps[dep], false); err != nil {
-					return err
-				}
-			}
-			delete(visiting, id)
-			return nil
-		}
-		return reject("No compatible module release: " + id)
-	}
-	if err = visit(out.target, "="+requested, true); err != nil {
-		return out, err
-	}
-	available := Registry{}
-	selected := map[string]any{}
-	for id, entry := range out.chosen {
-		available[id] = entry.manifest
-		selected[id] = entry.raw
-	}
-	order, err := resolve(out.target, available, out.installed)
+	var order []string
+	out.chosen, out.order, order, err = c.solveCatalog(ctx, index, out.installed, out.target, requested)
 	if err != nil {
 		return out, err
+	}
+	selected := map[string]any{}
+	out.details = []string{}
+	for _, id := range out.order {
+		entry := out.chosen[id]
+		selected[id] = entry.raw
+		out.details = append(out.details, "Install: "+text(entry.manifest, "title")+" "+text(entry.manifest, "version"))
 	}
 	for _, id := range order {
 		if err = requireIdle(ctx, out.installed[id], c.health, c.run); err != nil {
@@ -196,7 +131,9 @@ func (c catalogService) stageCatalogInstall(ctx context.Context, dir *os.File, p
 		if r != nil {
 			r.Stage("Downloading module: " + id)
 		}
-		raw, err := c.download(ctx, entry.url, entry.size)
+		raw, err := systemops.WithCancellation(ctx, r, func(ctx context.Context) ([]byte, error) {
+			return c.download(ctx, entry.url, entry.size, archiveDownload)
+		})
 		if err != nil {
 			return err
 		}
@@ -233,6 +170,7 @@ func (c catalogService) stageCatalogInstall(ctx context.Context, dir *os.File, p
 func (c catalogService) install(ctx context.Context, dir *os.File, plan catalogInstallPlan, r *systemops.Reporter, authorize func() error) (result json.RawMessage, err error) {
 	lc := c.lifecycle
 	lc.uploads = filepath.Join(c.root, catalogStage)
+	lc.catalogCommitWarnings = true
 	delegated := false
 	defer func() {
 		if err != nil && !delegated {
@@ -241,8 +179,15 @@ func (c catalogService) install(ctx context.Context, dir *os.File, plan catalogI
 		cancellable(r, false)
 	}()
 	defer func() {
-		if cleanupErr := c.cleanCatalogStage(); err == nil && cleanupErr != nil {
-			err = cleanupErr
+		if cleanupErr := c.cleanCatalogStage(); cleanupErr != nil {
+			const warning = "Catalog staging cleanup is incomplete."
+			if err == nil {
+				// The delegated lifecycle has already committed; never replace
+				// its successful result with a staging cleanup error.
+				result = catalogWarning(result, warning)
+			} else if r != nil {
+				r.Stage(warning)
+			}
 		}
 	}()
 	if err = lc.refreshCore(); err != nil {
@@ -263,4 +208,18 @@ func (c catalogService) install(ctx context.Context, dir *os.File, plan catalogI
 	}
 	delegated = true
 	return lc.execute(ctx, "module.install", params, stageOwner, native.fingerprint, r, authorize)
+}
+
+// catalogWarning augments a successful lifecycle result without changing its
+// message or discarding any warning already reported by the lifecycle.
+func catalogWarning(raw json.RawMessage, warning string) json.RawMessage {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil || body == nil {
+		return raw
+	}
+	var warnings []string
+	_ = json.Unmarshal(body["warnings"], &warnings)
+	body["warnings"], _ = json.Marshal(append(warnings, warning))
+	result, _ := json.Marshal(body)
+	return result
 }

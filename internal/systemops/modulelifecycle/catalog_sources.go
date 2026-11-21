@@ -1,7 +1,6 @@
 package modulelifecycle
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -22,6 +21,7 @@ import (
 const officialURL = "https://panasms.github.io/module-registry/"
 const officialID = "panasms-official"
 const sourceIntent = ".source-change.json"
+const maxSourceState = 256 << 10
 
 func officialSource() map[string]any {
 	return map[string]any{"id": officialID, "url": officialURL, "official": true, "signers": []any{"panasms-local", "panasms-ci"}}
@@ -49,7 +49,7 @@ func (c catalogService) sources() ([]map[string]any, error) {
 		return nil, err
 	}
 	defer dir.Close()
-	raw, err := readOwnedAt(dir, filepath.Base(c.config), c.owner, 256<<10)
+	raw, err := readOwnedAt(dir, filepath.Base(c.config), c.owner, maxSourceState)
 	if errors.Is(err, unix.ENOENT) {
 		return []map[string]any{officialSource()}, nil
 	}
@@ -119,7 +119,7 @@ func (c catalogService) discover(ctx context.Context, input string) (map[string]
 	if strings.HasPrefix(sig.Signer, "panasms-") {
 		return nil, nil, reject("Choose a unique repository publisher ID")
 	}
-	raw, err := c.download(ctx, base+"keys/"+sig.Signer+".pem", 8192)
+	raw, err := c.download(ctx, base+"keys/"+sig.Signer+".pem", 8192, metadataDownload)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -177,7 +177,8 @@ type sourceChange struct {
 	Before, After string
 	ID            string
 	Add           bool
-	Keys          map[string][]byte
+	Keys          map[string][]byte `json:",omitempty"` // Added keys; also supports legacy removal journals.
+	Retired       map[string]string `json:",omitempty"` // SHA-256 of the exact key file bytes.
 }
 
 type sourcePlan struct {
@@ -188,6 +189,10 @@ type sourcePlan struct {
 
 func sourceState(src []map[string]any) string {
 	raw, _ := json.Marshal(src)
+	return sourceDigest(raw)
+}
+
+func sourceDigest(raw []byte) string {
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:])
 }
@@ -201,7 +206,7 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 	after := append([]map[string]any{}, before...)
 	var selected map[string]any
 	details := []string{}
-	change := sourceChange{Before: sourceState(before), Add: action == "module.source-add", Keys: map[string][]byte{}}
+	change := sourceChange{Before: sourceState(before), Add: action == "module.source-add", Keys: map[string][]byte{}, Retired: map[string]string{}}
 	if change.Add {
 		var raw []byte
 		selected, raw, err = c.discover(ctx, text(p, "url"))
@@ -255,7 +260,7 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 				return out, err
 			}
 			if raw != nil {
-				change.Keys[signer] = raw
+				change.Retired[signer] = sourceDigest(raw)
 			}
 		}
 	}
@@ -292,15 +297,15 @@ func (s store) checkSourceTrust() error {
 
 // Config replacement is the commit point. On restart, discard an uncommitted
 // added key or finish retiring a removed key. Never touch installed receipts.
-func (c catalogService) repairSources(dir *os.File) error {
-	raw, err := readOwnedAt(dir, sourceIntent, c.owner, 256<<10)
+func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *systemops.Reporter) error {
+	raw, err := readOwnedAt(dir, sourceIntent, c.owner, maxSourceState)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	lock, err := c.store.lock(context.Background(), nil)
+	lock, err := c.store.lock(ctx, r)
 	if err != nil {
 		return err
 	}
@@ -310,7 +315,8 @@ func (c catalogService) repairSources(dir *os.File) error {
 
 func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 	var change sourceChange
-	if systemops.Decode(raw, &change) != nil || identifier(change.ID) != nil || change.Before == change.After {
+	if systemops.Decode(raw, &change) != nil || identifier(change.ID) != nil || change.Before == change.After ||
+		len(change.Retired) > 0 && (change.Add || len(change.Keys) > 0) {
 		return reject("Invalid module repository journal")
 	}
 	sources, err := c.sources()
@@ -323,8 +329,20 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 	}
 	committed := state == change.After
 	if change.Add != committed {
-		for signer, expected := range change.Keys {
-			if strings.HasPrefix(signer, "panasms-") || !change.Add && slices.ContainsFunc(sourceSpecs(sources), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+		retired := change.Retired
+		if retired == nil {
+			retired = map[string]string{}
+		}
+		for signer, key := range change.Keys {
+			retired[signer] = sourceDigest(key)
+		}
+		configured := sourceSpecs(sources)
+		for _, signer := range names(retired) {
+			expected := retired[signer]
+			if !archiveDigest.MatchString(expected) || !signerPattern.MatchString(signer) {
+				return reject("Invalid module repository journal")
+			}
+			if strings.HasPrefix(signer, "panasms-") || !change.Add && slices.ContainsFunc(configured, func(s source) bool { return slices.Contains(s.Signers, signer) }) {
 				return reject("Cannot retire a configured publisher")
 			}
 			current, err := c.keyBytes(signer)
@@ -334,7 +352,7 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 			if current == nil {
 				continue
 			}
-			if !bytes.Equal(expected, current) {
+			if expected != sourceDigest(current) {
 				return reject("Module repository key changed during recovery")
 			}
 			keys, err := trustedDirectory(c.keys, c.owner)
@@ -356,14 +374,22 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 	return unlinkCatalogFile(dir, sourceIntent)
 }
 
-func (c catalogService) applySource(dir *os.File, plan sourcePlan) error {
+// applySource distinguishes a pre-commit failure from post-commit cleanup.
+func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
 	raw, err := json.Marshal(change)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	next, err := json.Marshal(plan.after)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxSourceState || len(next) > maxSourceState {
+		return nil, systemops.BeforeMutation(reject("Module repository state is too large"))
 	}
 	if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
-		return err
+		return nil, err
 	}
 	boundary := func(stage string) error {
 		if c.sourceBoundary != nil {
@@ -373,50 +399,46 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) error {
 	}
 	if change.Add {
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
-			return err
+			return nil, err
 		}
 		if len(change.Keys) > 0 {
 			if err = os.Mkdir(c.keys, 0755); err != nil && !os.IsExist(err) {
-				return err
+				return nil, err
 			}
 			parent, err := trustedDirectory(filepath.Dir(c.keys), c.owner)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			err = parent.Sync()
 			parent.Close()
 			if err != nil {
-				return err
+				return nil, err
 			}
 			keys, err := trustedDirectory(c.keys, c.owner)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			defer keys.Close()
 			for signer, key := range change.Keys {
 				if err = atomicAt(keys, signer+".pem", key, 0644, c.owner); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 		if err = boundary("key-written"); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer config.Close()
-	next, err := json.Marshal(plan.after)
-	if err != nil {
-		return err
-	}
 	if err = atomicAt(config, filepath.Base(c.config), next, 0600, c.owner); err != nil {
-		return err
+		return nil, err
 	}
 	if err = boundary("config-written"); err != nil {
-		return err
+		return err, nil
 	}
-	return c.finishSourceChange(dir, raw)
+	return c.finishSourceChange(dir, raw), nil
 }

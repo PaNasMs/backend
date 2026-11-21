@@ -12,11 +12,16 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
+	"net/http"
 	"os"
-	"panasms.local/backend/internal/systemops"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"panasms.local/backend/internal/systemops"
 )
 
 func catalogFixture(t *testing.T) (catalogService, func(string, bool)) {
@@ -40,7 +45,7 @@ func catalogFixture(t *testing.T) (catalogService, func(string, bool)) {
 	write(filepath.Join(s.keys, "fixture.pem"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 	write(c.config, []byte(`[{"id":"fixture","url":"https://example.org/","signers":["fixture"],"official":false}]`))
 	served := map[string][]byte{"https://example.org/keys/fixture.pem": pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})}
-	c.download = func(_ context.Context, u string, _ int64) ([]byte, error) {
+	c.download = func(_ context.Context, u string, _ int64, _ downloadKind) ([]byte, error) {
 		raw, ok := served[u]
 		if !ok {
 			return nil, reject("Fixture unavailable")
@@ -160,7 +165,12 @@ func TestSourceInterruptionRecoversWithoutChangingInstalledModules(t *testing.T)
 				}
 				return nil
 			}
-			if _, err = c.executeCatalog(context.Background(), tc.action, params, fp, nil, func() error { return nil }); !errors.Is(err, stopped) {
+			outcome, err := c.executeCatalog(context.Background(), tc.action, params, fp, nil, func() error { return nil })
+			if tc.committed {
+				if err != nil || !strings.Contains(string(outcome), `"warnings"`) {
+					t.Fatal(string(outcome), err)
+				}
+			} else if !errors.Is(err, stopped) {
 				t.Fatal(err)
 			}
 			if _, err = c.prepare(context.Background(), "module.install", map[string]any{}, "alice"); err == nil || !strings.Contains(err.Error(), "interrupted module repository") {
@@ -242,7 +252,7 @@ func installCatalogFixture(t *testing.T, badSignature bool) (catalogService, map
 		t.Fatal(err)
 	}
 	served := map[string][]byte{"https://example.org/archive": raw}
-	c.download = func(_ context.Context, u string, _ int64) ([]byte, error) {
+	c.download = func(_ context.Context, u string, _ int64, _ downloadKind) ([]byte, error) {
 		data, ok := served[u]
 		if !ok {
 			return nil, reject("Unavailable fixture")
@@ -340,7 +350,7 @@ func TestInterruptedCatalogInstallRecoveryDoesNotReplay(t *testing.T) {
 	if _, err = lc.begin("module.install", native); err != nil {
 		t.Fatal(err)
 	}
-	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: func(context.Context, string, int64) ([]byte, error) {
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: func(context.Context, string, int64, downloadKind) ([]byte, error) {
 		t.Fatal("Recovery attempted to download")
 		return nil, nil
 	}}
@@ -452,7 +462,7 @@ func TestCatalogUsesConfiguredOrderNotNewestAcrossRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := c.download
-	raw, err := first(context.Background(), "https://example.org/catalog.json", maxCatalog)
+	raw, err := first(context.Background(), "https://example.org/catalog.json", maxCatalog, metadataDownload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,14 +472,14 @@ func TestCatalogUsesConfiguredOrderNotNewestAcrossRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.download = func(ctx context.Context, url string, limit int64) ([]byte, error) {
+	c.download = func(ctx context.Context, url string, limit int64, kind downloadKind) ([]byte, error) {
 		switch url {
 		case "https://example.net/catalog.json":
 			return second, nil
 		case "https://example.net/catalog.sig":
 			return envelope, nil
 		}
-		return first(ctx, url, limit)
+		return first(ctx, url, limit, kind)
 	}
 	result, err := c.query(context.Background(), "module-catalog")
 	if err != nil {
@@ -485,4 +495,255 @@ func TestCatalogUsesConfiguredOrderNotNewestAcrossRepositories(t *testing.T) {
 	if len(view.Available) != 1 || view.Available[0].Repository != "fixture" || view.Available[0].Version != "1.0.0" || len(view.Errors) != 1 || view.Errors[0]["repository"] != "other" || view.Errors[0]["error"] != "Duplicate module ID: example" {
 		t.Fatal(string(result))
 	}
+}
+
+func TestSourceSnapshotDoesNotWaitForCatalogDownload(t *testing.T) {
+	c, _ := catalogFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	started, finished := make(chan struct{}), make(chan error, 1)
+	c.download = func(ctx context.Context, _ string, _ int64, _ downloadKind) ([]byte, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	go func() {
+		_, err := c.query(ctx, "module-catalog")
+		finished <- err
+	}()
+	defer func() { cancel(); <-finished }()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("refresh never reached the download")
+	}
+	snapshotCtx, stop := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer stop()
+	raw, err := c.query(snapshotCtx, "module-sources")
+	if err != nil || !strings.Contains(string(raw), `"id":"fixture"`) {
+		t.Fatal(string(raw), err)
+	}
+}
+
+type catalogTransport func(*http.Request) (*http.Response, error)
+
+func (f catalogTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type stalledCatalogBody struct {
+	ctx     context.Context
+	started chan struct{}
+}
+
+func (b stalledCatalogBody) Read([]byte) (int, error) {
+	close(b.started)
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+func (stalledCatalogBody) Close() error { return nil }
+
+func TestCatalogCancellationInterruptsStalledMetadataAndSmallArchive(t *testing.T) {
+	for _, stalledURL := range []string{"https://example.org/catalog.json", "https://example.org/archive"} {
+		t.Run(stalledURL, func(t *testing.T) {
+			c, _, _ := installCatalogFixture(t, false)
+			p := map[string]any{"target": "example", "version": "1.0.0"}
+			fp := catalogPlanFingerprint(t, c, "module.catalog-install", p)
+			started := make(chan struct{})
+			observed := make(chan time.Duration, 1)
+			realDownload := downloadWithClient(&http.Client{Transport: catalogTransport(func(req *http.Request) (*http.Response, error) {
+				deadline, _ := req.Context().Deadline()
+				observed <- time.Until(deadline)
+				return &http.Response{StatusCode: 200, Body: stalledCatalogBody{req.Context(), started}}, nil
+			})})
+			fixture := c.download
+			c.download = func(ctx context.Context, url string, limit int64, kind downloadKind) ([]byte, error) {
+				if url == stalledURL {
+					return realDownload(ctx, url, limit, kind)
+				}
+				return fixture(ctx, url, limit, kind)
+			}
+			read, write, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer read.Close()
+			defer write.Close()
+			r := systemops.NewReporter(io.Discard, func(string) string { return strconv.FormatUint(uint64(read.Fd()), 10) })
+			defer r.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			finished := make(chan struct{})
+			var executeErr error
+			go func() {
+				defer close(finished)
+				_, executeErr = c.executeCatalog(ctx, "module.catalog-install", p, fp, r, func() error { return nil })
+			}()
+			defer func() { cancel(); <-finished }()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("body read never started")
+			}
+			if got := <-observed; stalledURL == "https://example.org/archive" && got < 50*time.Second || stalledURL != "https://example.org/archive" && (got <= 0 || got > 10*time.Second) {
+				t.Fatal("unexpected request budget", got)
+			}
+			if _, err = write.Write([]byte{1}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-finished:
+			case <-time.After(3 * time.Second):
+				t.Fatal("reporter did not interrupt the body read")
+			}
+			if !errors.Is(executeErr, systemops.ErrCancelled) || !systemops.Unchanged(executeErr) {
+				t.Fatal(executeErr)
+			}
+			assertCatalogStageClean(t, c)
+		})
+	}
+}
+
+func TestHostedCatalogInstallReportsStagingCleanupAfterCommit(t *testing.T) {
+	c, _, _ := installCatalogFixture(t, false)
+	p := map[string]any{"target": "example", "version": "1.0.0"}
+	fp := catalogPlanFingerprint(t, c, "module.catalog-install", p)
+	c.run = func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {
+		if strings.Join(argv, " ") == "systemctl daemon-reload" {
+			path := filepath.Join(c.root, catalogStage, stageArchive)
+			if err := os.Remove(path); err != nil {
+				return nil, err
+			}
+			if err := os.Mkdir(path, 0700); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	raw, err := c.executeCatalog(context.Background(), "module.catalog-install", p, fp, nil, func() error { return nil })
+	if err != nil || !strings.Contains(string(raw), `"warnings":["Catalog staging cleanup is incomplete."]`) {
+		t.Fatal(string(raw), err)
+	}
+	registry, err := c.registry()
+	if err != nil || text(registry["example"], "version") != "1.0.0" {
+		t.Fatal(registry, err)
+	}
+}
+
+func TestSourceJournalLegacyRemovalAndBoundedWrites(t *testing.T) {
+	c, _ := catalogFixture(t)
+	ctx := context.Background()
+	dir, err := c.catalogLock(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	plan, err := c.planSource(ctx, "module.source-remove", map[string]any{"target": "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := c.keyBytes("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.change.Retired["fixture"] != sourceDigest(key) || len(plan.change.Keys) != 0 {
+		t.Fatal("removal did not store only a digest")
+	}
+	legacy := plan.change
+	legacy.Retired = nil
+	legacy.Keys = map[string][]byte{"fixture": key}
+	oversize := plan
+	oversize.change = legacy
+	oversize.change.Keys = map[string][]byte{"fixture": make([]byte, maxSourceState)}
+	if _, err = c.applySource(dir, oversize); !systemops.Unchanged(err) {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(c.root, sourceIntent)); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	rows, err := c.sources()
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(c.config, []byte("[]"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.repairSources(ctx, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := c.keyBytes("fixture"); err != nil || raw != nil {
+		t.Fatal(raw, err)
+	}
+}
+
+func TestCatalogSolverBacktracksAcrossParentsAndKeepsPolicy(t *testing.T) {
+	c, _ := catalogFixture(t)
+	manifest := func(id, version, signer string, deps map[string]any) Manifest {
+		m := fixtureManifest(t)
+		m["id"], m["version"], m["signer"], m["dependencies"] = id, version, signer, deps
+		return m
+	}
+	entry := func(id, version, signer string, deps map[string]any) release {
+		if deps == nil {
+			deps = map[string]any{}
+		}
+		return release{manifest: manifest(id, version, signer, deps)}
+	}
+	idx := catalogIndex{modules: map[string][]release{
+		"example":  {entry("example", "1.0.0", "fixture", map[string]any{"parent-a": ">=1.0.0", "parent-b": ">=1.0.0"})},
+		"parent-a": {entry("parent-a", "1.0.0", "fixture", map[string]any{"shared": ">=1.0.0"})},
+		"parent-b": {entry("parent-b", "1.0.0", "fixture", map[string]any{"shared": ">=2.0.0,<3.0.0"})},
+		"shared":   {entry("shared", "3.0.0", "fixture", nil), entry("shared", "2.5.0", "different", nil), entry("shared", "2.1.0", "fixture", nil), entry("shared", "2.0.0", "fixture", nil), entry("shared", "0.9.0", "fixture", nil)},
+	}}
+	installed := Registry{"shared": manifest("shared", "1.0.0", "fixture", map[string]any{}), "existing": manifest("existing", "1.0.0", "fixture", map[string]any{"shared": "<=2.0.0"})}
+	verify := func(want string) {
+		t.Helper()
+		chosen, order, _, err := c.solveCatalog(context.Background(), idx, installed, "example", "1.0.0")
+		if err != nil || text(chosen["shared"].manifest, "version") != want {
+			t.Fatal(order, chosen, err)
+		}
+	}
+	verify("2.0.0") // Installed is too old, newest conflicts, foreign signer is refused, and 2.1 would break an existing dependent.
+	idx.modules["parent-b"][0].manifest["dependencies"] = map[string]any{"shared": ">=1.0.0"}
+	verify("") // Reuse the installed dependency where all parents permit it.
+	idx.modules["parent-b"][0].manifest["dependencies"] = map[string]any{"shared": "<1.0.0"}
+	idx.modules["parent-a"][0].manifest["dependencies"] = map[string]any{"shared": ">=0.9.0"}
+	if _, _, _, err := c.solveCatalog(context.Background(), idx, installed, "example", "1.0.0"); err == nil {
+		t.Fatal("downgrade accepted")
+	}
+	idx.modules["example"] = make([]release, catalogSearchBudget)
+	if _, _, _, err := c.solveCatalog(context.Background(), idx, installed, "example", "1.0.0"); err == nil || !strings.Contains(err.Error(), "search limit") {
+		t.Fatal(err)
+	}
+}
+
+func TestHostedCatalogInstallReportsNativeCleanupAfterCommit(t *testing.T) {
+	c, _, _ := installCatalogFixture(t, false)
+	p := map[string]any{"target": "example", "version": "1.0.0"}
+	fp := catalogPlanFingerprint(t, c, "module.catalog-install", p)
+	activated := false
+	c.run = func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {
+		if strings.Join(argv, " ") == "systemctl daemon-reload" {
+			activated = true
+		}
+		return nil, nil
+	}
+	c.mounts = func() ([]string, error) {
+		if activated {
+			return []string{filepath.Join(c.root, ".transaction")}, nil
+		}
+		return nil, nil
+	}
+	raw, err := c.executeCatalog(context.Background(), "module.catalog-install", p, fp, nil, func() error { return nil })
+	if err != nil || !strings.Contains(string(raw), committedRecovery) {
+		t.Fatal(string(raw), err)
+	}
+	state, err := c.loadTransaction()
+	if err != nil || state == nil || !state.Committed {
+		t.Fatal(state, err)
+	}
+	assertCatalogStageClean(t, c)
 }

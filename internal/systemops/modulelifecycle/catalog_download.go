@@ -70,7 +70,23 @@ func dialRepository(ctx context.Context, network, address string) (net.Conn, err
 	return nil, errors.New("no public repository address available")
 }
 
-func newCatalogDownload() func(context.Context, string, int64) ([]byte, error) {
+type downloadKind uint8
+
+const (
+	metadataDownload downloadKind = iota
+	archiveDownload
+)
+
+type catalogDownload func(context.Context, string, int64, downloadKind) ([]byte, error)
+
+func (kind downloadKind) timeout() time.Duration {
+	if kind == archiveDownload {
+		return 60 * time.Second
+	}
+	return 10 * time.Second
+}
+
+func newCatalogDownload() catalogDownload {
 	transport := &http.Transport{DialContext: dialRepository, TLSHandshakeTimeout: 5 * time.Second, IdleConnTimeout: 10 * time.Second}
 	client := &http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -79,34 +95,45 @@ func newCatalogDownload() func(context.Context, string, int64) ([]byte, error) {
 		_, err := repositoryURL(req.URL.String(), true)
 		return err
 	}}
-	return func(ctx context.Context, raw string, limit int64) ([]byte, error) {
+	return downloadWithClient(client)
+}
+
+func downloadWithClient(client *http.Client) catalogDownload {
+	return func(ctx context.Context, raw string, limit int64, kind downloadKind) ([]byte, error) {
 		u, err := repositoryURL(raw, false)
 		if err != nil {
 			return nil, err
 		}
-		timeout := 10 * time.Second
-		if limit > maxCatalog {
-			timeout = 60 * time.Second
-		}
-		ctx, cancel := context.WithTimeout(ctx, timeout)
+		requestCtx, cancel := context.WithTimeout(ctx, kind.timeout())
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, u.String(), nil)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "PaNasMs/0.2")
-		refused := reject("Module catalog download failed. Check the internet connection and try again.")
+		failure := func() error {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			if requestCtx.Err() == context.DeadlineExceeded {
+				if kind == archiveDownload {
+					return reject("Module archive download timed out")
+				}
+				return reject("Module repository metadata download timed out")
+			}
+			return reject("Module catalog download failed. Check the internet connection and try again.")
+		}
 		response, err := client.Do(req)
 		if err != nil {
-			return nil, refused
+			return nil, failure()
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return nil, refused
+			return nil, failure()
 		}
 		body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 		if err != nil {
-			return nil, refused
+			return nil, failure()
 		}
 		if int64(len(body)) > limit {
 			return nil, reject("Module download exceeds size limit")

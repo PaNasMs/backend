@@ -146,7 +146,7 @@ func (c catalogService) discover(ctx context.Context, input string) (map[string]
 		return nil, nil, err
 	}
 	if old != nil {
-		existing, err := discoveryKey(old)
+		existing, err := readPublicKey(c.keys, sig.Signer, c.owner)
 		if err != nil || publicFingerprint(existing) != digest {
 			return nil, nil, reject("This publisher ID already uses another public key")
 		}
@@ -312,6 +312,9 @@ func (s store) checkSourceTrust() error {
 // Config replacement is the commit point. On restart, discard an uncommitted
 // added key or finish retiring a removed key. Never touch installed receipts.
 func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *systemops.Reporter) error {
+	if err := c.recoverPublisherClaim(ctx, dir, r); err != nil {
+		return err
+	}
 	raw, err := readOwnedAt(dir, sourceIntent, c.owner, maxSourceState)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
@@ -438,7 +441,7 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 	if change.AddID != "" {
 		// An early I/O failure can leave no journal to recover. Keep new or
 		// already-held publishers inactive until their enrollment completes.
-		if err := c.holdFailedAdd(dir, change.AddSigner); err != nil {
+		if err := c.claimPublisher(dir, change); err != nil {
 			return nil, err
 		}
 		stage, err := c.prepareSourceAdd(config, change.AddID, next, func(pending sourceAddStage) error {

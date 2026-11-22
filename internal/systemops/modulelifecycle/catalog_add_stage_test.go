@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -126,5 +127,119 @@ func TestSourceAddDraftIdentityTakesPriorityOverReusedInode(t *testing.T) {
 	committed, err := stage.committed(config)
 	if err != nil || committed {
 		t.Fatalf("draft reported as committed after inode reuse: committed=%v err=%v", committed, err)
+	}
+}
+
+func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
+	const add = "module.source-add"
+	const stopped = 73
+	type operatorFiles struct {
+		Rows []map[string]any
+		PEM  []byte
+	}
+	if cut := os.Getenv("PANASMS_TEST_SOURCE_ADD_EXIT"); cut != "" {
+		root := os.Getenv("PANASMS_TEST_SOURCE_ROOT")
+		c := catalogService{
+			lifecycle: lifecycle{store: store{root: root, owner: uint32(os.Geteuid())}, keys: os.Getenv("PANASMS_TEST_SOURCE_KEYS")},
+			config:    filepath.Join(root, "sources.json"),
+		}
+		params := servePendingRepository(t, &c)
+		plan, err := c.planSource(t.Context(), add, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(operatorFiles{plan.after, plan.change.Keys["pending"]}); err != nil {
+			t.Fatal(err)
+		}
+		c.sourceBoundary = func(phase string) error {
+			if phase == cut {
+				os.Exit(stopped)
+			}
+			return nil
+		}
+		_, err = executePlannedSource(t, c, add, params)
+		t.Fatalf("helper did not exit at %s: %v", cut, err)
+	}
+
+	for _, cut := range []string{"key-written", "enrollment-reserved"} {
+		t.Run(cut, func(t *testing.T) {
+			c, serve := catalogFixture(t)
+			manifest := fixtureManifest(t)
+			manifest["signer"] = "fixture"
+			if err := c.saveRegistry(Registry{"example": manifest}); err != nil {
+				t.Fatal(err)
+			}
+			registry := filepath.Join(c.root, "registry.json")
+			receipts, err := os.ReadFile(registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			serve("1.0.0", true)
+			visibleCatalog(t, c, "1.0.0", false)
+			before, err := os.ReadFile(c.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSourceAddRecoveryAfterHelperExit$")
+			child.Env = append(os.Environ(), "PANASMS_TEST_SOURCE_ADD_EXIT="+cut,
+				"PANASMS_TEST_SOURCE_ROOT="+c.root, "PANASMS_TEST_SOURCE_KEYS="+c.keys)
+			var diagnostics bytes.Buffer
+			child.Stderr = &diagnostics
+			out, err := child.Output()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != stopped {
+				t.Fatalf("expected helper to exit at %s: %v\n%s%s", cut, err, out, diagnostics.Bytes())
+			}
+			if got, err := os.ReadFile(c.config); err != nil || !bytes.Equal(got, before) {
+				t.Fatalf("helper published config before %s: %v", cut, err)
+			}
+			if cut == "enrollment-reserved" {
+				if _, err := os.Readlink(filepath.Join(c.root, sourceAddClaim)); err != nil {
+					t.Fatalf("missing reservation when helper exited: %v", err)
+				}
+				if _, err := os.Lstat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("journal already present at reservation: %v", err)
+				}
+			}
+			var files operatorFiles
+			if err := json.Unmarshal(out, &files); err != nil || len(files.PEM) == 0 || len(files.Rows) != 2 {
+				t.Fatalf("missing intended repository files: %v", err)
+			}
+			// After the helper exits, an operator saves even the exact planned rows
+			// and independently supplies the matching publisher key.
+			edited, err := json.MarshalIndent(files.Rows, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(c.config+".operator", edited, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(c.config+".operator", c.config); err != nil {
+				t.Fatal(err)
+			}
+			key := filepath.Join(c.keys, "pending.pem")
+			if err := os.WriteFile(key, files.PEM, 0644); err != nil {
+				t.Fatal(err)
+			}
+			restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+			if _, err := restarted.recoverCatalog(t.Context(), add); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := restarted.activePublisherKey("pending"); err == nil {
+				t.Fatal("interrupted helper authorized the operator's key")
+			}
+			for _, name := range []string{sourceAddClaim, sourceIntent} {
+				if _, err := os.Lstat(filepath.Join(c.root, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("recovery retained %s: %v", name, err)
+				}
+			}
+			serve("2.0.0", true)
+			visibleCatalog(t, restarted, "2.0.0", true)
+			for path, want := range map[string][]byte{c.config: edited, key: files.PEM, registry: receipts} {
+				if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("recovery changed %s: %v", filepath.Base(path), err)
+				}
+			}
+		})
 	}
 }

@@ -554,6 +554,8 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 		{name: "committed", phase: "config-written"},
 		{name: "preparing", phase: "key-preparing"},
 		{name: "ready", phase: "key-ready"},
+		{name: "publication-uncertain", phase: "key-publishing"},
+		{name: "existing-key-withdrawn", phase: "key-exists", withdraw: true, supplyMatching: true},
 		{name: "renamed", phase: "key-published", withdraw: true},
 		{name: "confirmed", phase: "publisher-confirmed", withdraw: true},
 		{name: "existing-confirmed", phase: "publisher-confirmed", withdraw: true, supplyMatching: true},
@@ -612,7 +614,7 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 
 			restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
 			serve("6.0.0", true)
-			wantHeld := tc.withdraw
+			wantHeld := tc.withdraw || tc.phase == "key-publishing"
 			visibleCatalog(t, restarted, "6.0.0", wantHeld)
 			if held, err := restarted.publisherFenced("pending"); err != nil || held != wantHeld {
 				t.Fatalf("expected held=%v after recovery, got %v, %v", wantHeld, held, err)
@@ -665,4 +667,83 @@ func TestSourceAddReportsInactivePublisherAfterKeyConflict(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected completed cleanup after conflict, stat returned %v", err)
 	}
+}
+
+func TestCommittedSourceAddAcceptsMatchingLocalPEMHeaders(t *testing.T) {
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	c.sourceBoundary = func(stage string) error {
+		if stage == "config-written" {
+			return errors.New("interrupted after config replacement")
+		}
+		return nil
+	}
+	outcome, err := executePlannedSource(t, c, "module.source-add", params)
+	if err != nil || !bytes.Contains(outcome, []byte(`"warnings"`)) {
+		t.Fatalf("expected a committed add with pending recovery: %s, %v", outcome, err)
+	}
+	raw, err := c.download(context.Background(), "https://pending.example.org/keys/pending.pem", 8192, metadataDownload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(raw)
+	block.Headers = map[string]string{"Comment": "Local publisher key"}
+	local := pem.EncodeToMemory(block)
+	path := filepath.Join(c.keys, "pending.pem")
+	if err := os.WriteFile(path, local, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("7.0.0", true)
+	visibleCatalog(t, restarted, "7.0.0", false)
+	if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, local) {
+		t.Fatalf("recovery changed the local PEM representation: %v", err)
+	}
+	if key, err := restarted.activePublisherKey("pending"); err != nil || publicFingerprint(key) != params["keyFingerprint"] {
+		t.Fatalf("expected the matching local key to be active: %v", err)
+	}
+}
+
+func TestExplicitSourceRecoveryReportsOccupiedKeyStage(t *testing.T) {
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	path := filepath.Join(c.keys, sourceAddStageRoot)
+	contents := []byte("local notes")
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.sourceBoundary = func(stage string) error {
+		if stage == "config-written" {
+			return errors.New("interrupted after config replacement")
+		}
+		return nil
+	}
+	outcome, err := executePlannedSource(t, c, "module.source-add", params)
+	if err != nil || !bytes.Contains(outcome, []byte(`"warnings"`)) {
+		t.Fatalf("expected a committed add with pending recovery: %s, %v", outcome, err)
+	}
+
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	for i := 0; i < 2; i++ {
+		raw, err := restarted.recoverCatalog(context.Background(), "module.source-add")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(errSourceAddFenced.Error())) || !bytes.Contains(raw, []byte(`"publisher":"pending"`)) {
+			t.Fatalf("expected an actionable recovery report naming the inactive publisher: %s", raw)
+		}
+		if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected a retired journal, stat returned %v", err)
+		}
+	}
+	if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, contents) {
+		t.Fatalf("recovery changed the operator file: %v", err)
+	}
+	if key, err := restarted.activePublisherKey("pending"); key != nil || err == nil {
+		t.Fatal("publisher with a blocked key stage became active")
+	}
+	serve("8.0.0", true)
+	visibleCatalog(t, restarted, "8.0.0", true)
+	catalogPlanFingerprint(t, restarted, "module.source-remove", map[string]any{"target": "fixture"})
 }

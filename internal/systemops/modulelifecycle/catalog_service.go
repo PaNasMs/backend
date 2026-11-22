@@ -208,6 +208,22 @@ func (c catalogService) recoverCatalog(ctx context.Context, action string) (json
 			return nil, err
 		}
 		checks = []map[string]any{{"label": "Module repositories", "value": configured}}
+		var inactive []map[string]string
+		for _, src := range sourceSpecs(configured) {
+			for _, signer := range src.Signers {
+				held, err := c.publisherFenced(signer)
+				if err != nil {
+					return nil, err
+				}
+				if held {
+					inactive = append(inactive, map[string]string{"repository": src.ID, "publisher": signer})
+				}
+			}
+		}
+		if len(inactive) != 0 {
+			message = errSourceAddFenced.Error()
+			checks = append(checks, map[string]any{"label": "Inactive repository publishers", "value": inactive})
+		}
 	}
 	return json.Marshal(map[string]any{"message": message, "checks": checks, "route": "/modules", "recoveryAction": next})
 }

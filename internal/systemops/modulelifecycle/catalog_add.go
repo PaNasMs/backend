@@ -113,7 +113,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		if change.KeyStage == nil || len(change.Keys) != 1 {
 			return reject("Invalid module repository journal")
 		}
-	case "key-ready", "key-confirmed":
+	case "key-ready", "key-publishing", "key-confirmed":
 		if change.KeyStage == nil || len(change.Keys) != 0 || change.KeyStage.After.Inode == 0 {
 			return reject("Invalid module repository journal")
 		}
@@ -203,6 +203,9 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 			change.KeyStage = &s
 			return c.recordSourceAddDecision(dir, change, "key-preparing")
 		})
+		if errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+			return errSourceAddFenced
+		}
 		if err != nil {
 			return err
 		}
@@ -223,17 +226,33 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 		}
 	}
 	if change.AddDecision == "key-ready" {
+		// EEXIST leaves the private slot intact. A later missing live key can
+		// therefore mean withdrawal, even when the draft still exists.
+		if err := c.recordSourceAddDecision(dir, change, "key-publishing"); err != nil {
+			return err
+		}
+		if c.sourceBoundary != nil {
+			if err := c.sourceBoundary("key-publishing"); err != nil {
+				return err
+			}
+		}
 		err := change.KeyStage.publishKey(keys, name)
 		if err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, unix.ENOENT) {
 			return err
 		}
-		if err == nil && c.sourceBoundary != nil {
-			if err := c.sourceBoundary("key-published"); err != nil {
-				return err
+		if c.sourceBoundary != nil {
+			if err == nil {
+				if err := c.sourceBoundary("key-published"); err != nil {
+					return err
+				}
+			} else if errors.Is(err, unix.EEXIST) {
+				if err := c.sourceBoundary("key-exists"); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	live, err := readOwnedAt(keys, name, c.owner, 8192)
+	key, err := readPublicKey(c.keys, signer, c.owner)
 	if err != nil {
 		var rejected *systemops.Rejected
 		if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
@@ -241,16 +260,13 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 		}
 		return err
 	}
-	key, err := discoveryKey(live)
-	if err != nil || publicFingerprint(key) != fingerprint {
+	if publicFingerprint(key) != fingerprint {
 		return errSourceAddFenced
 	}
 	if err := keys.Sync(); err != nil {
 		return err
 	}
-	// EEXIST leaves the draft in its private slot. Stop publication retries
-	// before releasing a hold so a later withdrawal of the verified PEM sticks.
-	if change.AddDecision == "key-ready" {
+	if change.AddDecision == "key-publishing" {
 		return c.recordSourceAddDecision(dir, change, "key-confirmed")
 	}
 	return nil

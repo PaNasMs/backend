@@ -173,6 +173,10 @@ func (s lifecycle) publisherFenced(signer string) (bool, error) {
 		return false, err
 	}
 	defer dir.Close()
+	claimed, _, err := claimedPublisher(dir)
+	if err != nil || claimed == signer {
+		return claimed == signer, err
+	}
 	names, err := publisherHoldNames(dir, signer)
 	if err != nil {
 		return false, err

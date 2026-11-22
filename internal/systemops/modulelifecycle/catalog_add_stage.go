@@ -26,6 +26,7 @@ type sourceAddStage struct {
 	Directory     uint64
 	Before, After sourceAddFile
 	Owner         uint32
+	NamedVacant   bool `json:",omitempty"`
 	Writing       bool `json:",omitempty"`
 }
 
@@ -118,6 +119,20 @@ func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uin
 	fd, err := unix.Openat(dirFD, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, mode)
 	anonymous := err == nil
 	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EINVAL) {
+		// The helper is the sole writer in this private namespace. Record that
+		// this name was vacant before allocating even an empty fallback file.
+		var st unix.Stat_t
+		lookupErr := unix.Fstatat(dirFD, stage.ID, &st, unix.AT_SYMLINK_NOFOLLOW)
+		if lookupErr == nil {
+			return stage, unix.EEXIST
+		}
+		if !errors.Is(lookupErr, unix.ENOENT) {
+			return stage, lookupErr
+		}
+		stage.NamedVacant = true
+		if err := register(stage); err != nil {
+			return stage, err
+		}
 		fd, err = unix.Openat(dirFD, stage.ID, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
 	}
 	if err != nil {
@@ -272,7 +287,8 @@ func (s sourceAddStage) cleanup(config *os.File) error {
 		// A named draft can be interrupted during its first write on
 		// filesystems without O_TMPFILE. Its inode was journaled before writing.
 		ownedPartial := s.Writing && slot.Inode == s.After.Inode && slot.Mode == s.After.Mode && slot.Group == s.After.Group
-		if slot != s.Before && slot != s.After && !ownedPartial {
+		ownedEmpty := s.Writing && s.NamedVacant && s.After.Inode == 0 && slot.Digest == sourceDigest(nil)
+		if slot != s.Before && slot != s.After && !ownedPartial && !ownedEmpty {
 			return nil
 		}
 		if err = unlinkCatalogFile(dir, s.ID); err != nil {

@@ -371,15 +371,21 @@ stored in `/etc/panasms/module-sources.json`. The helper keeps its enrollment jo
 staging files until recovery finishes. Leave those files in place when editing or restoring the
 configuration and publisher keys. If a new publisher fails to enroll, recovery preserves later
 edits and keeps that publisher inactive. Other catalogs can still refresh.
+If an editor saves through a descriptor opened before the configuration was replaced,
+its edits stay in the displaced file under `/etc/panasms/.panasms-source-staging/<transaction-id>`.
+Inspect that file when reconciling changes.
 
-If the helper stops during the key publication attempt and the live key is missing, confirmation
-is required again. This preserves an administrator’s withdrawal of an independently installed key.
+Before upgrading from a version that wrote legacy source journals, finish outstanding repository
+changes. Those journals contain row and key digests but do not record which process wrote the
+files. If files were edited independently during an interrupted legacy change, preserve a backup
+and reconcile the public configuration and publisher keys before resuming it.
 
 To enroll the publisher again, remove its existing repository entry in Modules, then add it and
 confirm the fingerprint. If a locally installed key has a different fingerprint, preserve it
-outside the active key directory before enrolling the new key. If a separate operator file
-occupies the publisher's hold path, move that file aside. Stop the repository manager and module
-operations before making manual repairs.
+outside the active key directory before enrolling the new key. If recovery reports a conflict at
+the key staging path, stop repository and module operations, move the conflicting entry to a
+backup location, then retry enrollment. Preserve any operator file occupying a publisher hold
+path the same way.
 
 A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
 `catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a

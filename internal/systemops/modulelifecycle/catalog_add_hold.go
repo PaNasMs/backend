@@ -6,13 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"regexp"
 	"strings"
 
 	"golang.org/x/sys/unix"
 )
-
-var holdNonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func holdPrefix(signer string) string {
 	return ".source-add-hold-" + signer + "."
@@ -98,6 +95,10 @@ func publisherHoldNames(dir *os.File, signer string) ([]string, error) {
 	if !signerPattern.MatchString(signer) {
 		return nil, reject("Invalid module repository publisher")
 	}
+	return sourceRecordNames(dir, holdPrefix(signer))
+}
+
+func sourceRecordNames(dir *os.File, prefix string) ([]string, error) {
 	// A fresh descriptor starts enumeration at offset zero on every retry.
 	fd, err := unix.Openat(int(dir.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -110,9 +111,8 @@ func publisherHoldNames(dir *os.File, signer string) ([]string, error) {
 		return nil, err
 	}
 	var matches []string
-	prefix := holdPrefix(signer)
 	for _, name := range names {
-		if suffix, ok := strings.CutPrefix(name, prefix); ok && holdNonce.MatchString(suffix) {
+		if suffix, ok := strings.CutPrefix(name, prefix); ok && sourceAddID.MatchString(suffix) {
 			matches = append(matches, name)
 		}
 	}
@@ -140,7 +140,7 @@ func (c catalogService) holdFailedAdd(dir *os.File, signer string) error {
 		}
 		name := holdPrefix(signer) + hex.EncodeToString(nonce[:])
 		raw := []byte(failedAddRecord(name, publisherHeld))
-		err := atomicWriteAt(dir, name, raw, 0600, c.owner, uint32(os.Getegid()), true)
+		err := c.writeSourceAddRecord(dir, name, raw, true)
 		if !errors.Is(err, unix.EEXIST) {
 			return err
 		}
@@ -173,9 +173,14 @@ func (s lifecycle) publisherFenced(signer string) (bool, error) {
 		return false, err
 	}
 	defer dir.Close()
-	claimed, _, err := claimedPublisher(dir)
-	if err != nil || claimed == signer {
-		return claimed == signer, err
+	claims, err := publisherClaims(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, claimed := range claims {
+		if claimed == signer {
+			return true, nil
+		}
 	}
 	names, err := publisherHoldNames(dir, signer)
 	if err != nil {

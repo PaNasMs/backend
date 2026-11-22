@@ -3,7 +3,6 @@ package modulelifecycle
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -189,9 +188,10 @@ type sourceChange struct {
 }
 
 type sourcePlan struct {
-	change sourceChange
-	after  []map[string]any
-	public map[string]any
+	heldRemoval bool
+	change      sourceChange
+	after       []map[string]any
+	public      map[string]any
 }
 
 func sourceState(src []map[string]any) string {
@@ -259,7 +259,7 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 		}
 		details = []string{text(selected, "url"), "Installed modules are retained"}
 		for _, signer := range sourceSpecs([]map[string]any{selected})[0].Signers {
-			if strings.HasPrefix(signer, "panasms-") || slices.ContainsFunc(sourceSpecs(after), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+			if strings.HasPrefix(signer, "panasms-") {
 				continue
 			}
 			held, err := c.publisherFenced(signer)
@@ -267,6 +267,10 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 				return out, err
 			}
 			if held {
+				out.heldRemoval = true
+				continue
+			}
+			if slices.ContainsFunc(sourceSpecs(after), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
 				continue
 			}
 			raw, err := c.keyBytes(signer)
@@ -287,7 +291,7 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 	if err != nil {
 		return out, err
 	}
-	return sourcePlan{change, after, map[string]any{"target": change.ID, "confirmation": change.ID, "details": details, "publisherFingerprint": selected["fingerprint"], "fingerprint": fp}}, nil
+	return sourcePlan{heldRemoval: out.heldRemoval, change: change, after: after, public: map[string]any{"target": change.ID, "confirmation": change.ID, "details": details, "publisherFingerprint": selected["fingerprint"], "fingerprint": fp}}, nil
 }
 
 // Direct archive installs also use the key directory. Refuse to trust a
@@ -312,6 +316,9 @@ func (s store) checkSourceTrust() error {
 // Config replacement is the commit point. On restart, discard an uncommitted
 // added key or finish retiring a removed key. Never touch installed receipts.
 func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *systemops.Reporter) error {
+	if err := c.recoverSourceAddWrites(ctx, dir, r); err != nil {
+		return err
+	}
 	if err := c.recoverPublisherClaim(ctx, dir, r); err != nil {
 		return err
 	}
@@ -404,7 +411,9 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 // applySource distinguishes a pre-commit failure from post-commit cleanup.
 func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
-	journal := true
+	// Removing an inactive row has no publisher key to retire. Invalidate
+	// its cache before replacing the config so later edits need no replay.
+	journal := !plan.heldRemoval || len(change.Retired) != 0
 	if change.Add {
 		row := plan.after[len(plan.after)-1]
 		src := sourceSpecs([]map[string]any{row})[0]
@@ -417,11 +426,6 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 			}
 		}
 		if journal {
-			var nonce [16]byte
-			if _, err := rand.Read(nonce[:]); err != nil {
-				return nil, err
-			}
-			change.AddID = hex.EncodeToString(nonce[:])
 			change.AddedRow = sourceTrustState(src)
 			change.AddSigner = src.Signers[0]
 		}
@@ -438,10 +442,10 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		return nil, err
 	}
 	defer config.Close()
-	if change.AddID != "" {
+	if change.AddSigner != "" {
 		// An early I/O failure can leave no journal to recover. Keep new or
 		// already-held publishers inactive until their enrollment completes.
-		if err := c.claimPublisher(dir, change); err != nil {
+		if err := c.claimPublisher(dir, &change); err != nil {
 			return nil, err
 		}
 		stage, err := c.prepareSourceAdd(config, change.AddID, next, func(pending sourceAddStage) error {
@@ -468,7 +472,12 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		return nil, err
 	}
 	if journal {
-		if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
+		if change.AddID != "" {
+			err = c.writeSourceAddRecord(dir, sourceIntent, raw, false)
+		} else {
+			err = atomicAt(dir, sourceIntent, raw, 0600, c.owner)
+		}
+		if err != nil {
 			// Sync may have failed after rename. Preserve the private stage if
 			// the journal can be observed and recovered on a subsequent run.
 			if change.Stage != nil {
@@ -486,10 +495,12 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		}
 		return nil
 	}
-	if change.Add {
+	if change.Add || !journal {
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
 			return nil, err
 		}
+	}
+	if change.Add {
 		if err = boundary("key-written"); err != nil {
 			return nil, err
 		}

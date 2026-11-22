@@ -26,6 +26,7 @@ type sourceAddStage struct {
 	Directory     uint64
 	Before, After sourceAddFile
 	Owner         uint32
+	SeenVacant    bool `json:",omitempty"`
 	NamedVacant   bool `json:",omitempty"`
 	Writing       bool `json:",omitempty"`
 }
@@ -81,7 +82,7 @@ func (c catalogService) prepareSourceAdd(config *os.File, id string, next []byte
 	if systemops.Decode(next, &after) != nil || len(after) == 0 || sourceState(rows) != sourceState(after[:len(after)-1]) {
 		return stage, reject("Module repository configuration changed before staging")
 	}
-	stage, err = stage.writeDraft(config, next, 0600, register)
+	stage, err = stage.writeDraftWithBoundary(config, next, 0600, register, c.draftBoundary)
 	if err == nil && c.sourceBoundary != nil {
 		err = c.sourceBoundary("draft-linked")
 	}
@@ -89,6 +90,10 @@ func (c catalogService) prepareSourceAdd(config *os.File, id string, next []byte
 }
 
 func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uint32, register func(sourceAddStage) error) (sourceAddStage, error) {
+	return stage.writeDraftWithBoundary(parentDir, next, mode, register, nil)
+}
+
+func (stage sourceAddStage) writeDraftWithBoundary(parentDir *os.File, next []byte, mode uint32, register func(sourceAddStage) error, boundary func(string, *os.File, []byte) error) (sourceAddStage, error) {
 	if !sourceAddID.MatchString(stage.ID) {
 		return stage, reject("Invalid source add stage")
 	}
@@ -116,7 +121,13 @@ func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uin
 		return stage, err
 	}
 	dirFD := int(dir.Fd())
-	fd, err := unix.Openat(dirFD, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, mode)
+	var fd int
+	if boundary != nil {
+		err = boundary("open-anonymous", nil, nil)
+	}
+	if err == nil {
+		fd, err = unix.Openat(dirFD, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, mode)
+	}
 	anonymous := err == nil
 	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EINVAL) {
 		// The helper is the sole writer in this private namespace. Record that
@@ -140,6 +151,11 @@ func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uin
 	}
 	file := os.NewFile(uintptr(fd), stage.ID)
 	defer file.Close()
+	if !anonymous && boundary != nil {
+		if err := boundary("named-draft-allocated", file, nil); err != nil {
+			return stage, err
+		}
+	}
 	var created unix.Stat_t
 	if err := file.Chmod(os.FileMode(mode)); err != nil {
 		return stage, err
@@ -153,6 +169,11 @@ func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uin
 	stage.After = sourceAddFile{created.Ino, created.Mode, created.Gid, sourceDigest(next)}
 	if err := register(stage); err != nil {
 		return stage, err
+	}
+	if !anonymous && boundary != nil {
+		if err := boundary("named-draft-writing", file, next); err != nil {
+			return stage, err
+		}
 	}
 	if _, err := file.Write(next); err != nil {
 		return stage, err
@@ -252,17 +273,20 @@ func (s sourceAddStage) committed(config *os.File) (bool, error) {
 	if err := errors.Join(dir.Sync(), config.Sync()); err != nil {
 		return false, err
 	}
-	slot, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
-	if err != nil {
+	var slot unix.Stat_t
+	err = unix.Fstatat(int(dir.Fd()), s.ID, &slot, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil && !errors.Is(err, unix.ENOENT) {
 		return false, err
 	}
-	if s.After.Inode == 0 || slot == s.After {
+	if s.After.Inode == 0 || s.Before.Inode == s.After.Inode {
 		return false, nil
 	}
 	if s.Before.Inode == 0 {
-		return slot.Inode == 0, nil
+		return errors.Is(err, unix.ENOENT), nil
 	}
-	return s.Before.Inode != s.After.Inode && slot == s.Before, nil
+	// An editor can retain a descriptor to the displaced config across the
+	// exchange. Its inode proves the rename even after a later edit or chmod.
+	return err == nil && slot.Ino == s.Before.Inode, nil
 }
 
 func (s sourceAddStage) cleanup(config *os.File) error {

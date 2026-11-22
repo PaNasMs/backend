@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestSourceAddUnderSetgidConfigParent(t *testing.T) {
@@ -151,6 +153,22 @@ func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
 		if err := json.NewEncoder(os.Stdout).Encode(operatorFiles{plan.after, plan.change.Keys["pending"]}); err != nil {
 			t.Fatal(err)
 		}
+		if cut == "named-draft-allocated" || cut == "named-draft-writing" {
+			c.draftBoundary = func(phase string, file *os.File, next []byte) error {
+				if phase == "open-anonymous" {
+					return unix.EOPNOTSUPP
+				}
+				if phase == cut {
+					if phase == "named-draft-writing" {
+						if _, err := file.Write(next[:len(next)/2]); err != nil {
+							return err
+						}
+					}
+					os.Exit(stopped)
+				}
+				return nil
+			}
+		}
 		c.sourceBoundary = func(phase string) error {
 			if phase == cut {
 				os.Exit(stopped)
@@ -161,7 +179,7 @@ func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
 		t.Fatalf("helper did not exit at %s: %v", cut, err)
 	}
 
-	for _, cut := range []string{"key-written", "enrollment-reserved"} {
+	for _, cut := range []string{"key-written", "enrollment-reserved", "named-draft-allocated", "named-draft-writing", "hold-scratch-created", "journal-scratch-created"} {
 		t.Run(cut, func(t *testing.T) {
 			c, serve := catalogFixture(t)
 			manifest := fixtureManifest(t)
@@ -180,6 +198,22 @@ func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var foreign string
+			if cut == "named-draft-allocated" || cut == "named-draft-writing" {
+				private := filepath.Join(filepath.Dir(c.config), sourceAddStageRoot)
+				if err := os.Mkdir(private, 0700); err != nil {
+					t.Fatal(err)
+				}
+				foreign = filepath.Join(private, "saved-notes")
+				if err := os.WriteFile(foreign, []byte("operator notes"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			genericScratch := filepath.Join(c.root, ".write-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			foreignBytes := []byte("existing operator file")
+			if err := os.WriteFile(genericScratch, foreignBytes, 0600); err != nil {
+				t.Fatal(err)
+			}
 			child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSourceAddRecoveryAfterHelperExit$")
 			child.Env = append(os.Environ(), "PANASMS_TEST_SOURCE_ADD_EXIT="+cut,
 				"PANASMS_TEST_SOURCE_ROOT="+c.root, "PANASMS_TEST_SOURCE_KEYS="+c.keys)
@@ -193,12 +227,49 @@ func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
 			if got, err := os.ReadFile(c.config); err != nil || !bytes.Equal(got, before) {
 				t.Fatalf("helper published config before %s: %v", cut, err)
 			}
+			claims, err := filepath.Glob(filepath.Join(c.root, claimPrefix+"*"))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if cut == "enrollment-reserved" {
-				if _, err := os.Readlink(filepath.Join(c.root, sourceAddClaim)); err != nil {
-					t.Fatalf("missing reservation when helper exited: %v", err)
+				if len(claims) != 1 {
+					t.Fatalf("expected one reservation when helper exited, got %v", claims)
 				}
 				if _, err := os.Lstat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("journal already present at reservation: %v", err)
+				}
+			}
+			var draft string
+			if foreign != "" {
+				raw, err := os.ReadFile(filepath.Join(c.root, sourceIntent))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var change sourceChange
+				if err := json.Unmarshal(raw, &change); err != nil || change.Stage == nil || !change.Stage.NamedVacant || !change.Stage.Writing {
+					t.Fatalf("expected registered named draft at %s: %v", cut, err)
+				}
+				draft = filepath.Join(filepath.Dir(foreign), change.Stage.ID)
+				content, err := os.ReadFile(draft)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch cut {
+				case "named-draft-allocated":
+					if len(content) != 0 || change.Stage.After.Inode != 0 {
+						t.Fatal("expected an empty draft before inode registration")
+					}
+				case "named-draft-writing":
+					var st unix.Stat_t
+					if err := unix.Lstat(draft, &st); err != nil || st.Ino != change.Stage.After.Inode || len(content) == 0 || sourceDigest(content) == change.Stage.After.Digest {
+						t.Fatalf("expected a partial write to the registered inode: %v", err)
+					}
+				}
+			}
+			if cut == "journal-scratch-created" || cut == "hold-scratch-created" {
+				scratch, err := filepath.Glob(filepath.Join(c.root, writeClaimPrefix+"*.data"))
+				if err != nil || len(scratch) != 1 {
+					t.Fatalf("expected a reserved write interrupted before rename: %v %v", scratch, err)
 				}
 			}
 			var files operatorFiles
@@ -228,18 +299,133 @@ func TestSourceAddRecoveryAfterHelperExit(t *testing.T) {
 			if _, err := restarted.activePublisherKey("pending"); err == nil {
 				t.Fatal("interrupted helper authorized the operator's key")
 			}
-			for _, name := range []string{sourceAddClaim, sourceIntent} {
-				if _, err := os.Lstat(filepath.Join(c.root, name)); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("recovery retained %s: %v", name, err)
+			for _, path := range append(claims, filepath.Join(c.root, sourceIntent)) {
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("recovery retained %s: %v", filepath.Base(path), err)
+				}
+			}
+			if draft != "" {
+				if _, err := os.Lstat(draft); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("rollback left its named draft: %v", err)
+				}
+				if got, err := os.ReadFile(foreign); err != nil || string(got) != "operator notes" {
+					t.Fatalf("rollback changed a separate private-directory entry: %v", err)
 				}
 			}
 			serve("2.0.0", true)
 			visibleCatalog(t, restarted, "2.0.0", true)
-			for path, want := range map[string][]byte{c.config: edited, key: files.PEM, registry: receipts} {
+			left, err := filepath.Glob(filepath.Join(c.root, writeClaimPrefix+"*"))
+			if err != nil || len(left) != 0 {
+				t.Fatalf("recovery left reserved scratch files: %v %v", left, err)
+			}
+			for path, want := range map[string][]byte{c.config: edited, key: files.PEM, registry: receipts, genericScratch: foreignBytes} {
 				if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
 					t.Fatalf("recovery changed %s: %v", filepath.Base(path), err)
 				}
 			}
 		})
 	}
+}
+
+func TestSourceAddRecoveryPreservesEditsThroughDisplacedDescriptor(t *testing.T) {
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	file, err := os.OpenFile(c.config, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	c.sourceBoundary = stopAfterConfigReplace
+	result, err := executePlannedSource(t, c, "module.source-add", params)
+	if err != nil || !bytes.Contains(result, []byte(`"warnings"`)) {
+		t.Fatalf("expected pending config cleanup: %s, %v", result, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(c.root, sourceIntent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var change sourceChange
+	if err := json.Unmarshal(raw, &change); err != nil {
+		t.Fatal(err)
+	}
+	edited := []byte("operator's saved contents\n")
+	if err := file.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt(edited, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Chmod(0660); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("2.0.0", true)
+	visibleCatalog(t, restarted, "2.0.0", false)
+	if key, err := restarted.activePublisherKey("pending"); err != nil || publicFingerprint(key) != params["keyFingerprint"] {
+		t.Fatalf("confirmed publisher lost after editing displaced config: %v", err)
+	}
+	slot := filepath.Join(filepath.Dir(c.config), sourceAddStageRoot, change.AddID)
+	if got, err := os.ReadFile(slot); err != nil || !bytes.Equal(got, edited) {
+		t.Fatalf("saved changes missing at %s: %v", slot, err)
+	}
+}
+
+func TestRemovingHeldSourcePreservesSubsequentConfigEdits(t *testing.T) {
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	key := filepath.Join(c.keys, "pending.pem")
+	foreign, err := c.keyBytes("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sourceBoundary = func(stage string) error {
+		if stage == "config-written" {
+			return os.WriteFile(key, foreign, 0600)
+		}
+		return nil
+	}
+	if _, err := executePlannedSource(t, c, "module.source-add", params); err != nil {
+		t.Fatal(err)
+	}
+	c.sourceBoundary = stopAfterConfigReplace
+	result, err := executePlannedSource(t, c, "module.source-remove", map[string]any{"target": "pending"})
+	if err != nil || !bytes.Contains(result, []byte(`"warnings"`)) {
+		t.Fatalf("expected interruption after removal committed: %s, %v", result, err)
+	}
+	rows, err := c.sources()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("expected only original source after removal: %v, %v", rows, err)
+	}
+	rows[0]["label"] = "Updated fixture"
+	edited, err := json.MarshalIndent(rows, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.config, edited, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("4.0.0", true)
+	visibleCatalog(t, restarted, "4.0.0", false)
+	if _, err := os.Lstat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source removal retained a journal: %v", err)
+	}
+	if _, err := restarted.activePublisherKey("pending"); err == nil {
+		t.Fatal("removing inactive source activated its publisher")
+	}
+	for path, want := range map[string][]byte{c.config: edited, key: foreign} {
+		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("changed operator file %s: %v", path, err)
+		}
+	}
+}
+
+func stopAfterConfigReplace(stage string) error {
+	if stage == "config-written" {
+		return errors.New("interrupted after config replacement")
+	}
+	return nil
 }

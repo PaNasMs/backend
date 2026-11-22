@@ -129,6 +129,15 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 }
 
 func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32, createOnly bool) error {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	temporary := ".write-" + hex.EncodeToString(nonce[:])
+	return atomicWriteNamedAt(directory, name, raw, mode, owner, group, createOnly, temporary, nil)
+}
+
+func atomicWriteNamedAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32, createOnly bool, temporary string, beforeWrite func(uint64) error) error {
 	if filepath.Base(name) != name || name == "." || name == ".." {
 		return reject("Invalid module state path")
 	}
@@ -144,11 +153,6 @@ func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, own
 	if err == nil && (previous.Mode&unix.S_IFMT != unix.S_IFREG || previous.Uid != owner || previous.Nlink != 1 || previous.Mode&0022 != 0) {
 		return reject("Module state permissions are unsafe")
 	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
-	}
-	temporary := ".write-" + hex.EncodeToString(nonce[:])
 	fd, err := unix.Openat(int(directory.Fd()), temporary, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
 	if err != nil {
 		return err
@@ -167,6 +171,11 @@ func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, own
 	}
 	if err = file.Chmod(os.FileMode(mode)); err != nil {
 		return err
+	}
+	if beforeWrite != nil {
+		if err := beforeWrite(created.Ino); err != nil {
+			return err
+		}
 	}
 	if _, err = file.Write(raw); err != nil {
 		return err

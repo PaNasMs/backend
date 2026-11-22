@@ -28,6 +28,7 @@ type catalogService struct {
 	config         string
 	download       catalogDownload
 	sourceBoundary func(string) error
+	draftBoundary  func(string, *os.File, []byte) error
 }
 
 type source struct {

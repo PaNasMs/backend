@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 
 	"panasms.local/backend/internal/systemops"
 )
@@ -158,7 +159,7 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 	}
 	body := map[string]any{"message": message}
 	if errors.Is(cleanupErr, errSourceAddFenced) {
-		body["warnings"] = []string{errSourceAddFenced.Error()}
+		body["warnings"] = []string{c.inactivePublisherAdvice()}
 	} else if cleanupErr != nil {
 		body["warnings"] = []string{"Repository change saved, but cleanup is incomplete. Review the module repositories before retrying."}
 	}
@@ -202,28 +203,40 @@ func (c catalogService) recoverCatalog(ctx context.Context, action string) (json
 		}
 		checks = []map[string]any{{"label": "Module transaction", "value": raw}}
 		message = "Review the installed modules and recover the recorded transaction before retrying. The interrupted operation has not been repeated."
-	} else {
-		configured, err := c.sources()
-		if err != nil {
-			return nil, err
-		}
-		checks = []map[string]any{{"label": "Module repositories", "value": configured}}
-		var inactive []map[string]string
-		for _, src := range sourceSpecs(configured) {
-			for _, signer := range src.Signers {
-				held, err := c.publisherFenced(signer)
-				if err != nil {
-					return nil, err
-				}
-				if held {
-					inactive = append(inactive, map[string]string{"repository": src.ID, "publisher": signer})
-				}
+	}
+	configured, err := c.sources()
+	if err != nil {
+		return nil, err
+	}
+	if action != "module.catalog-install" {
+		checks = append(checks, map[string]any{"label": "Module repositories", "value": configured})
+	}
+	var inactive []map[string]string
+	for _, src := range sourceSpecs(configured) {
+		for _, signer := range src.Signers {
+			held, err := c.publisherFenced(signer)
+			if err != nil {
+				return nil, err
+			}
+			if held {
+				inactive = append(inactive, map[string]string{"repository": src.ID, "publisher": signer})
 			}
 		}
-		if len(inactive) != 0 {
-			message = errSourceAddFenced.Error()
-			checks = append(checks, map[string]any{"label": "Inactive repository publishers", "value": inactive})
-		}
+	}
+	if len(inactive) != 0 {
+		message += " " + c.inactivePublisherAdvice()
+		checks = append(checks, map[string]any{"label": "Inactive repository publishers", "value": inactive})
 	}
 	return json.Marshal(map[string]any{"message": message, "checks": checks, "route": "/modules", "recoveryAction": next})
+}
+
+func (c catalogService) inactivePublisherAdvice() string {
+	keys, err := trustedDirectory(c.keys, c.owner)
+	if err == nil {
+		defer keys.Close()
+		if blocked, err := keyStageBlockedAt(keys, c.owner); err == nil && blocked {
+			return "The repository publisher is inactive. Preserve and move aside the incompatible entry at " + filepath.Join(c.keys, sourceAddStageRoot) + ", then remove the repository entry, add it again and confirm its fingerprint."
+		}
+	}
+	return errSourceAddFenced.Error()
 }

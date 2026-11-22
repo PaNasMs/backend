@@ -28,7 +28,7 @@ func (c catalogService) recordSourceAddDecision(dir *os.File, change *sourceChan
 	if len(raw) > maxSourceState {
 		return reject("Module repository journal is too large")
 	}
-	return atomicAt(dir, sourceIntent, raw, 0600, c.owner)
+	return c.writeSourceAddRecord(dir, sourceIntent, raw, false)
 }
 
 var errSourceAddFenced = reject("The repository publisher is inactive. Review the local signing key, remove the repository entry, then add it again and confirm its fingerprint.")
@@ -58,7 +58,9 @@ func (c catalogService) retireSourceAdd(dir, config *os.File, change sourceChang
 		keys, err := trustedDirectory(c.keys, c.owner)
 		if err == nil {
 			defer keys.Close()
-			err = change.KeyStage.cleanup(keys)
+			if err = change.KeyStage.releaseKeyObservation(keys); err == nil {
+				err = change.KeyStage.cleanup(keys)
+			}
 		}
 		if err != nil && !errors.Is(err, unix.ENOENT) {
 			return err
@@ -113,7 +115,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		if change.KeyStage == nil || len(change.Keys) != 1 {
 			return reject("Invalid module repository journal")
 		}
-	case "key-ready", "key-publishing", "key-confirmed":
+	case "key-ready", "key-observed", "key-confirmed":
 		if change.KeyStage == nil || len(change.Keys) != 0 || change.KeyStage.After.Inode == 0 {
 			return reject("Invalid module repository journal")
 		}
@@ -194,6 +196,13 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 				return err
 			}
 		}
+		blocked, err := keyStageBlockedAt(keys, c.owner)
+		if err != nil {
+			return err
+		}
+		if blocked {
+			return errSourceAddFenced
+		}
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
 			return err
@@ -214,6 +223,10 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 				return err
 			}
 		}
+		if err := draft.reserveKeyObservation(keys); err != nil {
+			return err
+		}
+		draft.SeenVacant = true
 		change.KeyStage = &draft
 		change.Keys = nil
 		if err := c.recordSourceAddDecision(dir, change, "key-ready"); err != nil {
@@ -225,31 +238,47 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 			}
 		}
 	}
-	if change.AddDecision == "key-ready" {
-		// EEXIST leaves the private slot intact. A later missing live key can
-		// therefore mean withdrawal, even when the draft still exists.
-		if err := c.recordSourceAddDecision(dir, change, "key-publishing"); err != nil {
+	for change.AddDecision == "key-ready" {
+		seen, err := change.KeyStage.observeExistingKey(keys, name)
+		if errors.Is(err, unix.ENOENT) {
+			break
+		}
+		if err != nil {
 			return err
+		}
+		if seen {
+			if c.sourceBoundary != nil {
+				if err := c.sourceBoundary("key-exists"); err != nil {
+					return err
+				}
+			}
+			if err := c.recordSourceAddDecision(dir, change, "key-observed"); err != nil {
+				return err
+			}
+			break
 		}
 		if c.sourceBoundary != nil {
 			if err := c.sourceBoundary("key-publishing"); err != nil {
 				return err
 			}
 		}
-		err := change.KeyStage.publishKey(keys, name)
-		if err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, unix.ENOENT) {
+		err = change.KeyStage.publishKey(keys, name)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil && !errors.Is(err, unix.ENOENT) {
 			return err
 		}
-		if c.sourceBoundary != nil {
-			if err == nil {
-				if err := c.sourceBoundary("key-published"); err != nil {
-					return err
-				}
-			} else if errors.Is(err, unix.EEXIST) {
-				if err := c.sourceBoundary("key-exists"); err != nil {
-					return err
-				}
+		if err == nil && c.sourceBoundary != nil {
+			if err := c.sourceBoundary("key-published"); err != nil {
+				return err
 			}
+		}
+		break
+	}
+	if change.AddDecision == "key-observed" {
+		if err := change.KeyStage.releaseKeyObservation(keys); err != nil {
+			return err
 		}
 	}
 	key, err := readPublicKey(c.keys, signer, c.owner)
@@ -266,7 +295,7 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 	if err := keys.Sync(); err != nil {
 		return err
 	}
-	if change.AddDecision == "key-publishing" {
+	if change.AddDecision == "key-ready" || change.AddDecision == "key-observed" {
 		return c.recordSourceAddDecision(dir, change, "key-confirmed")
 	}
 	return nil

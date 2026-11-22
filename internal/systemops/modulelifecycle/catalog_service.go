@@ -264,7 +264,7 @@ func (c catalogService) inactivePublisherAdvice(conflicts []string) string {
 	if err == nil {
 		defer keys.Close()
 		if blocked, err := keyStageBlockedAt(keys, c.owner); err == nil && blocked {
-			return "The repository publisher is inactive. Preserve and move aside the incompatible entry at " + filepath.Join(c.keys, sourceAddStageRoot) + ", then remove the repository entry, add it again and confirm its fingerprint."
+			return "The repository publisher is inactive. Preserve and move aside the incompatible entry at " + filepath.Join(c.keys, sourceAddStageRoot) + ", then add the repository again and confirm its fingerprint. Remove its existing entry first if still configured."
 		}
 	}
 	return errSourceAddFenced.Error()

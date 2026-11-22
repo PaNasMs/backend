@@ -20,18 +20,27 @@ import (
 
 func servePendingRepository(t *testing.T, c *catalogService) map[string]any {
 	t.Helper()
-	const url = "https://pending.example.org/"
-	public, private, err := ed25519.GenerateKey(rand.Reader)
+	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return serveSignedRepository(t, c, "pending", "pending", private)
+}
+
+func serveSignedRepository(t *testing.T, c *catalogService, repository, signer string, private ed25519.PrivateKey) map[string]any {
+	t.Helper()
+	url := "https://" + repository + ".example.org/"
+	public := private.Public().(ed25519.PublicKey)
 	der, err := x509.MarshalPKIXPublicKey(public)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte(`{"schemaVersion":1,"id":"pending","modules":[]}`)
+	raw, err := json.Marshal(map[string]any{"schemaVersion": 1, "id": repository, "modules": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	envelope, err := json.Marshal(signedBy{
-		Algorithm: "Ed25519", Signer: "pending",
+		Algorithm: "Ed25519", Signer: signer,
 		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(private, raw)),
 	})
 	if err != nil {
@@ -44,7 +53,7 @@ func servePendingRepository(t *testing.T, c *catalogService) map[string]any {
 			return raw, nil
 		case url + "catalog.sig":
 			return envelope, nil
-		case url + "keys/pending.pem":
+		case url + "keys/" + signer + ".pem":
 			return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 		default:
 			return original(ctx, u, limit, kind)
@@ -262,6 +271,43 @@ func TestLegacySourceAddRecovery(t *testing.T) {
 			serve("2.0.0", true)
 			visibleCatalog(t, restarted, "2.0.0", false)
 		})
+	}
+}
+
+// The previous writer exchanged the config while the reviewed PEM was still
+// in the tokenized journal. Its first post-commit recovery publishes the key.
+func TestLegacyTokenizedSourceAddRecoversAfterConfigExchange(t *testing.T) {
+	c, serve, params, key := unconfiguredCatalogFixture(t)
+	change := interruptedSourceStage(t, c, params, "key-written")
+	change.KeyBeforeConfig = false
+	change.AddDecision = ""
+	raw, err := json.Marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.root, sourceIntent), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer config.Close()
+	if renamed, err := change.Stage.publish(config, filepath.Base(c.config)); err != nil || !renamed {
+		t.Fatalf("legacy config exchange: renamed=%v err=%v", renamed, err)
+	}
+	if _, err := os.Stat(filepath.Join(c.keys, "fixture.pem")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected unpublished legacy key before recovery, got %v", err)
+	}
+
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("2.0.0", true)
+	visibleCatalog(t, restarted, "2.0.0", false)
+	if current, err := restarted.keyBytes("fixture"); err != nil || !bytes.Equal(current, key) {
+		t.Fatalf("legacy recovery did not publish the reviewed key: %v", err)
+	}
+	if active, err := restarted.activePublisherKey("fixture"); err != nil || publicFingerprint(active) != params["keyFingerprint"] {
+		t.Fatalf("legacy recovery did not activate the publisher: %v", err)
 	}
 }
 
@@ -510,8 +556,8 @@ func TestFirstSourceConfigCommitSurvivesIndependentAtomicSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	var change sourceChange
-	if err := json.Unmarshal(raw, &change); err != nil || change.AddDecision != "" {
-		t.Fatalf("expected undecided journal after config publication: %v", err)
+	if err := json.Unmarshal(raw, &change); err != nil || change.AddDecision != "config-ready" {
+		t.Fatalf("expected config-ready journal after exchange: %v", err)
 	}
 	rows, err := c.sources()
 	if err != nil {
@@ -576,9 +622,14 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			before, err := os.ReadFile(c.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stop := errors.New("interrupted source add")
 			interrupted := false
 			c.sourceBoundary = func(stage string) error {
-				if stage == "config-written" && tc.supplyMatching {
+				if stage == "key-ready" && tc.supplyMatching {
 					raw, err := c.download(context.Background(), "https://pending.example.org/keys/pending.pem", 8192, metadataDownload)
 					if err != nil {
 						return err
@@ -587,17 +638,21 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 				}
 				if stage == tc.phase {
 					interrupted = true
-					return errors.New("interrupted source add")
+					return stop
 				}
 				return nil
 			}
 			outcome, err := executePlannedSource(t, c, "module.source-add", params)
-			if err != nil || !interrupted || !bytes.Contains(outcome, []byte(`"warnings"`)) {
-				t.Fatalf("expected interrupted publication, got %s, %v", outcome, err)
+			committed := tc.phase == "config-written" || tc.phase == "publisher-confirmed"
+			if !interrupted || (committed && (err != nil || !bytes.Contains(outcome, []byte(`"warnings"`)))) || (!committed && !errors.Is(err, stop)) {
+				t.Fatalf("interruption at %s: result=%s err=%v committed=%v", tc.phase, outcome, err, committed)
 			}
 			configured, err := os.ReadFile(c.config)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if bytes.Equal(configured, before) == committed {
+				t.Fatalf("unexpected config at %s: %s", tc.phase, configured)
 			}
 			if tc.withdraw {
 				raw, err := os.ReadFile(filepath.Join(c.keys, "pending.pem"))
@@ -611,14 +666,23 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 				if err := os.Remove(filepath.Join(c.keys, "pending.pem")); err != nil {
 					t.Fatal(err)
 				}
+			} else if committed {
+				current, err := c.keyBytes("pending")
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := discoveryKey(current)
+				if err != nil || publicFingerprint(key) != params["keyFingerprint"] {
+					t.Fatalf("config committed without its reviewed key: %v", err)
+				}
 			} else if current, err := c.keyBytes("pending"); err != nil || current != nil {
 				t.Fatalf("unexpected key before publication: %v", err)
 			}
 
 			restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
 			serve("6.0.0", true)
-			wantHeld := tc.withdraw
-			visibleCatalog(t, restarted, "6.0.0", wantHeld)
+			wantHeld := !committed || tc.withdraw
+			visibleCatalog(t, restarted, "6.0.0", committed && wantHeld)
 			if held, err := restarted.publisherFenced("pending"); err != nil || held != wantHeld {
 				t.Fatalf("expected held=%v after recovery, got %v, %v", wantHeld, held, err)
 			}
@@ -728,15 +792,15 @@ func TestExplicitSourceRecoveryReportsOccupiedKeyStage(t *testing.T) {
 			if err := os.WriteFile(notes, contents, 0600); err != nil {
 				t.Fatal(err)
 			}
-			c.sourceBoundary = func(stage string) error {
-				if stage == "config-written" {
-					return errors.New("interrupted after config replacement")
-				}
-				return nil
+			original, err := os.ReadFile(c.config)
+			if err != nil {
+				t.Fatal(err)
 			}
-			outcome, err := executePlannedSource(t, c, "module.source-add", params)
-			if err != nil || !bytes.Contains(outcome, []byte(`"warnings"`)) {
-				t.Fatalf("expected a committed add with pending recovery: %s, %v", outcome, err)
+			if result, err := executePlannedSource(t, c, "module.source-add", params); err == nil || len(result) != 0 {
+				t.Fatalf("expected key staging failure before config commit: %s %v", result, err)
+			}
+			if current, err := os.ReadFile(c.config); err != nil || !bytes.Equal(current, original) {
+				t.Fatalf("blocked key staging changed the config: %v", err)
 			}
 
 			restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
@@ -759,7 +823,7 @@ func TestExplicitSourceRecoveryReportsOccupiedKeyStage(t *testing.T) {
 				t.Fatal("publisher with a blocked key stage became active")
 			}
 			serve("8.0.0", true)
-			visibleCatalog(t, restarted, "8.0.0", true)
+			visibleCatalog(t, restarted, "8.0.0", false)
 			catalogPlanFingerprint(t, restarted, "module.source-remove", map[string]any{"target": "fixture"})
 			if kind == "directory" {
 				if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0755 {
@@ -767,9 +831,6 @@ func TestExplicitSourceRecoveryReportsOccupiedKeyStage(t *testing.T) {
 				}
 			}
 			if err := os.Rename(path, path+".saved"); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := executePlannedSource(t, restarted, "module.source-remove", map[string]any{"target": "pending"}); err != nil {
 				t.Fatal(err)
 			}
 			result, err := executePlannedSource(t, restarted, "module.source-add", params)
@@ -796,28 +857,27 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 		c := catalogService{
 			lifecycle: lifecycle{store: store{root: root, owner: uint32(os.Geteuid())}, keys: os.Getenv("PANASMS_TEST_KEY_DIR")},
 			config:    filepath.Join(root, "sources.json"),
-			download: func(_ context.Context, u string, _ int64, _ downloadKind) ([]byte, error) {
-				return replies[u], nil
-			},
+			download:  func(_ context.Context, u string, _ int64, _ downloadKind) ([]byte, error) { return replies[u], nil },
 		}
 		raw := replies[url+"keys/pending.pem"]
 		key, err := discoveryKey(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
+		competing := os.Getenv("PANASMS_TEST_KEY_COMPETING")
 		c.sourceBoundary = func(phase string) error {
-			if phase == "config-written" && cut != "key-publishing" && cut != "key-rename" {
+			if phase == "key-ready" && competing != "" {
 				return os.WriteFile(filepath.Join(c.keys, "pending.pem"), raw, 0600)
 			}
 			if phase == "key-rename" {
-				switch cut {
-				case "immutable", "immutable-withdrawn":
+				switch competing {
+				case "immutable":
 					return unix.EPERM
-				case "mounted", "mounted-withdrawn":
+				case "mounted":
 					return unix.EXDEV
 				}
 			}
-			if phase == cut || phase == "key-exists" {
+			if phase == cut {
 				os.Exit(exited)
 			}
 			return nil
@@ -826,93 +886,196 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 		t.Fatalf("child did not stop at %s: %v", cut, err)
 	}
 
-	for _, cut := range []string{"key-publishing", "key-rename", "key-exists", "immutable", "immutable-withdrawn", "mounted", "mounted-withdrawn"} {
-		t.Run(cut, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, cut, competing, edit string
+		reenroll                   bool
+	}{
+		{name: "before-key-publish", cut: "key-publishing"},
+		{name: "before-key-rename", cut: "key-rename"},
+		{name: "existing-key-withdrawn", cut: "key-exists", competing: "matching", edit: "remove"},
+		{name: "new-key-before-config", cut: "key-verified"},
+		{name: "existing-key-before-config", cut: "key-verified", reenroll: true},
+		{name: "first-add-committed", cut: "config-written"},
+		{name: "first-add-withdrawn", cut: "config-written", edit: "remove"},
+		{name: "first-add-replaced", cut: "config-written", edit: "replace"},
+		{name: "reenrollment-committed", cut: "config-written", reenroll: true},
+		{name: "reenrollment-withdrawn", cut: "config-written", reenroll: true, edit: "remove"},
+		{name: "reenrollment-replaced", cut: "config-written", reenroll: true, edit: "replace"},
+		{name: "confirmed", cut: "publisher-confirmed"},
+		{name: "confirmed-then-withdrawn", cut: "publisher-confirmed", edit: "remove"},
+		{name: "immutable", cut: "config-written", competing: "immutable"},
+		{name: "immutable-withdrawn", cut: "config-written", competing: "immutable", edit: "remove"},
+		{name: "mounted", cut: "config-written", competing: "mounted"},
+		{name: "mounted-withdrawn", cut: "config-written", competing: "mounted", edit: "remove"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			c, serve := catalogFixture(t)
 			params := servePendingRepository(t, &c)
 			replies := map[string][]byte{}
-			for _, path := range []string{"catalog.json", "catalog.sig", "keys/pending.pem"} {
-				raw, err := c.download(t.Context(), url+path, maxCatalog, metadataDownload)
+			for _, file := range []string{"catalog.json", "catalog.sig", "keys/pending.pem"} {
+				raw, err := c.download(t.Context(), url+file, maxCatalog, metadataDownload)
 				if err != nil {
 					t.Fatal(err)
 				}
-				replies[url+path] = raw
+				replies[url+file] = raw
 			}
-			raw, err := json.Marshal(replies)
+			payload, err := json.Marshal(replies)
 			if err != nil {
 				t.Fatal(err)
 			}
+			path := filepath.Join(c.keys, "pending.pem")
+			reviewed := replies[url+"keys/pending.pem"]
+			var preexisting os.FileInfo
+			if tc.reenroll {
+				dir, err := trustedDirectory(c.root, c.owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = c.holdFailedAdd(dir, "pending")
+				dir.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, reviewed, 0600); err != nil {
+					t.Fatal(err)
+				}
+				preexisting, err = os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSourceKeyPublicationAfterHelperExit$")
-			child.Env = append(os.Environ(), "PANASMS_TEST_KEY_HELPER_EXIT="+cut, "PANASMS_TEST_KEY_ROOT="+c.root,
-				"PANASMS_TEST_KEY_DIR="+c.keys, "PANASMS_TEST_KEY_REPLIES="+string(raw))
+			child.Env = append(os.Environ(), "PANASMS_TEST_KEY_HELPER_EXIT="+tc.cut, "PANASMS_TEST_KEY_ROOT="+c.root,
+				"PANASMS_TEST_KEY_DIR="+c.keys, "PANASMS_TEST_KEY_COMPETING="+tc.competing, "PANASMS_TEST_KEY_REPLIES="+string(payload))
 			out, err := child.CombinedOutput()
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) || exit.ExitCode() != exited {
-				t.Fatalf("expected helper exit at %s: %v, %s", cut, err, out)
+				t.Fatalf("expected helper exit at %s: %v, %s", tc.cut, err, out)
 			}
-			path := filepath.Join(c.keys, "pending.pem")
-			withdrawn := cut == "key-exists" || cut == "immutable-withdrawn" || cut == "mounted-withdrawn"
-			held := withdrawn || cut == "key-rename"
-			var journal sourceChange
-			journalRaw, err := os.ReadFile(filepath.Join(c.root, sourceIntent))
-			if err != nil {
-				t.Fatal(err)
+			committed := tc.cut == "config-written" || tc.cut == "publisher-confirmed"
+			configured, err := c.sources()
+			if err != nil || len(configured) != 1 && len(configured) != 2 || (len(configured) == 2) != committed {
+				t.Fatalf("unexpected config after exit at %s: %v, %v", tc.cut, configured, err)
 			}
-			if err := json.Unmarshal(journalRaw, &journal); err != nil {
-				t.Fatal(err)
+			if !committed {
+				if _, err := c.activePublisherKey("pending"); err == nil {
+					t.Fatal("public PEM trusted before configuration commit")
+				}
 			}
-			wantDecision := "key-probing"
-			if cut == "key-publishing" {
-				wantDecision = "key-ready"
-			}
-			if journal.AddDecision != wantDecision {
-				t.Fatalf("interrupted with decision %q, want %q", journal.AddDecision, wantDecision)
-			}
-			var supplied os.FileInfo
-			if cut != "key-publishing" && cut != "key-rename" {
-				supplied, err = os.Stat(path)
+			var want []byte
+			var original os.FileInfo
+			if tc.cut != "key-publishing" && tc.cut != "key-rename" {
+				want = reviewed
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("missing reviewed PEM at %s: %v", tc.cut, err)
+				}
+				original, err = os.Stat(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if expected := replies[url+"keys/pending.pem"]; len(expected) == 0 {
-					t.Fatal("missing reviewed publisher PEM")
-				} else if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, expected) {
-					t.Fatalf("existing publisher key changed before recovery: %v", err)
+				if preexisting != nil && !os.SameFile(preexisting, original) {
+					t.Fatal("enrollment replaced preexisting matching PEM")
 				}
+			} else if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected unpublished PEM at %s: %v", tc.cut, err)
 			}
-			if withdrawn {
+			switch tc.edit {
+			case "remove":
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-			} else if supplied == nil {
-				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("expected an unpublished key, stat returned %v", err)
+				want = nil
+			case "replace":
+				want, err = c.keyBytes("fixture")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path+".operator", want, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(path+".operator", path); err != nil {
+					t.Fatal(err)
+				}
+				original, err = os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
 				}
 			}
+			restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
 			serve("9.0.0", true)
-			visibleCatalog(t, c, "9.0.0", held)
-			if held {
-				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("recovery recreated a withdrawn key: %v", err)
-				}
-				if held, err := c.publisherFenced("pending"); err != nil || !held {
-					t.Fatalf("expected publisher to remain inactive: %v", err)
-				}
-			} else if key, err := c.activePublisherKey("pending"); err != nil || publicFingerprint(key) != params["keyFingerprint"] {
-				t.Fatalf("recovery failed to publish the reviewed key: %v", err)
+			active := committed && tc.edit == ""
+			visibleCatalog(t, restarted, "9.0.0", committed && !active)
+			if held, err := restarted.publisherFenced("pending"); err != nil || held == active {
+				t.Fatalf("expected active=%v after recovery: held=%v err=%v", active, held, err)
 			}
-			if supplied != nil && !withdrawn {
-				current, err := os.Stat(path)
-				if err != nil || !os.SameFile(supplied, current) || supplied.Mode() != current.Mode() {
-					t.Fatalf("recovery replaced or changed the existing PEM: %v", err)
+			key, err := restarted.activePublisherKey("pending")
+			if active && (err != nil || publicFingerprint(key) != params["keyFingerprint"]) || !active && err == nil {
+				t.Fatalf("unexpected key after recovery: active=%v err=%v", active, err)
+			}
+			got, err := restarted.keyBytes("pending")
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("recovery changed public PEM: %v", err)
+			}
+			if want != nil {
+				info, err := os.Stat(path)
+				if err != nil || !os.SameFile(original, info) || info.Mode() != original.Mode() {
+					t.Fatalf("recovery replaced PEM inode or permissions: %v", err)
 				}
 			}
 			files, err := os.ReadDir(filepath.Join(c.keys, sourceAddStageRoot))
-			if err != nil || len(files) != 0 {
-				t.Fatalf("private key stage retained files after recovery: %v, %v", files, err)
+			if (err != nil && !(tc.reenroll && errors.Is(err, os.ErrNotExist))) || len(files) != 0 {
+				t.Fatalf("private key stage after recovery: %v, %v", files, err)
 			}
 		})
 	}
+}
+
+func TestInterruptedMirrorAddKeepsPreviouslyTrustedPublisher(t *testing.T) {
+	c, serve := catalogFixture(t)
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := serveSignedRepository(t, &c, "first", "shared", private)
+	mirror := serveSignedRepository(t, &c, "mirror", "shared", private)
+	const add = "module.source-add"
+	if _, err := executePlannedSource(t, c, add, first); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.keys, "shared.pem")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("interrupted mirror enrollment")
+	c.sourceBoundary = func(phase string) error {
+		if phase == "key-written" {
+			return stop
+		}
+		return nil
+	}
+	if _, err := executePlannedSource(t, c, add, mirror); !errors.Is(err, stop) {
+		t.Fatalf("expected mirror interruption: %v", err)
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	if _, err := restarted.recoverCatalog(t.Context(), add); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := restarted.sources()
+	if err != nil || len(rows) != 2 || rows[1]["id"] != "first" {
+		t.Fatalf("unexpected sources: %v %v", rows, err)
+	}
+	key, err := restarted.activePublisherKey("shared")
+	if err != nil || publicFingerprint(key) != first["keyFingerprint"] {
+		t.Fatalf("existing publisher lost trust: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("existing publisher key replaced: %v", err)
+	}
+	serve("12.0.0", true)
+	visibleCatalog(t, restarted, "12.0.0", false)
 }
 
 func TestOnlyLegacyKeyJournalsUseReservedObservation(t *testing.T) {
@@ -962,6 +1125,9 @@ func TestKeyObservationPreservesPublisherSymlink(t *testing.T) {
 	path := filepath.Join(c.keys, "pending.pem")
 	c.sourceBoundary = func(stage string) error {
 		if stage == "config-written" {
+			if err := os.Remove(path); err != nil {
+				return err
+			}
 			return os.Symlink("fixture.pem", path)
 		}
 		return nil
@@ -988,9 +1154,19 @@ func TestCrossMountKeyPublicationLeavesUnrelatedCatalogAvailable(t *testing.T) {
 		}
 		return nil
 	}
+	before, err := os.ReadFile(c.config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err := executePlannedSource(t, c, "module.source-add", params)
-	if err != nil || !blocked || !bytes.Contains(raw, []byte(errSourceAddFenced.Error())) {
-		t.Fatalf("expected terminal publisher warning, got %s, %v", raw, err)
+	if err == nil || !blocked || len(raw) != 0 {
+		t.Fatalf("expected precommit key failure, got %s, %v", raw, err)
+	}
+	if current, err := os.ReadFile(c.config); err != nil || !bytes.Equal(current, before) {
+		t.Fatalf("cross-mount failure committed the source: %v", err)
+	}
+	if _, err := c.recoverCatalog(t.Context(), "module.source-add"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected the cross-mount conflict to retire the source journal: %v", err)
@@ -1003,7 +1179,7 @@ func TestCrossMountKeyPublicationLeavesUnrelatedCatalogAvailable(t *testing.T) {
 		t.Fatalf("unexpected public key after failed rename: %v", err)
 	}
 	serve("11.0.0", true)
-	visibleCatalog(t, restarted, "11.0.0", true)
+	visibleCatalog(t, restarted, "11.0.0", false)
 	drafts, err := os.ReadDir(filepath.Join(c.keys, sourceAddStageRoot))
 	if err != nil || len(drafts) != 0 {
 		t.Fatalf("expected retired private key draft: %v, %v", drafts, err)

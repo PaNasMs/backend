@@ -174,17 +174,18 @@ func (c catalogService) keyBytes(signer string) ([]byte, error) {
 }
 
 type sourceChange struct {
-	AddDecision   string          `json:",omitempty"`
-	AddSigner     string          `json:",omitempty"`
-	Stage         *sourceAddStage `json:",omitempty"`
-	KeyStage      *sourceAddStage `json:",omitempty"`
-	AddedRow      string          `json:",omitempty"`
-	AddID         string          `json:",omitempty"`
-	Before, After string
-	ID            string
-	Add           bool
-	Keys          map[string][]byte `json:",omitempty"` // Added keys; also supports legacy removal journals.
-	Retired       map[string]string `json:",omitempty"` // SHA-256 of the exact key file bytes.
+	KeyBeforeConfig bool            `json:",omitempty"`
+	AddDecision     string          `json:",omitempty"`
+	AddSigner       string          `json:",omitempty"`
+	Stage           *sourceAddStage `json:",omitempty"`
+	KeyStage        *sourceAddStage `json:",omitempty"`
+	AddedRow        string          `json:",omitempty"`
+	AddID           string          `json:",omitempty"`
+	Before, After   string
+	ID              string
+	Add             bool
+	Keys            map[string][]byte `json:",omitempty"` // Added keys; also supports legacy removal journals.
+	Retired         map[string]string `json:",omitempty"` // SHA-256 of the exact key file bytes.
 }
 
 type sourcePlan struct {
@@ -313,8 +314,8 @@ func (s store) checkSourceTrust() error {
 	return reject("Review the interrupted module repository change before installing modules")
 }
 
-// Config replacement is the commit point. On restart, discard an uncommitted
-// added key or finish retiring a removed key. Never touch installed receipts.
+// Config replacement is the commit point. Recovery keeps an uncommitted
+// enrollment inactive and finishes retiring keys for a committed removal.
 func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *systemops.Reporter) error {
 	if err := c.recoverSourceAddWrites(ctx, dir, r); err != nil {
 		return err
@@ -426,23 +427,25 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 // applySource distinguishes a pre-commit failure from post-commit cleanup.
 func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
+	var added source
 	// Removing an inactive row has no publisher key to retire. Invalidate
 	// its cache before replacing the config so later edits need no replay.
 	journal := !plan.heldRemoval || len(change.Retired) != 0
 	if change.Add {
 		row := plan.after[len(plan.after)-1]
-		src := sourceSpecs([]map[string]any{row})[0]
+		added = sourceSpecs([]map[string]any{row})[0]
 		journal = len(change.Keys) != 0
-		if !journal && src.Fingerprint != "" && len(src.Signers) == 1 {
+		if !journal && added.Fingerprint != "" && len(added.Signers) == 1 {
 			var err error
-			journal, err = c.publisherFenced(src.Signers[0])
+			journal, err = c.publisherFenced(added.Signers[0])
 			if err != nil {
 				return nil, err
 			}
 		}
 		if journal {
-			change.AddedRow = sourceTrustState(src)
-			change.AddSigner = src.Signers[0]
+			change.KeyBeforeConfig = true
+			change.AddedRow = sourceTrustState(added)
+			change.AddSigner = added.Signers[0]
 		}
 	}
 	next, err := json.Marshal(plan.after)
@@ -471,7 +474,7 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 			return nil, err
 		}
 		change.Stage = &stage
-		change.AddDecision = ""
+		change.AddDecision = "preparing"
 	}
 	raw, err := json.Marshal(change)
 	if err == nil && len(raw) > maxSourceState {
@@ -517,6 +520,31 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 	}
 	if change.Add {
 		if err = boundary("key-written"); err != nil {
+			return nil, err
+		}
+	}
+	if change.KeyBeforeConfig {
+		err := c.confirmSourceAddKey(dir, &change, added.Fingerprint)
+		if err != nil {
+			if errors.Is(err, errSourceAddFenced) {
+				if cleanup := c.discardSourceAdd(dir, config, change); cleanup != nil {
+					return nil, errors.Join(err, cleanup)
+				}
+				return nil, reject(c.inactivePublisherAdvice(nil))
+			}
+			return nil, err
+		}
+		if err := boundary("key-verified"); err != nil {
+			return nil, err
+		}
+		if err := c.recordSourceAddDecision(dir, &change, "config-ready"); err != nil {
+			return nil, err
+		}
+	} else if added.Fingerprint != "" && len(added.Signers) == 1 {
+		if err := c.verifySourceAddKey(added.Signers[0], added.Fingerprint); err != nil {
+			if errors.Is(err, errSourceAddFenced) {
+				return nil, reject("The repository signing key changed. Review the local key and confirm its fingerprint again.")
+			}
 			return nil, err
 		}
 	}

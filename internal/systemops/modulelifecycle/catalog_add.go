@@ -31,7 +31,7 @@ func (c catalogService) recordSourceAddDecision(dir *os.File, change *sourceChan
 	return c.writeSourceAddRecord(dir, sourceIntent, raw, false)
 }
 
-var errSourceAddFenced = reject("The repository publisher is inactive. Review the local signing key, remove the repository entry, then add it again and confirm its fingerprint.")
+var errSourceAddFenced = reject("The repository publisher is inactive. Review the local signing key, then add the repository again and confirm its fingerprint. Remove its existing entry first if still configured.")
 
 func (c catalogService) discardSourceAdd(dir, config *os.File, change sourceChange) error {
 	if change.AddDecision != "aborted" {
@@ -99,7 +99,10 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	switch change.AddDecision {
 	case "preparing", "aborted":
 		return c.discardSourceAdd(dir, config, change)
-	case "":
+	case "", "config-ready":
+		if change.KeyBeforeConfig != (change.AddDecision == "config-ready") {
+			return reject("Invalid module repository journal")
+		}
 		committed, err := change.Stage.committed(config)
 		if err != nil {
 			return err
@@ -122,6 +125,16 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	default:
 		return reject("Invalid module repository journal")
 	}
+	if change.KeyBeforeConfig {
+		if change.AddDecision != "committed" {
+			// A pre-commit key can already be public. Retain it under the
+			// signer hold, including when it matches our private draft.
+			return c.discardSourceAdd(dir, config, change)
+		}
+		if len(change.Keys) != 0 {
+			return reject("Invalid module repository journal")
+		}
+	}
 	rows, err := c.sources()
 	if err != nil {
 		return err
@@ -135,7 +148,12 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 			if signer != change.AddSigner {
 				return reject("Invalid module repository journal")
 			}
-			err := c.confirmSourceAddKey(dir, &change, src.Fingerprint)
+			var err error
+			if change.KeyBeforeConfig {
+				err = c.verifySourceAddKey(signer, src.Fingerprint)
+			} else {
+				err = c.confirmSourceAddKey(dir, &change, src.Fingerprint)
+			}
 			if err == nil {
 				err = c.clearFailedAdd(dir, signer)
 			}
@@ -275,7 +293,17 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 			return err
 		}
 	}
-	key, err := readPublicKey(c.keys, signer, c.owner)
+	if err := c.verifySourceAddKey(signer, fingerprint); err != nil {
+		return err
+	}
+	if change.AddDecision == "key-probing" || change.AddDecision == "key-observed" {
+		return c.recordSourceAddDecision(dir, change, "key-confirmed")
+	}
+	return nil
+}
+
+func (c catalogService) verifySourceAddKey(signer, fingerprint string) error {
+	key, err := loadPublicKey(c.keys, signer, c.owner, true)
 	if err != nil {
 		var rejected *systemops.Rejected
 		if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
@@ -285,12 +313,6 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 	}
 	if publicFingerprint(key) != fingerprint {
 		return errSourceAddFenced
-	}
-	if err := keys.Sync(); err != nil {
-		return err
-	}
-	if change.AddDecision == "key-probing" || change.AddDecision == "key-observed" {
-		return c.recordSourceAddDecision(dir, change, "key-confirmed")
 	}
 	return nil
 }

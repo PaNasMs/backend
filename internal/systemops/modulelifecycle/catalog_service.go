@@ -7,6 +7,14 @@ import (
 	"panasms.local/backend/internal/systemops"
 )
 
+type sourceAddRepairKey struct{}
+
+// TrackSourceAddRepair records whether journal recovery may have changed state
+// during catalog planning, even when a later operation check fails.
+func TrackSourceAddRepair(ctx context.Context, repaired *bool) context.Context {
+	return context.WithValue(ctx, sourceAddRepairKey{}, repaired)
+}
+
 func IsCatalogAction(action string) bool {
 	switch action {
 	case "module.source-add", "module.source-remove", "module.catalog-install":
@@ -76,9 +84,11 @@ func CatalogExecute(ctx context.Context, action string, p map[string]any, expect
 }
 
 func (c catalogService) executeCatalog(ctx context.Context, action string, p map[string]any, expected string, r *systemops.Reporter, authorize func() error) (result json.RawMessage, err error) {
-	pendingMutation := false
+	pendingMutation, repaired := false, false
 	defer func() {
-		if err != nil && !pendingMutation {
+		if err != nil && repaired {
+			err = systemops.AfterMutation(err)
+		} else if err != nil && !pendingMutation {
 			err = systemops.BeforeMutation(err)
 		}
 		cancellable(r, false)
@@ -95,7 +105,7 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(ctx, dir, r); err != nil {
+	if err = c.repairSources(TrackSourceAddRepair(ctx, &repaired), dir, r); err != nil {
 		return nil, err
 	}
 	stale := reject("State has changed. Review a new operation plan.")

@@ -137,12 +137,12 @@ func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, own
 	if err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}
-	if err == nil && (previous.Mode&unix.S_IFMT != unix.S_IFREG || previous.Uid != owner || previous.Nlink != 1 || previous.Mode&0022 != 0) {
-		return reject("Module state permissions are unsafe")
-	}
 	existed := err == nil
 	if existed && createOnly {
 		return unix.EEXIST
+	}
+	if err == nil && (previous.Mode&unix.S_IFMT != unix.S_IFREG || previous.Uid != owner || previous.Nlink != 1 || previous.Mode&0022 != 0) {
+		return reject("Module state permissions are unsafe")
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -172,7 +172,7 @@ func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, own
 		return err
 	}
 	if marker != "" {
-		if err := unix.Fsetxattr(fd, sourceAddAttribute, []byte(marker), unix.XATTR_CREATE); err != nil {
+		if err := unix.Fsetxattr(fd, sourceAddAttribute, []byte(marker), unix.XATTR_CREATE); err != nil && !errors.Is(err, unix.ENOTSUP) {
 			return err
 		}
 	}

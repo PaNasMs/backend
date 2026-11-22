@@ -109,8 +109,15 @@ func messageFor(err error) string {
 // Env is the process environment accessor, indirected so tests can inject one.
 var Env = os.Getenv
 
-type unchangedError struct{ error }
+type mutationError struct {
+	error
+	unchanged bool
+}
 
-func (e unchangedError) Unwrap() error { return e.error }
-func BeforeMutation(err error) error   { return unchangedError{err} }
-func Unchanged(err error) bool         { var e unchangedError; return errors.As(err, &e) }
+func (e mutationError) Unwrap() error { return e.error }
+func BeforeMutation(err error) error  { return mutationError{err, true} }
+func AfterMutation(err error) error   { return mutationError{err, false} }
+func Unchanged(err error) bool {
+	var e mutationError
+	return errors.As(err, &e) && e.unchanged
+}

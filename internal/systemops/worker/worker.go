@@ -48,9 +48,11 @@ func New() Dispatcher {
 func deny(message string) error { return &systemops.Rejected{Message: message} }
 
 func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Request, r *systemops.Reporter) (result json.RawMessage, err error) {
-	mutated := false
+	mutated, planRepaired := false, false
 	defer func() {
-		if err != nil && !mutated {
+		if err != nil && planRepaired {
+			err = systemops.AfterMutation(err)
+		} else if err != nil && !mutated {
 			err = systemops.BeforeMutation(err)
 		}
 	}()
@@ -102,6 +104,9 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		}
 	}
 	plan := func(ctx context.Context) (json.RawMessage, error) {
+		if modulelifecycle.IsCatalogAction(req.Action) {
+			ctx = modulelifecycle.TrackSourceAddRepair(ctx, &planRepaired)
+		}
 		return d.Plan(ctx, req.Action, req.Params, user)
 	}
 	var planned json.RawMessage

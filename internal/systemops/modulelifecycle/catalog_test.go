@@ -747,3 +747,27 @@ func TestHostedCatalogInstallReportsNativeCleanupAfterCommit(t *testing.T) {
 	}
 	assertCatalogStageClean(t, c)
 }
+
+// InterruptedCatalogForDispatcher exposes the filesystem-backed test catalog to
+// the dispatcher integration test without changing the installed paths.
+func InterruptedCatalogForDispatcher(t *testing.T) (
+	func(context.Context, string, map[string]any) (json.RawMessage, error),
+	func(context.Context, string, map[string]any, string, *systemops.Reporter, func() error) (json.RawMessage, error),
+	string,
+) {
+	t.Helper()
+	c, _ := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	stop := errors.New("interrupted before config replacement")
+	c.sourceBoundary = func(phase string) error {
+		if phase == "key-written" {
+			return stop
+		}
+		return nil
+	}
+	if _, err := executePlannedSource(t, c, "module.source-add", params); !errors.Is(err, stop) {
+		t.Fatal(err)
+	}
+	c.sourceBoundary = nil
+	return c.planCatalog, c.executeCatalog, filepath.Join(c.root, sourceIntent)
+}

@@ -175,6 +175,8 @@ func (c catalogService) keyBytes(signer string) ([]byte, error) {
 }
 
 type sourceChange struct {
+	AddCommitted  bool   `json:",omitempty"`
+	AddedRow      string `json:",omitempty"`
 	AddID         string `json:",omitempty"`
 	Before, After string
 	ID            string
@@ -257,6 +259,13 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 			if strings.HasPrefix(signer, "panasms-") || slices.ContainsFunc(sourceSpecs(after), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
 				continue
 			}
+			held, err := c.publisherFenced(signer)
+			if err != nil {
+				return out, err
+			}
+			if held {
+				continue
+			}
 			raw, err := c.keyBytes(signer)
 			if err != nil {
 				return out, err
@@ -312,16 +321,24 @@ func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *syst
 		return err
 	}
 	defer lock.Close()
-	return c.finishSourceChange(dir, raw)
+	repaired, _ := ctx.Value(sourceAddRepairKey{}).(*bool)
+	err = c.finishSourceChange(dir, raw, repaired)
+	if err == errSourceAddFenced {
+		return nil
+	}
+	return err
 }
 
-func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
+func (c catalogService) finishSourceChange(dir *os.File, raw []byte, repaired *bool) error {
 	var change sourceChange
 	if systemops.Decode(raw, &change) != nil || identifier(change.ID) != nil || change.Before == change.After ||
 		len(change.Retired) > 0 && (change.Add || len(change.Keys) > 0) {
 		return reject("Invalid module repository journal")
 	}
 	if change.AddID != "" {
+		if repaired != nil {
+			*repaired = true
+		}
 		return c.finishSourceAdd(dir, change)
 	}
 	sources, err := c.sources()
@@ -382,12 +399,26 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 // applySource distinguishes a pre-commit failure from post-commit cleanup.
 func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
+	journal := true
 	if change.Add {
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
-			return nil, err
+		row := plan.after[len(plan.after)-1]
+		src := sourceSpecs([]map[string]any{row})[0]
+		journal = len(change.Keys) != 0
+		if !journal && src.Fingerprint != "" && len(src.Signers) == 1 {
+			var err error
+			journal, err = c.publisherFenced(src.Signers[0])
+			if err != nil {
+				return nil, err
+			}
 		}
-		change.AddID = hex.EncodeToString(nonce[:])
+		if journal {
+			var nonce [16]byte
+			if _, err := rand.Read(nonce[:]); err != nil {
+				return nil, err
+			}
+			change.AddID = hex.EncodeToString(nonce[:])
+			change.AddedRow = sourceState([]map[string]any{row})
+		}
 	}
 	raw, err := json.Marshal(change)
 	if err != nil {
@@ -400,8 +431,10 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 	if len(raw) > maxSourceState || len(next) > maxSourceState {
 		return nil, systemops.BeforeMutation(reject("Module repository state is too large"))
 	}
-	if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
-		return nil, err
+	if journal {
+		if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
+			return nil, err
+		}
 	}
 	boundary := func(stage string) error {
 		if c.sourceBoundary != nil {
@@ -423,7 +456,7 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 	}
 	defer config.Close()
 	if err = atomicWriteAt(config, filepath.Base(c.config), next, 0600, c.owner, uint32(os.Getegid()), change.AddID, false); err != nil {
-		if change.Add {
+		if change.AddID != "" {
 			renamed, checkErr := c.sourceAddCommitted(config, change.AddID)
 			if checkErr == nil && renamed {
 				return err, nil
@@ -431,8 +464,19 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		}
 		return nil, err
 	}
+	if change.AddID != "" {
+		if err := c.recordSourceAddCommit(dir, &change); err != nil {
+			return err, nil
+		}
+	}
 	if err = boundary("config-written"); err != nil {
 		return err, nil
 	}
-	return c.finishSourceChange(dir, raw), nil
+	if !journal {
+		return nil, nil
+	}
+	if change.Add {
+		return c.finishSourceAdd(dir, change), nil
+	}
+	return c.finishSourceChange(dir, raw, nil), nil
 }

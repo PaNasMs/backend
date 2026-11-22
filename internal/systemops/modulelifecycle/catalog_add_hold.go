@@ -12,59 +12,122 @@ func failedAddName(signer string) string {
 	return ".source-add-hold-" + signer
 }
 
-func failedAddRecord(signer string) string {
-	return "panasms source-add hold v1\n" + signer + "\n"
+const (
+	publisherHeld     byte = 'H'
+	publisherReleased byte = 'R'
+)
+
+func failedAddRecord(signer string, state byte) string {
+	return string(state) + " panasms source-add hold v1\n" + signer + "\n"
 }
 
-// A hold survives journal cleanup, including when an independently installed PEM
-// occupies the key path. Only a later committed source-add releases it.
-func (s store) hasFailedAdd(dir *os.File, signer string) (bool, error) {
+var errForeignPublisherHold = reject("An unrelated file occupies the module publisher hold path")
+
+// A zero transition reads the record. A state change writes through the same
+// descriptor that supplied the validated record, preserving replacements at the path.
+func (s store) publisherHoldAt(dir *os.File, signer string, transition byte) (byte, error) {
 	if !signerPattern.MatchString(signer) {
-		return false, reject("Invalid module repository publisher")
+		return 0, reject("Invalid module repository publisher")
 	}
-	expected := failedAddRecord(signer)
-	raw, stat, err := readOwnedSnapshotAt(dir, failedAddName(signer), s.owner, int64(len(expected)))
-	if errors.Is(err, unix.ENOENT) {
-		return false, nil
+	name := failedAddName(signer)
+	var entry unix.Stat_t
+	dirFD := int(dir.Fd())
+	if err := unix.Fstatat(dirFD, name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return 0, err
 	}
+	expected := failedAddRecord(signer, publisherHeld)
+	if entry.Mode != unix.S_IFREG|0600 || entry.Uid != s.owner || entry.Nlink != 1 || entry.Size != int64(len(expected)) {
+		return 0, errForeignPublisherHold
+	}
+	access := unix.O_RDONLY
+	if transition != 0 {
+		access = unix.O_RDWR
+	}
+	fd, err := unix.Openat(dirFD, name, access|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	if string(raw) != expected || stat.Mode&07777 != 0600 {
-		return false, reject("Unexpected file at the module publisher hold path")
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	var opened unix.Stat_t
+	if err := unix.Fstat(fd, &opened); err != nil {
+		return 0, err
 	}
-	return true, nil
+	if opened.Dev != entry.Dev || opened.Ino != entry.Ino || opened.Ctim != entry.Ctim || opened.Mode != entry.Mode ||
+		opened.Uid != s.owner || opened.Nlink != 1 || opened.Size != entry.Size {
+		return 0, unix.EAGAIN
+	}
+	raw := make([]byte, len(expected))
+	if _, err := file.ReadAt(raw, 0); err != nil {
+		return 0, err
+	}
+	state := raw[0]
+	if (state != publisherHeld && state != publisherReleased) || string(raw[1:]) != expected[1:] {
+		return 0, errForeignPublisherHold
+	}
+	if transition != 0 {
+		if state != transition {
+			if _, err := file.WriteAt([]byte{transition}, 0); err != nil {
+				return 0, err
+			}
+			state = transition
+		}
+		if err := file.Sync(); err != nil {
+			return 0, err
+		}
+	}
+	var live unix.Stat_t
+	if err := unix.Fstatat(dirFD, name, &live, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return 0, err
+	}
+	if live.Dev != opened.Dev || live.Ino != opened.Ino || live.Mode != opened.Mode || live.Uid != s.owner ||
+		live.Nlink != 1 || live.Size != opened.Size {
+		return 0, unix.EAGAIN
+	}
+	return state, nil
 }
 
 func (c catalogService) holdFailedAdd(dir *os.File, signer string) error {
-	held, err := c.hasFailedAdd(dir, signer)
-	if err != nil {
+	_, err := c.publisherHoldAt(dir, signer, publisherHeld)
+	if errors.Is(err, unix.ENOENT) {
+		record := []byte(failedAddRecord(signer, publisherHeld))
+		err = atomicWriteAt(dir, failedAddName(signer), record, 0600, c.owner, uint32(os.Getegid()), "", true)
+		if errors.Is(err, unix.EEXIST) {
+			_, err = c.publisherHoldAt(dir, signer, publisherHeld)
+		}
+	}
+	if err != nil && !errors.Is(err, errForeignPublisherHold) {
 		return err
 	}
-	if held {
-		return dir.Sync()
-	}
-	return atomicWriteAt(dir, failedAddName(signer), []byte(failedAddRecord(signer)), 0600, c.owner, uint32(os.Getegid()), "", true)
+	return dir.Sync()
 }
 
 func (c catalogService) clearFailedAdd(dir *os.File, signer string) error {
-	held, err := c.hasFailedAdd(dir, signer)
-	if err != nil {
+	_, err := c.publisherHoldAt(dir, signer, publisherReleased)
+	if err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}
-	if !held {
-		return dir.Sync()
+	return dir.Sync()
+}
+
+func (s lifecycle) publisherFenced(signer string) (bool, error) {
+	dir, err := trustedDirectory(s.root, s.owner)
+	if err != nil {
+		return false, err
 	}
-	return unlinkCatalogFile(dir, failedAddName(signer))
+	defer dir.Close()
+	state, err := s.publisherHoldAt(dir, signer, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return false, nil
+	}
+	if errors.Is(err, errForeignPublisherHold) {
+		return true, nil
+	}
+	return state == publisherHeld, err
 }
 
 func (s lifecycle) activePublisherKey(signer string) (ed25519.PublicKey, error) {
-	dir, err := trustedDirectory(s.root, s.owner)
-	if err != nil {
-		return nil, err
-	}
-	defer dir.Close()
-	held, err := s.hasFailedAdd(dir, signer)
+	held, err := s.publisherFenced(signer)
 	if err != nil {
 		return nil, err
 	}

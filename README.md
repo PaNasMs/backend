@@ -367,10 +367,17 @@ prove a fan is connected. SMART and temperature polling stay configurable withou
 Administrators manage catalog URLs from the repository icon in Modules. The official
 `https://panasms.github.io/module-registry/` source is added by default. Removing a source keeps
 installed modules, and with no sources the panel still accepts module archive uploads. The list is
-stored in `/etc/panasms/module-sources.json`. Its filesystem must support user extended
-attributes so recovery can identify a committed addition. If adding a new publisher fails before
+stored in `/etc/panasms/module-sources.json`. On filesystems with user extended
+attributes, recovery can recognize a committed addition immediately after the configuration rename.
+Without that support, an interruption between the rename and its journal update requires confirming
+the publisher again. If adding a new publisher fails before
 the configuration is replaced, recovery preserves later edits and leaves that publisher inactive.
-To enroll it, review the repository and confirm its fingerprint again.
+If the repository already appears in Modules, remove its entry first. Then add the repository
+and confirm its fingerprint to enroll the publisher. If an independently installed key has a
+different fingerprint, preserve it outside the active key directory before enrolling the new key.
+An unrelated file on the publisher's hold path also needs to be moved aside. The repository manager locks its state during
+changes and recovery. Make manual edits to its private state files only while the manager and
+module operations are stopped.
 
 A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
 `catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a

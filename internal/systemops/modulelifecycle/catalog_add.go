@@ -2,12 +2,15 @@ package modulelifecycle
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"panasms.local/backend/internal/systemops"
 )
 
 const sourceAddAttribute = "user.panasms-source-add"
@@ -31,9 +34,40 @@ func (c catalogService) sourceAddCommitted(dir *os.File, id string) (bool, error
 	return err == nil && string(value[:n]) == id, err
 }
 
+func (c catalogService) recordSourceAddCommit(dir *os.File, change *sourceChange) error {
+	change.AddCommitted = true
+	raw, err := json.Marshal(change)
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxSourceState {
+		return reject("Module repository journal is too large")
+	}
+	return atomicAt(dir, sourceIntent, raw, 0600, c.owner)
+}
+
+var errSourceAddFenced = reject("Repository publisher remains inactive. Review the local key and enroll the repository again")
+
+func (c catalogService) discardSourceAdd(dir *os.File, change sourceChange) error {
+	for signer := range change.Keys {
+		if err := c.holdFailedAdd(dir, signer); err != nil {
+			return err
+		}
+	}
+	if c.sourceBoundary != nil {
+		if err := c.sourceBoundary("rollback-sync"); err != nil {
+			return err
+		}
+	}
+	if err := dir.Sync(); err != nil {
+		return err
+	}
+	return unlinkCatalogFile(dir, sourceIntent)
+}
+
 func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error {
 	nonce, parseErr := hex.DecodeString(change.AddID)
-	if !change.Add || parseErr != nil || len(nonce) != 16 || len(change.Keys) > 1 || len(change.Retired) != 0 {
+	if !archiveDigest.MatchString(change.AddedRow) || !change.Add || parseErr != nil || len(nonce) != 16 || len(change.Keys) > 1 || len(change.Retired) != 0 {
 		return reject("Invalid module repository journal")
 	}
 	for signer, raw := range change.Keys {
@@ -52,46 +86,42 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	if err := config.Sync(); err != nil {
 		return err
 	}
-	committed, err := c.sourceAddCommitted(config, change.AddID)
-	if err != nil {
-		return err
-	}
-	if !committed {
-		for signer := range change.Keys {
-			if err := c.holdFailedAdd(dir, signer); err != nil {
-				return err
-			}
-		}
-		if c.sourceBoundary != nil {
-			if err := c.sourceBoundary("rollback-sync"); err != nil {
-				return err
-			}
-		}
-		if err := dir.Sync(); err != nil {
+	if !change.AddCommitted {
+		committed, err := c.sourceAddCommitted(config, change.AddID)
+		if err != nil {
 			return err
 		}
-		return unlinkCatalogFile(dir, sourceIntent)
+		if !committed {
+			return c.discardSourceAdd(dir, change)
+		}
+		if err := c.recordSourceAddCommit(dir, &change); err != nil {
+			return err
+		}
 	}
 	rows, err := c.sources()
 	if err != nil {
 		return err
 	}
-	if sourceState(rows) != change.After {
-		return reject("Module repository configuration changed during recovery")
-	}
-	for _, src := range sourceSpecs(rows) {
-		if src.ID != change.ID {
+	for i, src := range sourceSpecs(rows) {
+		if src.ID != change.ID || sourceState(rows[i:i+1]) != change.AddedRow {
 			continue
 		}
 		if src.Fingerprint != "" && len(src.Signers) == 1 {
 			signer := src.Signers[0]
-			if len(change.Keys) != 0 && change.Keys[signer] == nil {
+			if strings.HasPrefix(signer, "panasms-") || !signerPattern.MatchString(signer) || (len(change.Keys) != 0 && change.Keys[signer] == nil) {
 				return reject("Invalid module repository journal")
 			}
-			if err := c.confirmSourceAddKey(signer, src.Fingerprint, change.Keys[signer]); err != nil {
-				return err
+			err := c.confirmSourceAddKey(signer, src.Fingerprint, change.Keys[signer])
+			if err == nil {
+				err = c.clearFailedAdd(dir, signer)
 			}
-			if err := c.clearFailedAdd(dir, signer); err != nil {
+			if errors.Is(err, errForeignPublisherHold) || errors.Is(err, errSourceAddFenced) {
+				if cleanup := c.discardSourceAdd(dir, change); cleanup != nil {
+					return cleanup
+				}
+				return errSourceAddFenced
+			}
+			if err != nil {
 				return err
 			}
 		} else if len(change.Keys) != 0 {
@@ -99,7 +129,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		}
 		return unlinkCatalogFile(dir, sourceIntent)
 	}
-	return reject("Invalid module repository journal")
+	return c.discardSourceAdd(dir, change)
 }
 
 func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged []byte) error {
@@ -134,11 +164,15 @@ func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged [
 	}
 	live, err := readOwnedAt(keys, name, c.owner, 8192)
 	if err != nil {
+		var rejected *systemops.Rejected
+		if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
+			return errSourceAddFenced
+		}
 		return err
 	}
 	key, err := discoveryKey(live)
 	if err != nil || publicFingerprint(key) != fingerprint {
-		return reject("Repository signing key changed")
+		return errSourceAddFenced
 	}
 	return keys.Sync()
 }

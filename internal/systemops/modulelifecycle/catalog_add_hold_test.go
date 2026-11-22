@@ -1,9 +1,11 @@
 package modulelifecycle
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +16,7 @@ func TestForeignPublisherHoldFencesOnlyItsSigner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dir.Close()
-	path := filepath.Join(c.root, failedAddName("pending"))
+	path := filepath.Join(c.root, holdPrefix("pending")+strings.Repeat("a", 32))
 	if err := os.Symlink("operator-owned", path); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,6 @@ func TestPublisherHoldTransitionsPreserveInode(t *testing.T) {
 	}
 	defer dir.Close()
 	const signer = "fixture"
-	path := filepath.Join(c.root, failedAddName(signer))
 	var first os.FileInfo
 	for _, want := range []bool{true, false, true} {
 		if want {
@@ -60,7 +61,11 @@ func TestPublisherHoldTransitionsPreserveInode(t *testing.T) {
 		if err != nil || fenced != want {
 			t.Fatalf("expected fenced=%v, got %v, %v", want, fenced, err)
 		}
-		info, err := os.Stat(path)
+		names, err := publisherHoldNames(dir, signer)
+		if err != nil || len(names) != 1 {
+			t.Fatalf("expected one hold: %v %v", names, err)
+		}
+		info, err := os.Stat(filepath.Join(c.root, names[0]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,8 +84,8 @@ func TestPublisherHoldPreservesAnotherSignersRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dir.Close()
-	path := filepath.Join(c.root, failedAddName("pending"))
-	foreign := failedAddRecord("another", publisherReleased)
+	path := filepath.Join(c.root, holdPrefix("pending")+strings.Repeat("a", 32))
+	foreign := failedAddRecord(holdPrefix("another")+strings.Repeat("a", 32), publisherReleased)
 	if err := os.WriteFile(path, []byte(foreign), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -99,48 +104,64 @@ func TestPublisherHoldPreservesAnotherSignersRecord(t *testing.T) {
 	}
 }
 
-func TestMovingForeignHoldPreservesPublisherFence(t *testing.T) {
+func TestRollbackRecoversWhenBothHoldPathsAreOccupied(t *testing.T) {
+	ctx := context.Background()
 	c, serve := catalogFixture(t)
+	const signer = "pending"
+	const add = "module.source-add"
+	params := servePendingRepository(t, &c)
+	stopped := errors.New("interrupted before config replacement")
+	c.sourceBoundary = func(phase string) error {
+		if phase == "key-written" {
+			return stopped
+		}
+		return nil
+	}
+	if _, err := executePlannedSource(t, c, add, params); !errors.Is(err, stopped) {
+		t.Fatal(err)
+	}
 	dir, err := trustedDirectory(c.root, c.owner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer dir.Close()
-	const signer = "pending"
-	path := filepath.Join(c.root, failedAddName(signer))
+	names, err := publisherHoldNames(dir, signer)
+	if err != nil || len(names) != 1 {
+		t.Fatalf("expected the original hold: %v %v", names, err)
+	}
+	files := []string{names[0], ".source-add-reserve-" + signer, holdPrefix(signer) + strings.Repeat("b", 32)}
+	if err := os.Rename(filepath.Join(c.root, names[0]), filepath.Join(c.root, "original.saved")); err != nil {
+		t.Fatal(err)
+	}
 	const contents = "operator's file"
-	if err := os.WriteFile(path, []byte(contents), 0400); err != nil {
-		t.Fatal(err)
-	}
-	reserve, err := reserveHoldDirectory(dir, signer, c.owner, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reserve.Close()
-	reservedFile := filepath.Join(c.root, ".source-add-reserve-"+signer, "0")
-	if err := os.WriteFile(reservedFile, []byte(contents), 0400); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.holdFailedAdd(dir, signer); err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range []string{path, reservedFile} {
-		destination := filepath.Join(c.root, "saved-"+filepath.Base(file))
-		if err := os.Rename(file, destination); err != nil {
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(c.root, name), []byte(contents), 0400); err != nil {
 			t.Fatal(err)
 		}
-		raw, err := os.ReadFile(destination)
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	if _, err := restarted.recoverCatalog(ctx, add); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback retained journal: %v", err)
+	}
+	serve("2.0.0", true)
+	visibleCatalog(t, restarted, "2.0.0", false)
+	for _, name := range files {
+		file := filepath.Join(c.root, name)
+		if err := os.Rename(file, file+".saved"); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(file + ".saved")
 		if err != nil || string(raw) != contents {
 			t.Fatalf("operator file changed: %v", err)
 		}
 	}
-	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
 	if held, err := restarted.publisherFenced(signer); err != nil || !held {
 		t.Fatalf("moving operator files released the publisher fence: %v", err)
 	}
-	serve("2.0.0", true)
-	visibleCatalog(t, restarted, "2.0.0", false)
-	if err := restarted.clearFailedAdd(dir, signer); err != nil {
+	if _, err := executePlannedSource(t, restarted, add, params); err != nil {
 		t.Fatal(err)
 	}
 	if held, err := restarted.publisherFenced(signer); err != nil || held {

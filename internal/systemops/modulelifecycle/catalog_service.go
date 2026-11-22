@@ -3,6 +3,7 @@ package modulelifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"panasms.local/backend/internal/systemops"
 )
@@ -156,7 +157,9 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		message = "Module repository added"
 	}
 	body := map[string]any{"message": message}
-	if cleanupErr != nil {
+	if errors.Is(cleanupErr, errSourceAddFenced) {
+		body["warnings"] = []string{errSourceAddFenced.Error()}
+	} else if cleanupErr != nil {
 		body["warnings"] = []string{"Repository change saved, but cleanup is incomplete. Review the module repositories before retrying."}
 	}
 	return json.Marshal(body)

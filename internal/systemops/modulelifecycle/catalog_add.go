@@ -1,6 +1,7 @@
 package modulelifecycle
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,7 +31,7 @@ func (c catalogService) recordSourceAddDecision(dir *os.File, change *sourceChan
 	return atomicAt(dir, sourceIntent, raw, 0600, c.owner)
 }
 
-var errSourceAddFenced = reject("Repository publisher remains inactive. Review the local key and enroll the repository again")
+var errSourceAddFenced = reject("The repository publisher is inactive. Review the local signing key, remove the repository entry, then add it again and confirm its fingerprint.")
 
 func (c catalogService) discardSourceAdd(dir, config *os.File, change sourceChange) error {
 	if change.AddDecision != "aborted" {
@@ -53,6 +54,16 @@ func (c catalogService) discardSourceAdd(dir, config *os.File, change sourceChan
 }
 
 func (c catalogService) retireSourceAdd(dir, config *os.File, change sourceChange) error {
+	if change.KeyStage != nil {
+		keys, err := trustedDirectory(c.keys, c.owner)
+		if err == nil {
+			defer keys.Close()
+			err = change.KeyStage.cleanup(keys)
+		}
+		if err != nil && !errors.Is(err, unix.ENOENT) {
+			return err
+		}
+	}
 	if err := change.Stage.cleanup(config); err != nil {
 		return err
 	}
@@ -63,6 +74,9 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	nonce, parseErr := hex.DecodeString(change.AddID)
 	if change.Stage == nil || change.AddID != change.Stage.ID || !signerPattern.MatchString(change.AddSigner) || strings.HasPrefix(change.AddSigner, "panasms-") || !archiveDigest.MatchString(change.AddedRow) || !change.Add || parseErr != nil || len(nonce) != 16 || len(change.Keys) > 1 || len(change.Retired) != 0 {
 		return reject("Invalid module repository journal")
+	}
+	if stage := change.KeyStage; stage != nil && (stage.Owner != c.owner || !sourceAddID.MatchString(stage.ID) || stage.ID == change.AddID || stage.Before.Inode != 0) {
+		return reject("Invalid module repository key stage")
 	}
 	for signer, raw := range change.Keys {
 		if signer != change.AddSigner {
@@ -81,7 +95,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		return err
 	}
 	switch change.AddDecision {
-	case "aborted":
+	case "preparing", "aborted":
 		return c.discardSourceAdd(dir, config, change)
 	case "":
 		committed, err := change.Stage.committed(config)
@@ -95,6 +109,14 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 			return err
 		}
 	case "committed":
+	case "key-preparing":
+		if change.KeyStage == nil || len(change.Keys) != 1 {
+			return reject("Invalid module repository journal")
+		}
+	case "key-ready", "key-confirmed":
+		if change.KeyStage == nil || len(change.Keys) != 0 || change.KeyStage.After.Inode == 0 {
+			return reject("Invalid module repository journal")
+		}
 	default:
 		return reject("Invalid module repository journal")
 	}
@@ -111,7 +133,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 			if signer != change.AddSigner {
 				return reject("Invalid module repository journal")
 			}
-			err := c.confirmSourceAddKey(signer, src.Fingerprint, change.Keys[signer])
+			err := c.confirmSourceAddKey(dir, &change, src.Fingerprint)
 			if err == nil {
 				err = c.clearFailedAdd(dir, signer)
 			}
@@ -137,7 +159,9 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	return c.discardSourceAdd(dir, config, change)
 }
 
-func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged []byte) error {
+func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, fingerprint string) error {
+	signer := change.AddSigner
+	staged := change.Keys[signer]
 	if len(staged) != 0 {
 		key, err := discoveryKey(staged)
 		if err != nil || publicFingerprint(key) != fingerprint {
@@ -156,15 +180,57 @@ func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged [
 		}
 	}
 	keys, err := trustedDirectory(c.keys, c.owner)
+	if len(staged) == 0 && errors.Is(err, unix.ENOENT) {
+		return errSourceAddFenced
+	}
 	if err != nil {
 		return err
 	}
 	defer keys.Close()
 	name := signer + ".pem"
 	if len(staged) != 0 {
-		err = atomicWriteAt(keys, name, staged, 0644, c.owner, uint32(os.Getegid()), true)
-		if err != nil && !errors.Is(err, unix.EEXIST) {
+		if change.KeyStage != nil {
+			if err := change.KeyStage.cleanup(keys); err != nil {
+				return err
+			}
+		}
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
 			return err
+		}
+		draft := sourceAddStage{ID: hex.EncodeToString(nonce[:]), Owner: c.owner}
+		draft, err = draft.writeDraft(keys, staged, 0644, func(s sourceAddStage) error {
+			change.KeyStage = &s
+			return c.recordSourceAddDecision(dir, change, "key-preparing")
+		})
+		if err != nil {
+			return err
+		}
+		if c.sourceBoundary != nil {
+			if err := c.sourceBoundary("key-preparing"); err != nil {
+				return err
+			}
+		}
+		change.KeyStage = &draft
+		change.Keys = nil
+		if err := c.recordSourceAddDecision(dir, change, "key-ready"); err != nil {
+			return err
+		}
+		if c.sourceBoundary != nil {
+			if err := c.sourceBoundary("key-ready"); err != nil {
+				return err
+			}
+		}
+	}
+	if change.AddDecision == "key-ready" {
+		err := change.KeyStage.publishKey(keys, name)
+		if err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, unix.ENOENT) {
+			return err
+		}
+		if err == nil && c.sourceBoundary != nil {
+			if err := c.sourceBoundary("key-published"); err != nil {
+				return err
+			}
 		}
 	}
 	live, err := readOwnedAt(keys, name, c.owner, 8192)
@@ -179,5 +245,13 @@ func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged [
 	if err != nil || publicFingerprint(key) != fingerprint {
 		return errSourceAddFenced
 	}
-	return keys.Sync()
+	if err := keys.Sync(); err != nil {
+		return err
+	}
+	// EEXIST leaves the draft in its private slot. Stop publication retries
+	// before releasing a hold so a later withdrawal of the verified PEM sticks.
+	if change.AddDecision == "key-ready" {
+		return c.recordSourceAddDecision(dir, change, "key-confirmed")
+	}
+	return nil
 }

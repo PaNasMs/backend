@@ -2,15 +2,20 @@ package modulelifecycle
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
-	"strconv"
+	"regexp"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-func failedAddName(signer string) string {
-	return ".source-add-hold-" + signer
+var holdNonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func holdPrefix(signer string) string {
+	return ".source-add-hold-" + signer + "."
 }
 
 const (
@@ -18,24 +23,21 @@ const (
 	publisherReleased byte = 'R'
 )
 
-func failedAddRecord(signer string, state byte) string {
-	return string(state) + " panasms source-add hold v1\n" + signer + "\n"
+func failedAddRecord(name string, state byte) string {
+	return string(state) + " panasms source-add hold v1\n" + name + "\n"
 }
 
 var errForeignPublisherHold = reject("An unrelated file occupies the module publisher hold path")
 
 // A zero transition reads the record. A state change writes through the same
 // descriptor that supplied the validated record, preserving replacements at the path.
-func (s store) publisherHoldAt(dir *os.File, name, signer string, transition byte) (byte, error) {
-	if !signerPattern.MatchString(signer) {
-		return 0, reject("Invalid module repository publisher")
-	}
+func (s store) publisherHoldAt(dir *os.File, name string, transition byte) (byte, error) {
 	var entry unix.Stat_t
 	dirFD := int(dir.Fd())
 	if err := unix.Fstatat(dirFD, name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return 0, err
 	}
-	expected := failedAddRecord(signer, publisherHeld)
+	expected := failedAddRecord(name, publisherHeld)
 	if entry.Mode != unix.S_IFREG|0600 || entry.Uid != s.owner || entry.Nlink != 1 || entry.Size != int64(len(expected)) {
 		return 0, errForeignPublisherHold
 	}
@@ -88,137 +90,79 @@ func (s store) publisherHoldAt(dir *os.File, name, signer string, transition byt
 }
 
 func foreignPublisherHold(err error) bool {
-	return errors.Is(err, errForeignPublisherHold) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.ELOOP)
+	return errors.Is(err, errForeignPublisherHold) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) ||
+		errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EROFS) || errors.Is(err, unix.ETXTBSY)
 }
 
-func (c catalogService) setPublisherHold(dir *os.File, name, signer string) error {
-	_, err := c.publisherHoldAt(dir, name, signer, publisherHeld)
-	if errors.Is(err, unix.ENOENT) {
-		record := []byte(failedAddRecord(signer, publisherHeld))
-		err = atomicWriteAt(dir, name, record, 0600, c.owner, uint32(os.Getegid()), true)
-		if errors.Is(err, unix.EEXIST) {
-			_, err = c.publisherHoldAt(dir, name, signer, publisherHeld)
-		}
+func publisherHoldNames(dir *os.File, signer string) ([]string, error) {
+	if !signerPattern.MatchString(signer) {
+		return nil, reject("Invalid module repository publisher")
 	}
-	return err
-}
-
-// Recovery owns a separate record if the ordinary hold path is occupied. Moving
-// aside an operator's file then leaves the publisher inactive until confirmation.
-func reserveHoldDirectory(dir *os.File, signer string, owner uint32, create bool) (*os.File, error) {
-	name := ".source-add-reserve-" + signer
-	if create {
-		return createDirectoryAt(dir, name, 0700, owner, false)
-	}
-	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	// A fresh descriptor starts enumeration at offset zero on every retry.
+	fd, err := unix.Openat(int(dir.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
-		unix.Close(fd)
+	list := os.NewFile(uintptr(fd), dir.Name())
+	defer list.Close()
+	names, err := list.Readdirnames(-1)
+	if err != nil {
 		return nil, err
 	}
-	if st.Uid != owner || st.Mode&0022 != 0 {
-		unix.Close(fd)
-		return nil, errForeignPublisherHold
+	var matches []string
+	prefix := holdPrefix(signer)
+	for _, name := range names {
+		if suffix, ok := strings.CutPrefix(name, prefix); ok && holdNonce.MatchString(suffix) {
+			matches = append(matches, name)
+		}
 	}
-	return os.NewFile(uintptr(fd), name), nil
+	return matches, nil
 }
 
 func (c catalogService) holdFailedAdd(dir *os.File, signer string) error {
-	err := c.setPublisherHold(dir, failedAddName(signer), signer)
-	if !foreignPublisherHold(err) {
-		if err != nil {
-			return err
-		}
-		return dir.Sync()
-	}
-	reserve, err := reserveHoldDirectory(dir, signer, c.owner, true)
+	names, err := publisherHoldNames(dir, signer)
 	if err != nil {
 		return err
-	}
-	defer reserve.Close()
-	names, err := reserve.Readdirnames(-1)
-	if err != nil {
-		return err
-	}
-	for slot := 0; slot <= len(names); slot++ {
-		name := strconv.Itoa(slot)
-		err := c.setPublisherHold(reserve, name, signer)
-		if foreignPublisherHold(err) {
-			var stat unix.Stat_t
-			if unix.Fstatat(int(reserve.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW) == nil {
-				continue
-			}
-		}
-		if err != nil {
-			return err
-		}
-		if err := reserve.Sync(); err != nil {
-			return err
-		}
-		return dir.Sync()
-	}
-	return unix.EAGAIN
-}
-
-func (s store) reservePublisherState(dir *os.File, signer string, transition byte) (bool, error) {
-	reserve, err := reserveHoldDirectory(dir, signer, s.owner, false)
-	if errors.Is(err, unix.ENOENT) {
-		return false, nil
-	}
-	if foreignPublisherHold(err) || errors.Is(err, unix.ENOTDIR) {
-		return true, errForeignPublisherHold
-	}
-	if err != nil {
-		return false, err
-	}
-	defer reserve.Close()
-	names, err := reserve.Readdirnames(-1)
-	if err != nil {
-		return false, err
 	}
 	for _, name := range names {
-		state, err := s.publisherHoldAt(reserve, name, signer, 0)
-		if foreignPublisherHold(err) {
-			return true, errForeignPublisherHold
-		}
-		if err != nil {
-			return false, err
-		}
-		if transition == 0 && state == publisherHeld {
-			return true, nil
+		if _, err := c.publisherHoldAt(dir, name, publisherHeld); err == nil {
+			return dir.Sync()
+		} else if !foreignPublisherHold(err) {
+			return err
 		}
 	}
-	if transition == publisherReleased {
-		for _, name := range names {
-			if _, err := s.publisherHoldAt(reserve, name, signer, publisherReleased); err != nil {
-				if foreignPublisherHold(err) {
-					return true, errForeignPublisherHold
-				}
-				return false, err
-			}
+	// Occupied names belong to the operator. The new hold must survive even
+	// when every one of those entries is subsequently moved aside.
+	for {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return err
+		}
+		name := holdPrefix(signer) + hex.EncodeToString(nonce[:])
+		raw := []byte(failedAddRecord(name, publisherHeld))
+		err := atomicWriteAt(dir, name, raw, 0600, c.owner, uint32(os.Getegid()), true)
+		if !errors.Is(err, unix.EEXIST) {
+			return err
 		}
 	}
-	return false, nil
 }
 
 func (c catalogService) clearFailedAdd(dir *os.File, signer string) error {
-	_, err := c.publisherHoldAt(dir, failedAddName(signer), signer, publisherReleased)
-	if err == nil || errors.Is(err, unix.ENOENT) {
-		_, err = c.reservePublisherState(dir, signer, publisherReleased)
-	}
-	if foreignPublisherHold(err) {
-		// Re-enrollment can reuse an existing PEM, with no key in its journal
-		// to drive a subsequent rollback. Preserve the fence before reporting it.
-		if err := c.holdFailedAdd(dir, signer); err != nil {
-			return err
-		}
-		return errForeignPublisherHold
-	}
+	names, err := publisherHoldNames(dir, signer)
 	if err != nil {
 		return err
+	}
+	for _, name := range names {
+		_, err := c.publisherHoldAt(dir, name, publisherReleased)
+		if foreignPublisherHold(err) {
+			if err := c.holdFailedAdd(dir, signer); err != nil {
+				return err
+			}
+			return errForeignPublisherHold
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return dir.Sync()
 }
@@ -229,18 +173,20 @@ func (s lifecycle) publisherFenced(signer string) (bool, error) {
 		return false, err
 	}
 	defer dir.Close()
-	state, err := s.publisherHoldAt(dir, failedAddName(signer), signer, 0)
-	if foreignPublisherHold(err) || state == publisherHeld {
-		return true, nil
-	}
-	if err != nil && !errors.Is(err, unix.ENOENT) {
+	names, err := publisherHoldNames(dir, signer)
+	if err != nil {
 		return false, err
 	}
-	held, err := s.reservePublisherState(dir, signer, 0)
-	if foreignPublisherHold(err) {
-		return true, nil
+	for _, name := range names {
+		state, err := s.publisherHoldAt(dir, name, 0)
+		if foreignPublisherHold(err) || state == publisherHeld {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
 	}
-	return held, err
+	return false, nil
 }
 
 func (s lifecycle) activePublisherKey(signer string) (ed25519.PublicKey, error) {

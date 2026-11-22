@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 	"panasms.local/backend/internal/systemops"
@@ -12,19 +13,20 @@ import (
 
 var sourceAddID = regexp.MustCompile("^[0-9a-f]{32}$")
 
-const sourceAddSlot = "config"
+const sourceAddStageRoot = ".panasms-source-staging"
 
 type sourceAddFile struct {
-	Device, Inode uint64
-	Mode, Group   uint32
-	Digest        string
+	Inode       uint64
+	Mode, Group uint32
+	Digest      string
 }
 
 type sourceAddStage struct {
 	ID            string
-	Directory     directoryIdentity
+	Directory     uint64
 	Before, After sourceAddFile
 	Owner         uint32
+	Writing       bool `json:",omitempty"`
 }
 
 func sourceAddFileAt(dir *os.File, name string, owner uint32) (sourceAddFile, []byte, error) {
@@ -35,32 +37,30 @@ func sourceAddFileAt(dir *os.File, name string, owner uint32) (sourceAddFile, []
 	if err != nil {
 		return sourceAddFile{}, nil, err
 	}
-	return sourceAddFile{uint64(st.Dev), st.Ino, st.Mode, st.Gid, sourceDigest(raw)}, raw, nil
+	return sourceAddFile{st.Ino, st.Mode, st.Gid, sourceDigest(raw)}, raw, nil
 }
-
-func (s sourceAddStage) name() string { return ".source-add-" + s.ID }
 
 func (s sourceAddStage) open(config *os.File) (*os.File, error) {
 	if !sourceAddID.MatchString(s.ID) {
 		return nil, reject("Invalid source add stage")
 	}
-	fd, err := unix.Openat(int(config.Fd()), s.name(), unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_RDONLY, 0)
+	fd, err := unix.Openat(int(config.Fd()), sourceAddStageRoot, unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
 	var st unix.Stat_t
-	if err = unix.Fstat(fd, &st); err == nil && (st.Mode != unix.S_IFDIR|0700 || st.Uid != s.Owner ||
-		!s.Directory.Exists || s.Directory.Device != uint64(st.Dev) || s.Directory.Inode != st.Ino) {
+	if err = unix.Fstat(fd, &st); err == nil && (st.Mode&(unix.S_IFMT|0777) != unix.S_IFDIR|0700 || st.Uid != s.Owner ||
+		s.Directory == 0 || s.Directory != st.Ino) {
 		err = unix.ESTALE
 	}
 	if err != nil {
 		unix.Close(fd)
 		return nil, err
 	}
-	return os.NewFile(uintptr(fd), s.name()), nil
+	return os.NewFile(uintptr(fd), sourceAddStageRoot), nil
 }
 
-func (c catalogService) prepareSourceAdd(config *os.File, id string, next []byte) (sourceAddStage, error) {
+func (c catalogService) prepareSourceAdd(config *os.File, id string, next []byte, register func(sourceAddStage) error) (sourceAddStage, error) {
 	stage := sourceAddStage{ID: id, Owner: c.owner}
 	if !sourceAddID.MatchString(id) || len(next) > maxSourceState {
 		return stage, reject("Invalid source add stage")
@@ -80,29 +80,119 @@ func (c catalogService) prepareSourceAdd(config *os.File, id string, next []byte
 	if systemops.Decode(next, &after) != nil || len(after) == 0 || sourceState(rows) != sourceState(after[:len(after)-1]) {
 		return stage, reject("Module repository configuration changed before staging")
 	}
-	if err = unix.Mkdirat(int(config.Fd()), stage.name(), 0700); err != nil {
-		return stage, err
+	stage, err = stage.writeDraft(config, next, 0600, register)
+	if err == nil && c.sourceBoundary != nil {
+		err = c.sourceBoundary("draft-linked")
 	}
-	stage.Directory, err = directoryAt(config, stage.name(), c.owner)
-	if err != nil {
-		return stage, err
+	return stage, err
+}
+
+func (stage sourceAddStage) writeDraft(parentDir *os.File, next []byte, mode uint32, register func(sourceAddStage) error) (sourceAddStage, error) {
+	if !sourceAddID.MatchString(stage.ID) {
+		return stage, reject("Invalid source add stage")
 	}
-	dir, err := stage.open(config)
+	dir, err := createDirectoryAt(parentDir, sourceAddStageRoot, 0700, stage.Owner, false)
 	if err != nil {
 		return stage, err
 	}
 	defer dir.Close()
-	err = atomicWriteAt(dir, sourceAddSlot, next, 0600, c.owner, uint32(os.Getegid()), true)
-	if err == nil {
-		stage.After, _, err = sourceAddFileAt(dir, sourceAddSlot, c.owner)
+	var parent, private unix.Stat_t
+	if err := unix.Fstat(int(parentDir.Fd()), &parent); err != nil {
+		return stage, err
 	}
-	if err == nil {
-		err = config.Sync()
+	if err := unix.Fstat(int(dir.Fd()), &private); err != nil {
+		return stage, err
+	}
+	if private.Mode&0777 != 0700 || private.Dev != parent.Dev {
+		return stage, reject("Repository staging requires a private directory on the same filesystem")
+	}
+	stage.Directory = private.Ino
+	stage.Writing = true
+	if err := parentDir.Sync(); err != nil {
+		return stage, err
+	}
+	if err := register(stage); err != nil {
+		return stage, err
+	}
+	dirFD := int(dir.Fd())
+	fd, err := unix.Openat(dirFD, ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, mode)
+	anonymous := err == nil
+	if errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EINVAL) {
+		fd, err = unix.Openat(dirFD, stage.ID, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
 	}
 	if err != nil {
-		return stage, errors.Join(err, stage.cleanup(config))
+		return stage, err
 	}
+	file := os.NewFile(uintptr(fd), stage.ID)
+	defer file.Close()
+	var created unix.Stat_t
+	if err := file.Chmod(os.FileMode(mode)); err != nil {
+		return stage, err
+	}
+	if err := unix.Fstat(fd, &created); err != nil {
+		return stage, err
+	}
+	if created.Uid != stage.Owner || created.Mode&0777 != mode {
+		return stage, reject("Invalid source draft permissions")
+	}
+	stage.After = sourceAddFile{created.Ino, created.Mode, created.Gid, sourceDigest(next)}
+	if err := register(stage); err != nil {
+		return stage, err
+	}
+	if _, err := file.Write(next); err != nil {
+		return stage, err
+	}
+	if err := file.Sync(); err != nil {
+		return stage, err
+	}
+	if anonymous {
+		err = unix.Linkat(fd, "", dirFD, stage.ID, unix.AT_EMPTY_PATH)
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EPERM) {
+			err = unix.Linkat(unix.AT_FDCWD, "/proc/self/fd/"+strconv.Itoa(fd), dirFD, stage.ID, unix.AT_SYMLINK_FOLLOW)
+		}
+		if err != nil {
+			return stage, err
+		}
+	}
+	if err := dir.Sync(); err != nil {
+		return stage, err
+	}
+	stage.Writing = false
 	return stage, nil
+}
+
+func (s sourceAddStage) publishKey(parent *os.File, target string) error {
+	dir, err := s.open(parent)
+	if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+		return errSourceAddFenced
+	}
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	// On retry, make either side of the previous rename durable before
+	// interpreting a missing private slot as a completed publication.
+	if err := errors.Join(dir.Sync(), parent.Sync()); err != nil {
+		return err
+	}
+	draft, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
+	var rejected *systemops.Rejected
+	if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
+		return errSourceAddFenced
+	}
+	if err != nil {
+		return err
+	}
+	if draft.Inode == 0 {
+		return unix.ENOENT
+	}
+	if draft != s.After {
+		return errSourceAddFenced
+	}
+	if err := unix.Renameat2(int(dir.Fd()), s.ID, int(parent.Fd()), target, unix.RENAME_NOREPLACE); err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), parent.Sync())
 }
 
 func (s sourceAddStage) publish(config *os.File, target string) (bool, error) {
@@ -115,18 +205,18 @@ func (s sourceAddStage) publish(config *os.File, target string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	draft, _, err := sourceAddFileAt(dir, sourceAddSlot, s.Owner)
+	draft, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
 	if err != nil {
 		return false, err
 	}
-	if s.After.Inode == 0 || draft != s.After || live != s.Before {
+	if s.After.Inode == 0 || s.Before.Inode == s.After.Inode || draft != s.After || live != s.Before {
 		return false, reject("Module repository configuration changed before publication")
 	}
 	flags := uint(unix.RENAME_NOREPLACE)
 	if s.Before.Inode != 0 {
 		flags = unix.RENAME_EXCHANGE
 	}
-	if err := unix.Renameat2(int(dir.Fd()), sourceAddSlot, int(config.Fd()), target, flags); err != nil {
+	if err := unix.Renameat2(int(dir.Fd()), s.ID, int(config.Fd()), target, flags); err != nil {
 		return false, err
 	}
 	return true, errors.Join(dir.Sync(), config.Sync())
@@ -137,6 +227,9 @@ func (s sourceAddStage) publish(config *os.File, target string) (bool, error) {
 // no-replace rename into an absent destination consumes the slot.
 func (s sourceAddStage) committed(config *os.File) (bool, error) {
 	dir, err := s.open(config)
+	if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -144,12 +237,17 @@ func (s sourceAddStage) committed(config *os.File) (bool, error) {
 	if err := errors.Join(dir.Sync(), config.Sync()); err != nil {
 		return false, err
 	}
-	var slot unix.Stat_t
-	err = unix.Fstatat(int(dir.Fd()), sourceAddSlot, &slot, unix.AT_SYMLINK_NOFOLLOW)
-	if errors.Is(err, unix.ENOENT) {
-		return s.Before.Inode == 0 && s.After.Inode != 0, nil
+	slot, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
+	if err != nil {
+		return false, err
 	}
-	return err == nil && s.Before.Inode != 0 && s.Before.Device == uint64(slot.Dev) && s.Before.Inode == slot.Ino, err
+	if s.After.Inode == 0 || slot == s.After {
+		return false, nil
+	}
+	if s.Before.Inode == 0 {
+		return slot.Inode == 0, nil
+	}
+	return s.Before.Inode != s.After.Inode && slot == s.Before, nil
 }
 
 func (s sourceAddStage) cleanup(config *os.File) error {
@@ -161,7 +259,7 @@ func (s sourceAddStage) cleanup(config *os.File) error {
 		return err
 	}
 	defer dir.Close()
-	slot, _, err := sourceAddFileAt(dir, sourceAddSlot, s.Owner)
+	slot, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
 	var foreign *systemops.Rejected
 	if errors.As(err, &foreign) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) ||
 		errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENXIO) {
@@ -171,20 +269,15 @@ func (s sourceAddStage) cleanup(config *os.File) error {
 		return err
 	}
 	if slot.Inode != 0 {
-		if slot != s.Before && slot != s.After {
+		// A named draft can be interrupted during its first write on
+		// filesystems without O_TMPFILE. Its inode was journaled before writing.
+		ownedPartial := s.Writing && slot.Inode == s.After.Inode && slot.Mode == s.After.Mode && slot.Group == s.After.Group
+		if slot != s.Before && slot != s.After && !ownedPartial {
 			return nil
 		}
-		if err = unlinkCatalogFile(dir, sourceAddSlot); err != nil {
+		if err = unlinkCatalogFile(dir, s.ID); err != nil {
 			return err
 		}
 	}
-	current, err := directoryAt(config, s.name(), s.Owner)
-	if err != nil || current != s.Directory {
-		return err
-	}
-	err = unix.Unlinkat(int(config.Fd()), s.name(), unix.AT_REMOVEDIR)
-	if err != nil && !errors.Is(err, unix.ENOTEMPTY) && !errors.Is(err, unix.ENOENT) {
-		return err
-	}
-	return config.Sync()
+	return dir.Sync()
 }

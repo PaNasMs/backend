@@ -178,6 +178,7 @@ type sourceChange struct {
 	AddDecision   string          `json:",omitempty"`
 	AddSigner     string          `json:",omitempty"`
 	Stage         *sourceAddStage `json:",omitempty"`
+	KeyStage      *sourceAddStage `json:",omitempty"`
 	AddedRow      string          `json:",omitempty"`
 	AddID         string          `json:",omitempty"`
 	Before, After string
@@ -440,11 +441,15 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		if err := c.holdFailedAdd(dir, change.AddSigner); err != nil {
 			return nil, err
 		}
-		stage, err := c.prepareSourceAdd(config, change.AddID, next)
+		stage, err := c.prepareSourceAdd(config, change.AddID, next, func(pending sourceAddStage) error {
+			change.Stage = &pending
+			return c.recordSourceAddDecision(dir, &change, "preparing")
+		})
 		if err != nil {
 			return nil, err
 		}
 		change.Stage = &stage
+		change.AddDecision = ""
 	}
 	raw, err := json.Marshal(change)
 	if err == nil && len(raw) > maxSourceState {

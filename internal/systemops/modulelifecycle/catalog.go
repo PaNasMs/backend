@@ -158,7 +158,7 @@ func (c catalogService) readGeneration(gen generation, src source) (catalogIndex
 		return catalogIndex{}, reject("Invalid cached module catalog")
 	}
 	err := verifyCatalog(gen, src, func(signer string) (ed25519.PublicKey, error) {
-		key, err := readPublicKey(c.keys, signer, c.owner)
+		key, err := c.activePublisherKey(signer)
 		if err == nil && src.Fingerprint != "" && publicFingerprint(key) != src.Fingerprint {
 			return nil, reject("Repository signing key changed")
 		}

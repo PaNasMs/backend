@@ -125,6 +125,10 @@ func atomicAt(directory *os.File, name string, raw []byte, mode uint32, owner ui
 }
 
 func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32) error {
+	return atomicWriteAt(directory, name, raw, mode, owner, group, "", false)
+}
+
+func atomicWriteAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32, marker string, createOnly bool) error {
 	if filepath.Base(name) != name || name == "." || name == ".." {
 		return reject("Invalid module state path")
 	}
@@ -137,6 +141,9 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 		return reject("Module state permissions are unsafe")
 	}
 	existed := err == nil
+	if existed && createOnly {
+		return unix.EEXIST
+	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
@@ -163,6 +170,11 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 	}
 	if _, err = file.Write(raw); err != nil {
 		return err
+	}
+	if marker != "" {
+		if err := unix.Fsetxattr(fd, sourceAddAttribute, []byte(marker), unix.XATTR_CREATE); err != nil {
+			return err
+		}
 	}
 	if err = file.Sync(); err != nil {
 		return err

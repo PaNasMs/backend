@@ -3,6 +3,7 @@ package modulelifecycle
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -174,6 +175,7 @@ func (c catalogService) keyBytes(signer string) ([]byte, error) {
 }
 
 type sourceChange struct {
+	AddID         string `json:",omitempty"`
 	Before, After string
 	ID            string
 	Add           bool
@@ -319,6 +321,9 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 		len(change.Retired) > 0 && (change.Add || len(change.Keys) > 0) {
 		return reject("Invalid module repository journal")
 	}
+	if change.AddID != "" {
+		return c.finishSourceAdd(dir, change)
+	}
 	sources, err := c.sources()
 	if err != nil {
 		return err
@@ -377,6 +382,13 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 // applySource distinguishes a pre-commit failure from post-commit cleanup.
 func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
+	if change.Add {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, err
+		}
+		change.AddID = hex.EncodeToString(nonce[:])
+	}
 	raw, err := json.Marshal(change)
 	if err != nil {
 		return nil, err
@@ -401,30 +413,6 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
 			return nil, err
 		}
-		if len(change.Keys) > 0 {
-			if err = os.Mkdir(c.keys, 0755); err != nil && !os.IsExist(err) {
-				return nil, err
-			}
-			parent, err := trustedDirectory(filepath.Dir(c.keys), c.owner)
-			if err != nil {
-				return nil, err
-			}
-			err = parent.Sync()
-			parent.Close()
-			if err != nil {
-				return nil, err
-			}
-			keys, err := trustedDirectory(c.keys, c.owner)
-			if err != nil {
-				return nil, err
-			}
-			defer keys.Close()
-			for signer, key := range change.Keys {
-				if err = atomicAt(keys, signer+".pem", key, 0644, c.owner); err != nil {
-					return nil, err
-				}
-			}
-		}
 		if err = boundary("key-written"); err != nil {
 			return nil, err
 		}
@@ -434,7 +422,13 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		return nil, err
 	}
 	defer config.Close()
-	if err = atomicAt(config, filepath.Base(c.config), next, 0600, c.owner); err != nil {
+	if err = atomicWriteAt(config, filepath.Base(c.config), next, 0600, c.owner, uint32(os.Getegid()), change.AddID, false); err != nil {
+		if change.Add {
+			renamed, checkErr := c.sourceAddCommitted(config, change.AddID)
+			if checkErr == nil && renamed {
+				return err, nil
+			}
+		}
 		return nil, err
 	}
 	if err = boundary("config-written"); err != nil {

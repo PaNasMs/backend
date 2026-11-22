@@ -367,7 +367,10 @@ prove a fan is connected. SMART and temperature polling stay configurable withou
 Administrators manage catalog URLs from the repository icon in Modules. The official
 `https://panasms.github.io/module-registry/` source is added by default. Removing a source keeps
 installed modules, and with no sources the panel still accepts module archive uploads. The list is
-stored in `/etc/panasms/module-sources.json`.
+stored in `/etc/panasms/module-sources.json`. Its filesystem must support user extended
+attributes so recovery can identify a committed addition. If adding a new publisher fails before
+the configuration is replaced, recovery preserves later edits and leaves that publisher inactive.
+To enroll it, review the repository and confirm its fingerprint again.
 
 A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
 `catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a

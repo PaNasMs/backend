@@ -183,7 +183,7 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 			return nil, statErr
 		}
 		plan.bundle, err = inspectBundle(file, stat.Size(), s.core, s.architecture, func(signer string) (ed25519.PublicKey, error) {
-			key, err := readPublicKey(s.keys, signer, s.owner)
+			key, err := s.activePublisherKey(signer)
 			if err != nil {
 				return nil, err
 			}

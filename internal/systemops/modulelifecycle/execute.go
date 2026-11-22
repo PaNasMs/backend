@@ -88,7 +88,7 @@ func (s lifecycle) checkPlanLive(plan *prepared) error {
 
 func (s lifecycle) checkArchiveTrust(plan *prepared) error {
 	for _, signer := range names(plan.signingKeys) {
-		key, err := readPublicKey(s.keys, signer, s.owner)
+		key, err := s.activePublisherKey(signer)
 		if err != nil || !bytes.Equal(key, plan.signingKeys[signer]) {
 			return reject("Module publisher trust changed. Review a new operation plan.")
 		}

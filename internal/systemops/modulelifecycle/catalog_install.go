@@ -145,7 +145,7 @@ func (c catalogService) stageCatalogInstall(ctx context.Context, dir *os.File, p
 			if signer != text(entry.manifest, "signer") {
 				return nil, reject("Archive publisher does not match module catalog")
 			}
-			return readPublicKey(c.keys, signer, c.owner)
+			return c.activePublisherKey(signer)
 		})
 		if err != nil {
 			return err

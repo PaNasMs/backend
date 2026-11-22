@@ -2,8 +2,6 @@ package systemops
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,21 +87,8 @@ func TestCopyingSucceeds(t *testing.T) {
 // TestCopyingCancelReapsProcessGroup starts a long sleep, signals cancel via the
 // control pipe, and asserts the whole process group is gone afterwards.
 func TestCopyingCancelReapsProcessGroup(t *testing.T) {
-	read, write, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer read.Close()
-	defer write.Close()
-	env := func(key string) string {
-		if key == ControlFDEnv {
-			return strconv.Itoa(int(read.Fd()))
-		}
-		return ""
-	}
 	var buf logBuf
-	r := NewReporter(&buf, env)
-	defer r.Close()
+	r, write := reporterWithPipe(t, &buf)
 
 	// Cancel shortly after the copy starts.
 	go func() {
@@ -113,7 +98,7 @@ func TestCopyingCancelReapsProcessGroup(t *testing.T) {
 
 	start := time.Now()
 	// A shell that spawns a child sleep, so the process group has >1 member.
-	_, err = Copying(context.Background(), r, []string{"sh", "-c", "sleep 30 & wait"}, 30*time.Second)
+	_, err := Copying(context.Background(), r, []string{"sh", "-c", "sleep 30 & wait"}, 30*time.Second)
 	if err != ErrCancelled {
 		t.Fatalf("copying cancel: got %v, want ErrCancelled", err)
 	}
@@ -127,18 +112,8 @@ func TestKillGroupEscalation(t *testing.T) {
 	if _, err := lookPathSh(); err != nil {
 		t.Skip("sh unavailable")
 	}
-	read, write, _ := os.Pipe()
-	defer read.Close()
-	defer write.Close()
-	env := func(key string) string {
-		if key == ControlFDEnv {
-			return strconv.Itoa(int(read.Fd()))
-		}
-		return ""
-	}
 	var buf logBuf
-	r := NewReporter(&buf, env)
-	defer r.Close()
+	r, write := reporterWithPipe(t, &buf)
 
 	go func() {
 		time.Sleep(300 * time.Millisecond)

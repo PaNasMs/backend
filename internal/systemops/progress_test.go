@@ -3,32 +3,38 @@ package systemops
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // reporterWithPipe builds a Reporter whose control descriptor is the read end
 // of a fresh pipe, returning the write end for the test to drive.
-func reporterWithPipe(t *testing.T, progress *bytes.Buffer) (*Reporter, *os.File) {
+func reporterWithPipe(t *testing.T, progress io.Writer) (*Reporter, *os.File) {
 	t.Helper()
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	fd, err := unix.FcntlInt(read.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	read.Close()
+	if err != nil {
+		write.Close()
+		t.Fatal(err)
+	}
 	env := func(key string) string {
 		if key == ControlFDEnv {
-			return strconv.Itoa(int(read.Fd()))
+			return strconv.Itoa(fd)
 		}
 		return ""
 	}
 	r := NewReporter(progress, env)
 	t.Cleanup(func() { r.Close(); write.Close() })
-	// NewReporter reopened the fd as its own *os.File; the original read end can
-	// be closed by the test's pipe pair going out of scope, but keep it simple:
-	// hand back the write end for signalling.
-	_ = read
 	return r, write
 }
 
@@ -95,4 +101,16 @@ func TestCheckpointEOFCancels(t *testing.T) {
 	if err := r.Checkpoint(); err != ErrCancelled {
 		t.Fatalf("after EOF: got %v, want ErrCancelled", err)
 	}
+}
+
+func TestFixtureRetainsControlPipe(t *testing.T) {
+	var buf bytes.Buffer
+	r, _ := reporterWithPipe(t, &buf)
+	for range 10 {
+		runtime.GC()
+		if _, err := r.control.Stat(); err != nil {
+			t.Fatalf("live reporter lost its control pipe: %v", err)
+		}
+	}
+	runtime.KeepAlive(r)
 }

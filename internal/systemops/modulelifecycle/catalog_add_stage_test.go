@@ -429,3 +429,67 @@ func stopAfterConfigReplace(stage string) error {
 	}
 	return nil
 }
+
+func TestRemoveMultipleSignersAfterIndependentSave(t *testing.T) {
+	c, serve := catalogFixture(t)
+	rows, err := c.sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = append(rows, map[string]any{"id": "old", "url": "https://old.example.org/", "signers": []any{"held", "retiring", "fixture"}})
+	saveRows := func(rows []map[string]any) []byte {
+		t.Helper()
+		raw, err := json.MarshalIndent(rows, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(c.config, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	saveRows(rows)
+	dir, err := trustedDirectory(c.root, c.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.holdFailedAdd(dir, "held")
+	dir.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := c.keyBytes("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retiring := filepath.Join(c.keys, "retiring.pem")
+	if err := os.WriteFile(retiring, key, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.sourceBoundary = stopAfterConfigReplace
+	raw, err := executePlannedSource(t, c, "module.source-remove", map[string]any{"target": "old"})
+	if err != nil || !bytes.Contains(raw, []byte("warnings")) {
+		t.Fatal(string(raw), err)
+	}
+	rows, err = c.sources()
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	rows[0]["label"] = "Edited after removal"
+	wantConfig := saveRows(rows)
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("3.0.0", true)
+	visibleCatalog(t, restarted, "3.0.0", false)
+	if _, err := restarted.activePublisherKey("retiring"); err == nil {
+		t.Fatal("unconfigured publisher remained active")
+	}
+	if got, err := os.ReadFile(retiring); err != nil || !bytes.Equal(got, key) {
+		t.Fatal("independent PEM was not preserved", err)
+	}
+	if got, err := os.ReadFile(c.config); err != nil || !bytes.Equal(got, wantConfig) {
+		t.Fatal("independent config was not preserved", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("removal journal still active", err)
+	}
+}

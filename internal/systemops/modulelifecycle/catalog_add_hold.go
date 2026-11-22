@@ -11,8 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const publisherHoldPrefix = ".source-add-hold-"
+
 func holdPrefix(signer string) string {
-	return ".source-add-hold-" + signer + "."
+	return publisherHoldPrefix + signer + "."
 }
 
 const (
@@ -98,7 +100,7 @@ func publisherHoldNames(dir *os.File, signer string) ([]string, error) {
 	return sourceRecordNames(dir, holdPrefix(signer))
 }
 
-func sourceRecordNames(dir *os.File, prefix string) ([]string, error) {
+func stateDirectoryNames(dir *os.File) ([]string, error) {
 	// A fresh descriptor starts enumeration at offset zero on every retry.
 	fd, err := unix.Openat(int(dir.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -106,7 +108,11 @@ func sourceRecordNames(dir *os.File, prefix string) ([]string, error) {
 	}
 	list := os.NewFile(uintptr(fd), dir.Name())
 	defer list.Close()
-	names, err := list.Readdirnames(-1)
+	return list.Readdirnames(-1)
+}
+
+func sourceRecordNames(dir *os.File, prefix string) ([]string, error) {
+	names, err := stateDirectoryNames(dir)
 	if err != nil {
 		return nil, err
 	}

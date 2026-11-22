@@ -168,3 +168,48 @@ func TestRollbackRecoversWhenBothHoldPathsAreOccupied(t *testing.T) {
 		t.Fatalf("confirmed publisher still fenced: %v", err)
 	}
 }
+
+func TestInactivePublisherReportIncludesUnconfiguredSignerAndForeignPath(t *testing.T) {
+	c, _ := catalogFixture(t)
+	dir, err := trustedDirectory(c.root, c.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	if err := c.holdFailedAdd(dir, "unconfigured"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.holdFailedAdd(dir, "reenrolled"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.clearFailedAdd(dir, "reenrolled"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.root, holdPrefix("unconfigured")+strings.Repeat("f", 32))
+	if err := os.WriteFile(path, []byte("operator's data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	holds, err := c.inactivePublisherHolds(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := holds["unconfigured"]; len(holds) != 1 || len(got) != 1 || got[0] != path {
+		t.Fatalf("unexpected durable holds: %v", holds)
+	}
+	for _, action := range []string{"module.source-add", "module.catalog-install"} {
+		raw, err := c.recoverCatalog(t.Context(), action)
+		if err != nil || !strings.Contains(string(raw), path) || !strings.Contains(string(raw), `"publisher":"unconfigured"`) {
+			t.Fatalf("recovery did not report held publisher and blocked path: %s, %v", raw, err)
+		}
+	}
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	holds, err = c.inactivePublisherHolds(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, found := holds["unconfigured"]; !found || len(paths) != 0 {
+		t.Fatalf("missing hold after preserving the foreign file: %v", holds)
+	}
+}

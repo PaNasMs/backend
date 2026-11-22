@@ -29,6 +29,7 @@ type sourceAddStage struct {
 	SeenVacant    bool `json:",omitempty"`
 	NamedVacant   bool `json:",omitempty"`
 	Writing       bool `json:",omitempty"`
+	displaced     *unix.Stat_t
 }
 
 func sourceAddFileAt(dir *os.File, name string, owner uint32) (sourceAddFile, []byte, error) {
@@ -197,7 +198,7 @@ func (stage sourceAddStage) writeDraftWithBoundary(parentDir *os.File, next []by
 	return stage, nil
 }
 
-func (s sourceAddStage) publishKey(parent *os.File, target string) error {
+func (s sourceAddStage) publishKey(parent *os.File, target string, boundary func(string) error) error {
 	dir, err := s.open(parent)
 	if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
 		return errSourceAddFenced
@@ -225,13 +226,22 @@ func (s sourceAddStage) publishKey(parent *os.File, target string) error {
 	if draft != s.After {
 		return errSourceAddFenced
 	}
-	if err := unix.Renameat2(int(dir.Fd()), s.ID, int(parent.Fd()), target, unix.RENAME_NOREPLACE); err != nil {
+	if boundary != nil {
+		err = boundary("key-rename")
+	}
+	if err == nil {
+		err = unix.Renameat2(int(dir.Fd()), s.ID, int(parent.Fd()), target, unix.RENAME_NOREPLACE)
+	}
+	if errors.Is(err, unix.EXDEV) {
+		return errSourceAddFenced
+	}
+	if err != nil {
 		return err
 	}
 	return errors.Join(dir.Sync(), parent.Sync())
 }
 
-func (s sourceAddStage) publish(config *os.File, target string) (bool, error) {
+func (s *sourceAddStage) publish(config *os.File, target string) (bool, error) {
 	dir, err := s.open(config)
 	if err != nil {
 		return false, err
@@ -254,6 +264,12 @@ func (s sourceAddStage) publish(config *os.File, target string) (bool, error) {
 	}
 	if err := unix.Renameat2(int(dir.Fd()), s.ID, int(config.Fd()), target, flags); err != nil {
 		return false, err
+	}
+	if s.Before.Inode != 0 {
+		var displaced unix.Stat_t
+		if err := unix.Fstatat(int(dir.Fd()), s.ID, &displaced, unix.AT_SYMLINK_NOFOLLOW); err == nil && displaced.Ino == s.Before.Inode {
+			s.displaced = &displaced
+		}
 	}
 	return true, errors.Join(dir.Sync(), config.Sync())
 }
@@ -298,6 +314,20 @@ func (s sourceAddStage) cleanup(config *os.File) error {
 		return err
 	}
 	defer dir.Close()
+	// An open descriptor can still change the old public config after exchange.
+	// Only the publishing helper witnessed its post-rename timestamps. On
+	// restart, retain that inode for reconciliation without touching its atime.
+	if s.Before.Inode != 0 && s.Before.Inode != s.After.Inode {
+		var live unix.Stat_t
+		err := unix.Fstatat(int(dir.Fd()), s.ID, &live, unix.AT_SYMLINK_NOFOLLOW)
+		if err != nil && !errors.Is(err, unix.ENOENT) {
+			return err
+		}
+		if err == nil && live.Ino == s.Before.Inode && (s.displaced == nil ||
+			live.Ctim != s.displaced.Ctim || live.Mtim != s.displaced.Mtim || live.Atim != s.displaced.Atim) {
+			return dir.Sync()
+		}
+	}
 	slot, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
 	var foreign *systemops.Rejected
 	if errors.As(err, &foreign) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) ||

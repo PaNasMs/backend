@@ -354,11 +354,18 @@ func TestInterruptedCatalogInstallRecoveryDoesNotReplay(t *testing.T) {
 		t.Fatal("Recovery attempted to download")
 		return nil, nil
 	}}
-	raw, err := restarted.recoverCatalog(ctx, "module.catalog-install")
-	if err != nil || !strings.Contains(string(raw), `"recoveryAction":"module.recover"`) {
-		t.Fatal(string(raw), err)
+	if err := os.WriteFile(c.config, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	assertCatalogStageClean(t, restarted)
+	for _, wantChanged := range []bool{true, false} {
+		var changed bool
+		raw, err := restarted.recoverCatalog(TrackSourceRepair(ctx, &changed), "module.catalog-install")
+		if err != nil || !strings.Contains(string(raw), `"recoveryAction":"module.recover"`) ||
+			!strings.Contains(string(raw), "Invalid module repository configuration") || changed != wantChanged {
+			t.Fatalf("recovery report %s, changed=%v, error=%v", raw, changed, err)
+		}
+		assertCatalogStageClean(t, restarted)
+	}
 	state, err := restarted.loadTransaction()
 	if err != nil || state == nil || state.Committed {
 		t.Fatal(state, err)

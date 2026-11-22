@@ -239,7 +239,7 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 		}
 	}
 	for change.AddDecision == "key-ready" {
-		seen, err := change.KeyStage.observeExistingKey(keys, name)
+		seen, err := change.KeyStage.observeExistingKey(keys, name, c.sourceBoundary)
 		if errors.Is(err, unix.ENOENT) {
 			break
 		}
@@ -262,7 +262,7 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 				return err
 			}
 		}
-		err = change.KeyStage.publishKey(keys, name)
+		err = change.KeyStage.publishKey(keys, name, c.sourceBoundary)
 		if errors.Is(err, unix.EEXIST) {
 			continue
 		}

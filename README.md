@@ -371,9 +371,15 @@ stored in `/etc/panasms/module-sources.json`. The helper keeps its enrollment jo
 staging files until recovery finishes. Leave those files in place when editing or restoring the
 configuration and publisher keys. If a new publisher fails to enroll, recovery preserves later
 edits and keeps that publisher inactive. Other catalogs can still refresh.
-If an editor saves through a descriptor opened before the configuration was replaced,
-its edits stay in the displaced file under `/etc/panasms/.panasms-source-staging/<transaction-id>`.
-Inspect that file when reconciling changes.
+
+Enrollment starts when the helper reserves the publisher in its state directory. If storage is
+full and the reservation fails, restore space and retry before installing the configuration or
+key manually. A failed reservation leaves the existing trust settings in effect.
+
+When recovery resumes after a configuration exchange, it retains the previous configuration in
+`/etc/panasms/.panasms-source-staging/<transaction-id>`. An editor may still have saved changes
+through a descriptor opened before the exchange. Inspect the retained file when reconciling
+settings and metadata.
 
 Before upgrading from a version that wrote legacy source journals, finish outstanding repository
 changes. Those journals contain row and key digests but do not record which process wrote the

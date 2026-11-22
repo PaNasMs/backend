@@ -57,7 +57,7 @@ func (c catalogService) claimPublisher(dir *os.File, change *sourceChange) error
 	for {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
-			return err
+			return systemops.BeforeMutation(err)
 		}
 		change.AddID = hex.EncodeToString(nonce[:])
 		name = claimPrefix + change.AddID
@@ -66,7 +66,7 @@ func (c catalogService) claimPublisher(dir *os.File, change *sourceChange) error
 			continue
 		}
 		if err != nil {
-			return err
+			return systemops.BeforeMutation(err)
 		}
 		break
 	}

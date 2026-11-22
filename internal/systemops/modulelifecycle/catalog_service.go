@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"panasms.local/backend/internal/systemops"
 )
@@ -159,7 +161,15 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 	}
 	body := map[string]any{"message": message}
 	if errors.Is(cleanupErr, errSourceAddFenced) {
-		body["warnings"] = []string{c.inactivePublisherAdvice()}
+		holds, lookupErr := c.inactivePublisherHolds(dir)
+		var conflicts []string
+		if lookupErr == nil {
+			row := plan.after[len(plan.after)-1]
+			for _, signer := range sourceSpecs([]map[string]any{row})[0].Signers {
+				conflicts = append(conflicts, holds[signer]...)
+			}
+		}
+		body["warnings"] = []string{c.inactivePublisherAdvice(conflicts)}
 	} else if cleanupErr != nil {
 		body["warnings"] = []string{"Repository change saved, but cleanup is incomplete. Review the module repositories before retrying."}
 	}
@@ -180,14 +190,17 @@ func (c catalogService) recoverCatalog(ctx context.Context, action string) (json
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(ctx, dir, nil); err != nil {
-		return nil, err
-	}
 	var next any
 	var checks []map[string]any
+	if err = c.repairSources(ctx, dir, nil); err != nil {
+		if action != "module.catalog-install" {
+			return nil, err
+		}
+		checks = append(checks, map[string]any{"label": "Source recovery", "value": err.Error()})
+	}
 	message := "Review the configured module repositories. The interrupted operation has not been repeated."
 	if action == "module.catalog-install" {
-		if err = c.cleanCatalogStage(); err != nil {
+		if err = c.cleanCatalogStage(ctx); err != nil {
 			return nil, err
 		}
 		raw, err := c.inspect()
@@ -201,36 +214,52 @@ func (c catalogService) recoverCatalog(ctx context.Context, action string) (json
 		if status.Pending {
 			next = "module.recover"
 		}
-		checks = []map[string]any{{"label": "Module transaction", "value": raw}}
+		checks = append(checks, map[string]any{"label": "Module transaction", "value": raw})
 		message = "Review the installed modules and recover the recorded transaction before retrying. The interrupted operation has not been repeated."
 	}
-	configured, err := c.sources()
-	if err != nil {
-		return nil, err
+	configured, sourceErr := c.sources()
+	if sourceErr != nil && action != "module.catalog-install" {
+		return nil, sourceErr
 	}
-	if action != "module.catalog-install" {
+	if sourceErr != nil {
+		checks = append(checks, map[string]any{"label": "Module repositories", "value": sourceErr.Error()})
+		message += " Check the module repository configuration."
+	} else if action != "module.catalog-install" {
 		checks = append(checks, map[string]any{"label": "Module repositories", "value": configured})
 	}
+	holds, err := c.inactivePublisherHolds(dir)
+	if err != nil {
+		if action != "module.catalog-install" {
+			return nil, err
+		}
+		checks = append(checks, map[string]any{"label": "Publisher status", "value": err.Error()})
+	}
 	var inactive []map[string]string
-	for _, src := range sourceSpecs(configured) {
-		for _, signer := range src.Signers {
-			held, err := c.publisherFenced(signer)
-			if err != nil {
-				return nil, err
-			}
-			if held {
+	var conflicts []string
+	for _, signer := range names(holds) {
+		conflicts = append(conflicts, holds[signer]...)
+		listed := false
+		for _, src := range sourceSpecs(configured) {
+			if slices.Contains(src.Signers, signer) {
 				inactive = append(inactive, map[string]string{"repository": src.ID, "publisher": signer})
+				listed = true
 			}
+		}
+		if !listed {
+			inactive = append(inactive, map[string]string{"publisher": signer})
 		}
 	}
 	if len(inactive) != 0 {
-		message += " " + c.inactivePublisherAdvice()
+		message += " " + c.inactivePublisherAdvice(conflicts)
 		checks = append(checks, map[string]any{"label": "Inactive repository publishers", "value": inactive})
 	}
 	return json.Marshal(map[string]any{"message": message, "checks": checks, "route": "/modules", "recoveryAction": next})
 }
 
-func (c catalogService) inactivePublisherAdvice() string {
+func (c catalogService) inactivePublisherAdvice(conflicts []string) string {
+	if len(conflicts) > 0 {
+		return "The repository publisher is inactive. Move the conflicting files to a backup location (" + strings.Join(conflicts, ", ") + "), then add the repository again and confirm its fingerprint. Remove its existing entry first if still configured."
+	}
 	keys, err := trustedDirectory(c.keys, c.owner)
 	if err == nil {
 		defer keys.Close()

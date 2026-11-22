@@ -75,7 +75,7 @@ const stagedToken = "00000000000000000000000000000000"
 const stageOwner = "catalog" // Internal upload namespace, never exposed through the API.
 const stageArchive = stageOwner + "-" + stagedToken + ".zip"
 
-func (c catalogService) cleanCatalogStage() error {
+func (c catalogService) cleanCatalogStage(ctx context.Context) error {
 	dir, err := trustedDirectory(filepath.Join(c.root, catalogStage), c.owner)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
@@ -84,7 +84,11 @@ func (c catalogService) cleanCatalogStage() error {
 		return err
 	}
 	defer dir.Close()
-	return unlinkCatalogFile(dir, stageArchive)
+	removed, err := removeCatalogFile(dir, stageArchive)
+	if changed, _ := ctx.Value(sourceRepairKey{}).(*bool); removed && changed != nil {
+		*changed = true
+	}
+	return err
 }
 
 func (c catalogService) stageCatalogInstall(ctx context.Context, dir *os.File, plan catalogInstallPlan, r *systemops.Reporter) error {
@@ -95,7 +99,7 @@ func (c catalogService) stageCatalogInstall(ctx context.Context, dir *os.File, p
 			return reject("Combined module download exceeds size limit")
 		}
 	}
-	if err := c.cleanCatalogStage(); err != nil {
+	if err := c.cleanCatalogStage(ctx); err != nil {
 		return err
 	}
 	if err := unix.Mkdirat(int(dir.Fd()), catalogStage, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
@@ -179,7 +183,7 @@ func (c catalogService) install(ctx context.Context, dir *os.File, plan catalogI
 		cancellable(r, false)
 	}()
 	defer func() {
-		if cleanupErr := c.cleanCatalogStage(); cleanupErr != nil {
+		if cleanupErr := c.cleanCatalogStage(ctx); cleanupErr != nil {
 			const warning = "Catalog staging cleanup is incomplete."
 			if err == nil {
 				// The delegated lifecycle has already committed; never replace

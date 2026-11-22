@@ -358,11 +358,13 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 		return err
 	}
 	state := sourceState(sources)
-	if state != change.Before && state != change.After {
+	committed := state == change.After
+	drifted := !committed && state != change.Before
+	if drifted && change.Add {
 		return reject("Module repository configuration changed during recovery")
 	}
-	committed := state == change.After
-	if change.Add != committed {
+	configured := sourceSpecs(sources)
+	if drifted || change.Add != committed {
 		retired := change.Retired
 		if retired == nil {
 			retired = map[string]string{}
@@ -370,14 +372,27 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 		for signer, key := range change.Keys {
 			retired[signer] = sourceDigest(key)
 		}
-		configured := sourceSpecs(sources)
 		for _, signer := range names(retired) {
 			expected := retired[signer]
 			if !archiveDigest.MatchString(expected) || !signerPattern.MatchString(signer) {
 				return reject("Invalid module repository journal")
 			}
-			if strings.HasPrefix(signer, "panasms-") || !change.Add && slices.ContainsFunc(configured, func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+			if strings.HasPrefix(signer, "panasms-") {
 				return reject("Cannot retire a configured publisher")
+			}
+			if !change.Add && slices.ContainsFunc(configured, func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+				if drifted {
+					continue
+				}
+				return reject("Cannot retire a configured publisher")
+			}
+			if drifted {
+				// A later save makes the removal ambiguous. Preserve the
+				// public key and fence this unconfigured signer for review.
+				if err := c.holdFailedAdd(dir, signer); err != nil {
+					return err
+				}
+				continue
 			}
 			current, err := c.keyBytes(signer)
 			if err != nil {
@@ -400,7 +415,7 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 			}
 		}
 	}
-	if !change.Add && committed {
+	if !change.Add && (committed || drifted && !slices.ContainsFunc(configured, func(s source) bool { return s.ID == change.ID })) {
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
 			return err
 		}

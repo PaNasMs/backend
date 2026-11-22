@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func servePendingRepository(t *testing.T, c *catalogService) map[string]any {
@@ -804,10 +806,18 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.sourceBoundary = func(phase string) error {
-			if phase == "config-written" && cut == "key-exists" {
+			if phase == "config-written" && cut != "key-publishing" {
 				return os.WriteFile(filepath.Join(c.keys, "pending.pem"), raw, 0600)
 			}
-			if phase == cut {
+			if phase == "key-link" {
+				switch cut {
+				case "immutable", "immutable-withdrawn":
+					return unix.EPERM
+				case "mounted", "mounted-withdrawn":
+					return unix.EXDEV
+				}
+			}
+			if phase == cut || phase == "key-exists" && cut != "key-publishing" {
 				os.Exit(exited)
 			}
 			return nil
@@ -816,7 +826,7 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 		t.Fatalf("child did not stop at %s: %v", cut, err)
 	}
 
-	for _, cut := range []string{"key-publishing", "key-exists"} {
+	for _, cut := range []string{"key-publishing", "key-exists", "immutable", "immutable-withdrawn", "mounted", "mounted-withdrawn"} {
 		t.Run(cut, func(t *testing.T) {
 			c, serve := catalogFixture(t)
 			params := servePendingRepository(t, &c)
@@ -841,13 +851,27 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 				t.Fatalf("expected helper exit at %s: %v, %s", cut, err, out)
 			}
 			path := filepath.Join(c.keys, "pending.pem")
-			withdrawn := cut == "key-exists"
+			withdrawn := cut == "key-exists" || cut == "immutable-withdrawn" || cut == "mounted-withdrawn"
+			var supplied os.FileInfo
+			if cut != "key-publishing" {
+				supplied, err = os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if expected := replies[url+"keys/pending.pem"]; len(expected) == 0 {
+					t.Fatal("missing reviewed publisher PEM")
+				} else if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, expected) {
+					t.Fatalf("existing publisher key changed before recovery: %v", err)
+				}
+			}
 			if withdrawn {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("expected an unpublished key, stat returned %v", err)
+			} else if cut == "key-publishing" {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("expected an unpublished key, stat returned %v", err)
+				}
 			}
 			serve("9.0.0", true)
 			visibleCatalog(t, c, "9.0.0", withdrawn)
@@ -860,6 +884,12 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 				}
 			} else if key, err := c.activePublisherKey("pending"); err != nil || publicFingerprint(key) != params["keyFingerprint"] {
 				t.Fatalf("recovery failed to publish the reviewed key: %v", err)
+			}
+			if supplied != nil && !withdrawn {
+				current, err := os.Stat(path)
+				if err != nil || !os.SameFile(supplied, current) || supplied.Mode() != current.Mode() {
+					t.Fatalf("recovery replaced or changed the existing PEM: %v", err)
+				}
 			}
 			files, err := os.ReadDir(filepath.Join(c.keys, sourceAddStageRoot))
 			if err != nil || len(files) != 0 {
@@ -924,4 +954,37 @@ func TestKeyObservationPreservesPublisherSymlink(t *testing.T) {
 	}
 	serve("10.0.0", true)
 	visibleCatalog(t, c, "10.0.0", true)
+}
+
+func TestCrossMountKeyPublicationLeavesUnrelatedCatalogAvailable(t *testing.T) {
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	blocked := false
+	c.sourceBoundary = func(phase string) error {
+		if phase == "key-rename" {
+			blocked = true
+			return unix.EXDEV
+		}
+		return nil
+	}
+	raw, err := executePlannedSource(t, c, "module.source-add", params)
+	if err != nil || !blocked || !bytes.Contains(raw, []byte(errSourceAddFenced.Error())) {
+		t.Fatalf("expected terminal publisher warning, got %s, %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the cross-mount conflict to retire the source journal: %v", err)
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	if held, err := restarted.publisherFenced("pending"); err != nil || !held {
+		t.Fatalf("expected only the affected publisher to remain inactive: %v", err)
+	}
+	if key, err := restarted.keyBytes("pending"); err != nil || key != nil {
+		t.Fatalf("unexpected public key after failed rename: %v", err)
+	}
+	serve("11.0.0", true)
+	visibleCatalog(t, restarted, "11.0.0", true)
+	drafts, err := os.ReadDir(filepath.Join(c.keys, sourceAddStageRoot))
+	if err != nil || len(drafts) != 0 {
+		t.Fatalf("expected retired private key draft: %v, %v", drafts, err)
+	}
 }

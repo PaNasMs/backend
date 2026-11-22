@@ -367,7 +367,41 @@ prove a fan is connected. SMART and temperature polling stay configurable withou
 Administrators manage catalog URLs from the repository icon in Modules. The official
 `https://panasms.github.io/module-registry/` source is added by default. Removing a source keeps
 installed modules, and with no sources the panel still accepts module archive uploads. The list is
-stored in `/etc/panasms/module-sources.json`.
+stored in `/etc/panasms/module-sources.json`. The helper keeps its enrollment journal and private
+staging files until recovery finishes. Leave those files in place when editing or restoring the
+configuration and publisher keys. If a new publisher fails to enroll, recovery preserves later
+edits and keeps that publisher inactive. Other catalogs can still refresh.
+
+Enrollment starts when the helper reserves the publisher in its state directory. If storage is
+full and the reservation fails, restore space and retry before installing the configuration or
+key manually. A failed reservation leaves the existing trust settings in effect.
+
+The helper stages the reviewed PEM privately and installs it at the signing key path only if
+that path is vacant. It verifies the live key before it saves the repository configuration.
+During this step the publisher remains inactive, even if its PEM is visible. If an add stops
+before the configuration is saved, recovery keeps the publisher inactive and preserves any
+public PEM for inspection. Retry the add to confirm its fingerprint.
+
+After the configuration is saved, recovery verifies the current key and activates the publisher
+if the fingerprint still matches. If you removed or replaced the key after the interruption,
+recovery respects that change and leaves the publisher inactive.
+
+When recovery resumes after a configuration exchange, it retains the previous configuration in
+`/etc/panasms/.panasms-source-staging/<transaction-id>`. An editor may still have saved changes
+through a descriptor opened before the exchange. Inspect the retained file when reconciling
+settings and metadata.
+
+Before upgrading from a version that wrote legacy source journals, finish outstanding repository
+changes. Those journals contain row and key digests but do not record which process wrote the
+files. If files were edited independently during an interrupted legacy change, preserve a backup
+and reconcile the public configuration and publisher keys before resuming it.
+
+To enroll the publisher again, remove its existing repository entry in Modules, then add it and
+confirm the fingerprint. If a locally installed key has a different fingerprint, preserve it
+outside the active key directory before enrolling the new key. If recovery reports a conflict at
+the key staging path, stop repository and module operations, move the conflicting entry to a
+backup location, then retry enrollment. Preserve any operator file occupying a publisher hold
+path the same way.
 
 A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
 `catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a

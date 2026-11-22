@@ -48,9 +48,11 @@ func New() Dispatcher {
 func deny(message string) error { return &systemops.Rejected{Message: message} }
 
 func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Request, r *systemops.Reporter) (result json.RawMessage, err error) {
-	mutated := false
+	mutated, repaired := false, false
 	defer func() {
-		if err != nil && !mutated {
+		if err != nil && repaired {
+			err = systemops.AfterMutation(err)
+		} else if err != nil && !mutated {
 			err = systemops.BeforeMutation(err)
 		}
 	}()
@@ -73,8 +75,12 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 			return nil, deny("Administrator permissions required")
 		}
 	}
+	ctx := context.Background()
+	if modulelifecycle.IsCatalogAction(req.Action) || mode == systemops.ModeQuery && req.View == "module-catalog" {
+		ctx = modulelifecycle.TrackSourceRepair(ctx, &repaired)
+	}
 	if mode == systemops.ModeQuery {
-		ctx := context.WithValue(context.Background(), moduleMemberKey{}, id.Role != "admin")
+		ctx = context.WithValue(ctx, moduleMemberKey{}, id.Role != "admin")
 		result, err := d.Query(ctx, req.View, req.Target, user)
 		if err == nil && id.Role != "admin" && req.View == "storage-options" {
 			return storagequery.Redact(result)
@@ -85,7 +91,7 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		return nil, deny("Parameters must be an object")
 	}
 	if mode == systemops.ModeRecover {
-		return d.Recover(context.Background(), req)
+		return d.Recover(ctx, req)
 	}
 	active, err := d.Changing()
 	if err != nil {
@@ -106,9 +112,9 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 	}
 	var planned json.RawMessage
 	if mode == systemops.ModeExecute && modulelifecycle.IsCatalogAction(req.Action) {
-		planned, err = systemops.WithCancellation(context.Background(), r, plan)
+		planned, err = systemops.WithCancellation(ctx, r, plan)
 	} else {
-		planned, err = plan(context.Background())
+		planned, err = plan(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -152,7 +158,7 @@ func (d Dispatcher) Handle(mode systemops.Mode, user string, req *systemops.Requ
 		return nil, err
 	}
 	mutated = true
-	ctx := context.WithValue(context.Background(), networkUserKey{}, user)
+	ctx = context.WithValue(ctx, networkUserKey{}, user)
 	ctx = context.WithValue(ctx, validatedPlanKey{}, p.Fingerprint)
 	ctx = context.WithValue(ctx, authorizedIdentityKey{}, id)
 	ctx = context.WithValue(ctx, moduleAuthorizationKey{}, func() error {

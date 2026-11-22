@@ -145,7 +145,7 @@ func (c catalogService) discover(ctx context.Context, input string) (map[string]
 		return nil, nil, err
 	}
 	if old != nil {
-		existing, err := discoveryKey(old)
+		existing, err := readPublicKey(c.keys, sig.Signer, c.owner)
 		if err != nil || publicFingerprint(existing) != digest {
 			return nil, nil, reject("This publisher ID already uses another public key")
 		}
@@ -174,17 +174,25 @@ func (c catalogService) keyBytes(signer string) ([]byte, error) {
 }
 
 type sourceChange struct {
-	Before, After string
-	ID            string
-	Add           bool
-	Keys          map[string][]byte `json:",omitempty"` // Added keys; also supports legacy removal journals.
-	Retired       map[string]string `json:",omitempty"` // SHA-256 of the exact key file bytes.
+	KeyBeforeConfig bool            `json:",omitempty"`
+	AddDecision     string          `json:",omitempty"`
+	AddSigner       string          `json:",omitempty"`
+	Stage           *sourceAddStage `json:",omitempty"`
+	KeyStage        *sourceAddStage `json:",omitempty"`
+	AddedRow        string          `json:",omitempty"`
+	AddID           string          `json:",omitempty"`
+	Before, After   string
+	ID              string
+	Add             bool
+	Keys            map[string][]byte `json:",omitempty"` // Added keys; also supports legacy removal journals.
+	Retired         map[string]string `json:",omitempty"` // SHA-256 of the exact key file bytes.
 }
 
 type sourcePlan struct {
-	change sourceChange
-	after  []map[string]any
-	public map[string]any
+	heldRemoval bool
+	change      sourceChange
+	after       []map[string]any
+	public      map[string]any
 }
 
 func sourceState(src []map[string]any) string {
@@ -252,7 +260,18 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 		}
 		details = []string{text(selected, "url"), "Installed modules are retained"}
 		for _, signer := range sourceSpecs([]map[string]any{selected})[0].Signers {
-			if strings.HasPrefix(signer, "panasms-") || slices.ContainsFunc(sourceSpecs(after), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+			if strings.HasPrefix(signer, "panasms-") {
+				continue
+			}
+			held, err := c.publisherFenced(signer)
+			if err != nil {
+				return out, err
+			}
+			if held {
+				out.heldRemoval = true
+				continue
+			}
+			if slices.ContainsFunc(sourceSpecs(after), func(s source) bool { return slices.Contains(s.Signers, signer) }) {
 				continue
 			}
 			raw, err := c.keyBytes(signer)
@@ -273,7 +292,7 @@ func (c catalogService) planSource(ctx context.Context, action string, p map[str
 	if err != nil {
 		return out, err
 	}
-	return sourcePlan{change, after, map[string]any{"target": change.ID, "confirmation": change.ID, "details": details, "publisherFingerprint": selected["fingerprint"], "fingerprint": fp}}, nil
+	return sourcePlan{heldRemoval: out.heldRemoval, change: change, after: after, public: map[string]any{"target": change.ID, "confirmation": change.ID, "details": details, "publisherFingerprint": selected["fingerprint"], "fingerprint": fp}}, nil
 }
 
 // Direct archive installs also use the key directory. Refuse to trust a
@@ -295,9 +314,15 @@ func (s store) checkSourceTrust() error {
 	return reject("Review the interrupted module repository change before installing modules")
 }
 
-// Config replacement is the commit point. On restart, discard an uncommitted
-// added key or finish retiring a removed key. Never touch installed receipts.
+// Config replacement is the commit point. Recovery keeps an uncommitted
+// enrollment inactive and finishes retiring keys for a committed removal.
 func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *systemops.Reporter) error {
+	if err := c.recoverSourceAddWrites(ctx, dir, r); err != nil {
+		return err
+	}
+	if err := c.recoverPublisherClaim(ctx, dir, r); err != nil {
+		return err
+	}
 	raw, err := readOwnedAt(dir, sourceIntent, c.owner, maxSourceState)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
@@ -310,7 +335,14 @@ func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *syst
 		return err
 	}
 	defer lock.Close()
-	return c.finishSourceChange(dir, raw)
+	if repaired, _ := ctx.Value(sourceRepairKey{}).(*bool); repaired != nil {
+		*repaired = true
+	}
+	err = c.finishSourceChange(dir, raw)
+	if err == errSourceAddFenced {
+		return nil
+	}
+	return err
 }
 
 func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
@@ -319,16 +351,21 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 		len(change.Retired) > 0 && (change.Add || len(change.Keys) > 0) {
 		return reject("Invalid module repository journal")
 	}
+	if change.AddID != "" {
+		return c.finishSourceAdd(dir, change)
+	}
 	sources, err := c.sources()
 	if err != nil {
 		return err
 	}
 	state := sourceState(sources)
-	if state != change.Before && state != change.After {
+	committed := state == change.After
+	drifted := !committed && state != change.Before
+	if drifted && change.Add {
 		return reject("Module repository configuration changed during recovery")
 	}
-	committed := state == change.After
-	if change.Add != committed {
+	configured := sourceSpecs(sources)
+	if drifted || change.Add != committed {
 		retired := change.Retired
 		if retired == nil {
 			retired = map[string]string{}
@@ -336,14 +373,27 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 		for signer, key := range change.Keys {
 			retired[signer] = sourceDigest(key)
 		}
-		configured := sourceSpecs(sources)
 		for _, signer := range names(retired) {
 			expected := retired[signer]
 			if !archiveDigest.MatchString(expected) || !signerPattern.MatchString(signer) {
 				return reject("Invalid module repository journal")
 			}
-			if strings.HasPrefix(signer, "panasms-") || !change.Add && slices.ContainsFunc(configured, func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+			if strings.HasPrefix(signer, "panasms-") {
 				return reject("Cannot retire a configured publisher")
+			}
+			if !change.Add && slices.ContainsFunc(configured, func(s source) bool { return slices.Contains(s.Signers, signer) }) {
+				if drifted {
+					continue
+				}
+				return reject("Cannot retire a configured publisher")
+			}
+			if drifted {
+				// A later save makes the removal ambiguous. Preserve the
+				// public key and fence this unconfigured signer for review.
+				if err := c.holdFailedAdd(dir, signer); err != nil {
+					return err
+				}
+				continue
 			}
 			current, err := c.keyBytes(signer)
 			if err != nil {
@@ -366,7 +416,7 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 			}
 		}
 	}
-	if !change.Add && committed {
+	if !change.Add && (committed || drifted && !slices.ContainsFunc(configured, func(s source) bool { return s.ID == change.ID })) {
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
 			return err
 		}
@@ -377,19 +427,85 @@ func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 // applySource distinguishes a pre-commit failure from post-commit cleanup.
 func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, err error) {
 	change := plan.change
-	raw, err := json.Marshal(change)
-	if err != nil {
-		return nil, err
+	var added source
+	// Removing an inactive row has no publisher key to retire. Invalidate
+	// its cache before replacing the config so later edits need no replay.
+	journal := !plan.heldRemoval || len(change.Retired) != 0
+	if change.Add {
+		row := plan.after[len(plan.after)-1]
+		added = sourceSpecs([]map[string]any{row})[0]
+		journal = len(change.Keys) != 0
+		if !journal && added.Fingerprint != "" && len(added.Signers) == 1 {
+			var err error
+			journal, err = c.publisherFenced(added.Signers[0])
+			if err != nil {
+				return nil, err
+			}
+		}
+		if journal {
+			change.KeyBeforeConfig = true
+			change.AddedRow = sourceTrustState(added)
+			change.AddSigner = added.Signers[0]
+		}
 	}
 	next, err := json.Marshal(plan.after)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > maxSourceState || len(next) > maxSourceState {
+	if len(next) > maxSourceState {
 		return nil, systemops.BeforeMutation(reject("Module repository state is too large"))
 	}
-	if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
+	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
+	if err != nil {
 		return nil, err
+	}
+	defer config.Close()
+	if change.AddSigner != "" {
+		// An early I/O failure can leave no journal to recover. Keep new or
+		// already-held publishers inactive until their enrollment completes.
+		if err := c.claimPublisher(dir, &change); err != nil {
+			return nil, err
+		}
+		stage, err := c.prepareSourceAdd(config, change.AddID, next, func(pending sourceAddStage) error {
+			change.Stage = &pending
+			return c.recordSourceAddDecision(dir, &change, "preparing")
+		})
+		if err != nil {
+			return nil, err
+		}
+		change.Stage = &stage
+		change.AddDecision = "preparing"
+	}
+	raw, err := json.Marshal(change)
+	if err == nil && len(raw) > maxSourceState {
+		err = reject("Module repository state is too large")
+		if change.Stage == nil {
+			err = systemops.BeforeMutation(err)
+		}
+	}
+	if err != nil {
+		if change.Stage != nil {
+			err = errors.Join(err, change.Stage.cleanup(config))
+		}
+		return nil, err
+	}
+	if journal {
+		if change.AddID != "" {
+			err = c.writeSourceAddRecord(dir, sourceIntent, raw, false)
+		} else {
+			err = atomicAt(dir, sourceIntent, raw, 0600, c.owner)
+		}
+		if err != nil {
+			// Sync may have failed after rename. Preserve the private stage if
+			// the journal can be observed and recovered on a subsequent run.
+			if change.Stage != nil {
+				var stat unix.Stat_t
+				if errors.Is(unix.Fstatat(int(dir.Fd()), sourceIntent, &stat, unix.AT_SYMLINK_NOFOLLOW), unix.ENOENT) {
+					err = errors.Join(err, change.Stage.cleanup(config))
+				}
+			}
+			return nil, err
+		}
 	}
 	boundary := func(stage string) error {
 		if c.sourceBoundary != nil {
@@ -397,48 +513,60 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 		}
 		return nil
 	}
-	if change.Add {
+	if change.Add || !journal {
 		if err = unlinkCatalogFile(dir, catalogCacheName(change.ID)); err != nil {
 			return nil, err
 		}
-		if len(change.Keys) > 0 {
-			if err = os.Mkdir(c.keys, 0755); err != nil && !os.IsExist(err) {
-				return nil, err
-			}
-			parent, err := trustedDirectory(filepath.Dir(c.keys), c.owner)
-			if err != nil {
-				return nil, err
-			}
-			err = parent.Sync()
-			parent.Close()
-			if err != nil {
-				return nil, err
-			}
-			keys, err := trustedDirectory(c.keys, c.owner)
-			if err != nil {
-				return nil, err
-			}
-			defer keys.Close()
-			for signer, key := range change.Keys {
-				if err = atomicAt(keys, signer+".pem", key, 0644, c.owner); err != nil {
-					return nil, err
-				}
-			}
-		}
+	}
+	if change.Add {
 		if err = boundary("key-written"); err != nil {
 			return nil, err
 		}
 	}
-	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
-	if err != nil {
-		return nil, err
+	if change.KeyBeforeConfig {
+		err := c.confirmSourceAddKey(dir, &change, added.Fingerprint)
+		if err != nil {
+			if errors.Is(err, errSourceAddFenced) {
+				if cleanup := c.discardSourceAdd(dir, config, change); cleanup != nil {
+					return nil, errors.Join(err, cleanup)
+				}
+				return nil, reject(c.inactivePublisherAdvice(nil))
+			}
+			return nil, err
+		}
+		if err := boundary("key-verified"); err != nil {
+			return nil, err
+		}
+		if err := c.recordSourceAddDecision(dir, &change, "config-ready"); err != nil {
+			return nil, err
+		}
+	} else if added.Fingerprint != "" && len(added.Signers) == 1 {
+		if err := c.verifySourceAddKey(added.Signers[0], added.Fingerprint); err != nil {
+			if errors.Is(err, errSourceAddFenced) {
+				return nil, reject("The repository signing key changed. Review the local key and confirm its fingerprint again.")
+			}
+			return nil, err
+		}
 	}
-	defer config.Close()
-	if err = atomicAt(config, filepath.Base(c.config), next, 0600, c.owner); err != nil {
+	if change.Stage != nil {
+		renamed, err := change.Stage.publish(config, filepath.Base(c.config))
+		if err != nil {
+			if renamed {
+				return err, nil
+			}
+			return nil, err
+		}
+	} else if err := atomicAt(config, filepath.Base(c.config), next, 0600, c.owner); err != nil {
 		return nil, err
 	}
 	if err = boundary("config-written"); err != nil {
 		return err, nil
+	}
+	if !journal {
+		return nil, nil
+	}
+	if change.Add {
+		return c.finishSourceAdd(dir, change), nil
 	}
 	return c.finishSourceChange(dir, raw), nil
 }

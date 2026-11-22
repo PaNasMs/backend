@@ -168,6 +168,10 @@ func inspectBundle(source io.ReaderAt, size int64, core, architecture string, ke
 }
 
 func readPublicKey(directory, signer string, trustedUID uint32) (ed25519.PublicKey, error) {
+	return loadPublicKey(directory, signer, trustedUID, false)
+}
+
+func loadPublicKey(directory, signer string, trustedUID uint32, durable bool) (ed25519.PublicKey, error) {
 	if !signerPattern.MatchString(signer) {
 		return nil, reject("Publisher not specified")
 	}
@@ -205,6 +209,14 @@ func readPublicKey(directory, signer string, trustedUID uint32) (ed25519.PublicK
 	public, ok := parsed.(ed25519.PublicKey)
 	if !ok {
 		return nil, reject("Invalid module signing key")
+	}
+	if durable {
+		if err := file.Sync(); err != nil {
+			return nil, err
+		}
+		if err := dir.Sync(); err != nil {
+			return nil, err
+		}
 	}
 	return public, nil
 }

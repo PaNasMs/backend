@@ -177,7 +177,9 @@ func Open(path string) (*Manager, error) {
 		tx, e = db.Begin()
 		if e == nil {
 			_, e = tx.Exec(`
- INSERT OR IGNORE INTO job_reviews SELECT id,updated FROM jobs WHERE status='failed' AND stage IN ('The exact operation target was not confirmed','State has changed. Review a new operation plan.');
+ INSERT OR IGNORE INTO job_reviews SELECT id,updated FROM jobs WHERE status='failed' AND stage IN ('The exact operation target was not confirmed','State has changed. Review a new operation plan.')
+ AND (action NOT IN ('module.source-add','module.source-remove','module.catalog-install')
+      OR CASE WHEN json_valid(result) THEN json_type(result,'$.noChanges') END='true');
  UPDATE jobs SET status='cancelled',stage='Cancelled before start',updated=datetime('now') WHERE status='queued';
  UPDATE jobs SET status='interrupted',stage='Process interrupted. Check the actual state before retrying.',updated=datetime('now') WHERE status='running';`)
 			if e == nil {

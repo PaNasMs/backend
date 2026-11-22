@@ -354,11 +354,18 @@ func TestInterruptedCatalogInstallRecoveryDoesNotReplay(t *testing.T) {
 		t.Fatal("Recovery attempted to download")
 		return nil, nil
 	}}
-	raw, err := restarted.recoverCatalog(ctx, "module.catalog-install")
-	if err != nil || !strings.Contains(string(raw), `"recoveryAction":"module.recover"`) {
-		t.Fatal(string(raw), err)
+	if err := os.WriteFile(c.config, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	assertCatalogStageClean(t, restarted)
+	for _, wantChanged := range []bool{true, false} {
+		var changed bool
+		raw, err := restarted.recoverCatalog(TrackSourceRepair(ctx, &changed), "module.catalog-install")
+		if err != nil || !strings.Contains(string(raw), `"recoveryAction":"module.recover"`) ||
+			!strings.Contains(string(raw), "Invalid module repository configuration") || changed != wantChanged {
+			t.Fatalf("recovery report %s, changed=%v, error=%v", raw, changed, err)
+		}
+		assertCatalogStageClean(t, restarted)
+	}
 	state, err := restarted.loadTransaction()
 	if err != nil || state == nil || state.Committed {
 		t.Fatal(state, err)
@@ -746,4 +753,50 @@ func TestHostedCatalogInstallReportsNativeCleanupAfterCommit(t *testing.T) {
 		t.Fatal(state, err)
 	}
 	assertCatalogStageClean(t, c)
+}
+
+type DispatcherCatalog struct {
+	Plan                 func(context.Context, string, map[string]any) (json.RawMessage, error)
+	Execute              func(context.Context, string, map[string]any, string, *systemops.Reporter, func() error) (json.RawMessage, error)
+	Query, Recover       func(context.Context, string) (json.RawMessage, error)
+	Journal, Config, Key string
+}
+
+// InterruptedCatalogForDispatcher exposes the filesystem-backed test catalog to
+// the dispatcher integration test without changing the installed paths.
+func InterruptedCatalogForDispatcher(t *testing.T, legacy bool) DispatcherCatalog {
+	t.Helper()
+	c, _ := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	fixture := DispatcherCatalog{Plan: c.planCatalog, Execute: c.executeCatalog, Query: c.query, Recover: c.recoverCatalog,
+		Journal: filepath.Join(c.root, sourceIntent), Config: c.config, Key: filepath.Join(c.keys, "pending.pem")}
+	if legacy {
+		plan, err := c.planSource(t.Context(), "module.source-add", params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		change := plan.change
+		raw, err := json.Marshal(map[string]any{"ID": change.ID, "Add": true, "Before": change.Before, "After": change.After, "Keys": change.Keys})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fixture.Journal, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fixture.Key, change.Keys["pending"], 0644); err != nil {
+			t.Fatal(err)
+		}
+		return fixture
+	}
+	stop := errors.New("interrupted before config replacement")
+	c.sourceBoundary = func(phase string) error {
+		if phase == "key-written" {
+			return stop
+		}
+		return nil
+	}
+	if _, err := executePlannedSource(t, c, "module.source-add", params); !errors.Is(err, stop) {
+		t.Fatal(err)
+	}
+	return fixture
 }

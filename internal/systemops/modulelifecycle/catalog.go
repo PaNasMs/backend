@@ -28,6 +28,7 @@ type catalogService struct {
 	config         string
 	download       catalogDownload
 	sourceBoundary func(string) error
+	draftBoundary  func(string, *os.File, []byte) error
 }
 
 type source struct {
@@ -158,7 +159,7 @@ func (c catalogService) readGeneration(gen generation, src source) (catalogIndex
 		return catalogIndex{}, reject("Invalid cached module catalog")
 	}
 	err := verifyCatalog(gen, src, func(signer string) (ed25519.PublicKey, error) {
-		key, err := readPublicKey(c.keys, signer, c.owner)
+		key, err := c.activePublisherKey(signer)
 		if err == nil && src.Fingerprint != "" && publicFingerprint(key) != src.Fingerprint {
 			return nil, reject("Repository signing key changed")
 		}
@@ -333,8 +334,14 @@ func (c catalogService) catalogLock(ctx context.Context, r *systemops.Reporter) 
 }
 
 func unlinkCatalogFile(dir *os.File, name string) error {
-	if err := unix.Unlinkat(int(dir.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return err
+	_, err := removeCatalogFile(dir, name)
+	return err
+}
+
+func removeCatalogFile(dir *os.File, name string) (bool, error) {
+	err := unix.Unlinkat(int(dir.Fd()), name, 0)
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return false, err
 	}
-	return dir.Sync()
+	return err == nil, dir.Sync()
 }

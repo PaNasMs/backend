@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"panasms.local/backend/internal/systemops"
 	"path/filepath"
 	"testing"
 )
@@ -102,5 +103,49 @@ func TestLegacyJobsRecoveryNeverReplaysDestructiveWork(t *testing.T) {
 		close(m.queue)
 		<-m.finished
 		m.db.Close()
+	}
+}
+
+func TestCatalogFailureAfterRepairStaysReviewableAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	m, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []struct {
+		id, stage string
+		unchanged bool
+	}{
+		{"stale", "State has changed. Review a new operation plan.", false},
+		{"confirmation", "The exact operation target was not confirmed", false},
+		{"clean", "State has changed. Review a new operation plan.", true},
+	} {
+		if _, err := m.db.Exec("INSERT INTO jobs VALUES(?,'admin','module.catalog-install','fixture','queued','Queued','now','now','{}')", job.id); err != nil {
+			t.Fatal(err)
+		}
+		m.run = func(context.Context, string, string, any) (json.RawMessage, error) {
+			return json.Marshal(systemops.Result{Error: job.stage, NoChanges: job.unchanged})
+		}
+		m.execute(work{Job: Job{ID: job.id, User: "admin"}, Request: Request{Action: "module.catalog-install"}})
+	}
+	m.Drain()
+	m.db.Close()
+	m, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.db.Close()
+	defer m.Drain()
+	if err := m.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := m.List()
+	if err != nil || len(jobs) != 2 {
+		t.Fatal(jobs, err)
+	}
+	for _, job := range jobs {
+		if job.ID == "clean" || job.Status != "failed" || !job.NeedsReview {
+			t.Fatal(job)
+		}
 	}
 }

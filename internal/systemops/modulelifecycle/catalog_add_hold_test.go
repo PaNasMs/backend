@@ -18,9 +18,6 @@ func TestForeignPublisherHoldFencesOnlyItsSigner(t *testing.T) {
 	if err := os.Symlink("operator-owned", path); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.holdFailedAdd(dir, "pending"); err != nil {
-		t.Fatal(err)
-	}
 	if fenced, err := c.publisherFenced("pending"); err != nil || !fenced {
 		t.Fatalf("publisher fence: %v %v", fenced, err)
 	}
@@ -29,6 +26,12 @@ func TestForeignPublisherHoldFencesOnlyItsSigner(t *testing.T) {
 	}
 	if target, err := os.Readlink(path); err != nil || target != "operator-owned" {
 		t.Fatalf("foreign symlink changed: %q %v", target, err)
+	}
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if fenced, err := c.publisherFenced("pending"); err != nil || !fenced {
+		t.Fatalf("unsuccessful enrollment lost its fence: %v", err)
 	}
 	serve("2.0.0", true)
 	visibleCatalog(t, c, "2.0.0", false)
@@ -93,5 +96,54 @@ func TestPublisherHoldPreservesAnotherSignersRecord(t *testing.T) {
 	raw, err := os.ReadFile(path)
 	if err != nil || string(raw) != foreign {
 		t.Fatalf("foreign record changed: %v", err)
+	}
+}
+
+func TestMovingForeignHoldPreservesPublisherFence(t *testing.T) {
+	c, serve := catalogFixture(t)
+	dir, err := trustedDirectory(c.root, c.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	const signer = "pending"
+	path := filepath.Join(c.root, failedAddName(signer))
+	const contents = "operator's file"
+	if err := os.WriteFile(path, []byte(contents), 0400); err != nil {
+		t.Fatal(err)
+	}
+	reserve, err := reserveHoldDirectory(dir, signer, c.owner, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserve.Close()
+	reservedFile := filepath.Join(c.root, ".source-add-reserve-"+signer, "0")
+	if err := os.WriteFile(reservedFile, []byte(contents), 0400); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.holdFailedAdd(dir, signer); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{path, reservedFile} {
+		destination := filepath.Join(c.root, "saved-"+filepath.Base(file))
+		if err := os.Rename(file, destination); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(destination)
+		if err != nil || string(raw) != contents {
+			t.Fatalf("operator file changed: %v", err)
+		}
+	}
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	if held, err := restarted.publisherFenced(signer); err != nil || !held {
+		t.Fatalf("moving operator files released the publisher fence: %v", err)
+	}
+	serve("2.0.0", true)
+	visibleCatalog(t, restarted, "2.0.0", false)
+	if err := restarted.clearFailedAdd(dir, signer); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := restarted.publisherFenced(signer); err != nil || held {
+		t.Fatalf("confirmed publisher still fenced: %v", err)
 	}
 }

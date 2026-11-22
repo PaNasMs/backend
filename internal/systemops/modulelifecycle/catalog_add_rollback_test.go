@@ -361,6 +361,8 @@ func TestCommittedSourceAddRecoveryPreservesUnrelatedEdits(t *testing.T) {
 				t.Fatal(err)
 			}
 			rows[0]["signers"] = []any{"fixture", "alternate"}
+			delete(rows[len(rows)-1], "official")
+			rows[len(rows)-1]["label"] = "operator annotation"
 			edited, err := json.MarshalIndent(rows, "", "  ")
 			if err != nil {
 				t.Fatal(err)
@@ -417,5 +419,129 @@ func TestCommittedSourceAddRecoveryPreservesUnrelatedEdits(t *testing.T) {
 				t.Fatalf("committed publisher key was not installed after restart: %v", activeErr)
 			}
 		})
+	}
+}
+
+func TestInterruptedReenrollmentHoldsPublisherAfterKeyReplacement(t *testing.T) {
+	const action = "module.source-add"
+	c, serve := catalogFixture(t)
+	params := servePendingRepository(t, &c)
+	plan, err := c.planSource(context.Background(), action, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(c.keys, "pending.pem")
+	if err := os.WriteFile(keyPath, plan.change.Keys["pending"], 0600); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := trustedDirectory(c.root, c.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.holdFailedAdd(dir, "pending")
+	dir.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed := false
+	c.sourceBoundary = func(phase string) error {
+		if phase == "publisher-confirmed" {
+			confirmed = true
+			return errors.New("interrupted after publisher confirmation")
+		}
+		return nil
+	}
+	result, err := executePlannedSource(t, c, action, params)
+	if err != nil || !confirmed || !bytes.Contains(result, []byte(`"warnings"`)) {
+		t.Fatalf("expected interruption after confirmation, got %s, %v", result, err)
+	}
+	if fenced, err := c.publisherFenced("pending"); err != nil || fenced {
+		t.Fatalf("confirmation failed to release the enrolled publisher: %v", err)
+	}
+	independent, err := c.keyBytes("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(c.keys, "replacement.pem")
+	if err := os.WriteFile(replacement, independent, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, keyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("4.0.0", true)
+	visibleCatalog(t, restarted, "4.0.0", true)
+	if current, err := restarted.keyBytes("pending"); err != nil || !bytes.Equal(current, independent) {
+		t.Fatalf("recovery changed the independently replaced PEM: %v", err)
+	}
+	if fenced, err := restarted.publisherFenced("pending"); err != nil || !fenced {
+		t.Fatalf("expected recovery to hold the publisher again: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.root, sourceIntent)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected recovery to retire the journal, stat returned %v", err)
+	}
+}
+
+func TestFirstSourceConfigCommitSurvivesIndependentAtomicSave(t *testing.T) {
+	c, serve, params, key := unconfiguredCatalogFixture(t)
+	if err := os.Remove(c.config); err != nil {
+		t.Fatal(err)
+	}
+	published := false
+	c.sourceBoundary = func(phase string) error {
+		if phase == "config-written" {
+			published = true
+			return errors.New("interrupted after publishing the first configuration")
+		}
+		return nil
+	}
+	result, err := executePlannedSource(t, c, "module.source-add", params)
+	if err != nil || !published || !bytes.Contains(result, []byte(`"warnings"`)) {
+		t.Fatalf("expected interruption after publishing the config, got %s, %v", result, err)
+	}
+	journal := filepath.Join(c.root, sourceIntent)
+	raw, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var change sourceChange
+	if err := json.Unmarshal(raw, &change); err != nil || change.AddDecision != "" {
+		t.Fatalf("expected undecided journal after config publication: %v", err)
+	}
+	rows, err := c.sources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0]["id"] != officialID || rows[1]["id"] != "fixture" {
+		t.Fatalf("unexpected first source configuration: %v", rows)
+	}
+	edited, err := json.MarshalIndent(rows[1:], "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := filepath.Join(filepath.Dir(c.config), "sources.new")
+	if err := os.WriteFile(next, edited, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, c.config); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := catalogService{lifecycle: c.lifecycle, config: c.config, download: c.download}
+	serve("5.0.0", true)
+	visibleCatalog(t, restarted, "5.0.0", false)
+	if active, err := restarted.activePublisherKey("fixture"); err != nil || publicFingerprint(active) != params["keyFingerprint"] {
+		t.Fatalf("recovery did not activate the confirmed publisher: %v", err)
+	}
+	if current, err := restarted.keyBytes("fixture"); err != nil || !bytes.Equal(current, key) {
+		t.Fatalf("recovery did not install the confirmed PEM: %v", err)
+	}
+	if current, err := os.ReadFile(c.config); err != nil || !bytes.Equal(current, edited) {
+		t.Fatalf("recovery changed the independent configuration save: %v", err)
+	}
+	if _, err := os.Stat(journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected recovery to retire the journal, stat returned %v", err)
 	}
 }

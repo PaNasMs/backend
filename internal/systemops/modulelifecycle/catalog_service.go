@@ -7,12 +7,12 @@ import (
 	"panasms.local/backend/internal/systemops"
 )
 
-type sourceAddRepairKey struct{}
+type sourceRepairKey struct{}
 
-// TrackSourceAddRepair records whether journal recovery may have changed state
-// during catalog planning, even when a later operation check fails.
-func TrackSourceAddRepair(ctx context.Context, repaired *bool) context.Context {
-	return context.WithValue(ctx, sourceAddRepairKey{}, repaired)
+// TrackSourceRepair records whether journal recovery may have changed state
+// during a catalog request, even when a later check fails.
+func TrackSourceRepair(ctx context.Context, repaired *bool) context.Context {
+	return context.WithValue(ctx, sourceRepairKey{}, repaired)
 }
 
 func IsCatalogAction(action string) bool {
@@ -105,7 +105,7 @@ func (c catalogService) executeCatalog(ctx context.Context, action string, p map
 		return nil, err
 	}
 	defer dir.Close()
-	if err = c.repairSources(TrackSourceAddRepair(ctx, &repaired), dir, r); err != nil {
+	if err = c.repairSources(TrackSourceRepair(ctx, &repaired), dir, r); err != nil {
 		return nil, err
 	}
 	stale := reject("State has changed. Review a new operation plan.")

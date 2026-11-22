@@ -13,29 +13,13 @@ import (
 	"panasms.local/backend/internal/systemops"
 )
 
-const sourceAddAttribute = "user.panasms-source-add"
-
-// The marker follows the replacement inode across rename and restart. An
-// independent edit can contain the exact planned rows without committing this add.
-func (c catalogService) sourceAddCommitted(dir *os.File, id string) (bool, error) {
-	fd, err := unix.Openat(int(dir.Fd()), filepath.Base(c.config), unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer unix.Close(fd)
-	var value [64]byte
-	n, err := unix.Fgetxattr(fd, sourceAddAttribute, value[:])
-	if errors.Is(err, unix.ENODATA) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.ERANGE) {
-		return false, nil
-	}
-	return err == nil && string(value[:n]) == id, err
+func sourceTrustState(src source) string {
+	raw, _ := json.Marshal(src)
+	return sourceDigest(raw)
 }
 
-func (c catalogService) recordSourceAddCommit(dir *os.File, change *sourceChange) error {
-	change.AddCommitted = true
+func (c catalogService) recordSourceAddDecision(dir *os.File, change *sourceChange, decision string) error {
+	change.AddDecision = decision
 	raw, err := json.Marshal(change)
 	if err != nil {
 		return err
@@ -48,11 +32,14 @@ func (c catalogService) recordSourceAddCommit(dir *os.File, change *sourceChange
 
 var errSourceAddFenced = reject("Repository publisher remains inactive. Review the local key and enroll the repository again")
 
-func (c catalogService) discardSourceAdd(dir *os.File, change sourceChange) error {
-	for signer := range change.Keys {
-		if err := c.holdFailedAdd(dir, signer); err != nil {
+func (c catalogService) discardSourceAdd(dir, config *os.File, change sourceChange) error {
+	if change.AddDecision != "aborted" {
+		if err := c.recordSourceAddDecision(dir, &change, "aborted"); err != nil {
 			return err
 		}
+	}
+	if err := c.holdFailedAdd(dir, change.AddSigner); err != nil {
+		return err
 	}
 	if c.sourceBoundary != nil {
 		if err := c.sourceBoundary("rollback-sync"); err != nil {
@@ -62,16 +49,23 @@ func (c catalogService) discardSourceAdd(dir *os.File, change sourceChange) erro
 	if err := dir.Sync(); err != nil {
 		return err
 	}
+	return c.retireSourceAdd(dir, config, change)
+}
+
+func (c catalogService) retireSourceAdd(dir, config *os.File, change sourceChange) error {
+	if err := change.Stage.cleanup(config); err != nil {
+		return err
+	}
 	return unlinkCatalogFile(dir, sourceIntent)
 }
 
 func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error {
 	nonce, parseErr := hex.DecodeString(change.AddID)
-	if !archiveDigest.MatchString(change.AddedRow) || !change.Add || parseErr != nil || len(nonce) != 16 || len(change.Keys) > 1 || len(change.Retired) != 0 {
+	if change.Stage == nil || change.AddID != change.Stage.ID || !signerPattern.MatchString(change.AddSigner) || strings.HasPrefix(change.AddSigner, "panasms-") || !archiveDigest.MatchString(change.AddedRow) || !change.Add || parseErr != nil || len(nonce) != 16 || len(change.Keys) > 1 || len(change.Retired) != 0 {
 		return reject("Invalid module repository journal")
 	}
 	for signer, raw := range change.Keys {
-		if !signerPattern.MatchString(signer) || strings.HasPrefix(signer, "panasms-") {
+		if signer != change.AddSigner {
 			return reject("Invalid module repository publisher")
 		}
 		if _, err := discoveryKey(raw); err != nil {
@@ -86,29 +80,35 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 	if err := config.Sync(); err != nil {
 		return err
 	}
-	if !change.AddCommitted {
-		committed, err := c.sourceAddCommitted(config, change.AddID)
+	switch change.AddDecision {
+	case "aborted":
+		return c.discardSourceAdd(dir, config, change)
+	case "":
+		committed, err := change.Stage.committed(config)
 		if err != nil {
 			return err
 		}
 		if !committed {
-			return c.discardSourceAdd(dir, change)
+			return c.discardSourceAdd(dir, config, change)
 		}
-		if err := c.recordSourceAddCommit(dir, &change); err != nil {
+		if err := c.recordSourceAddDecision(dir, &change, "committed"); err != nil {
 			return err
 		}
+	case "committed":
+	default:
+		return reject("Invalid module repository journal")
 	}
 	rows, err := c.sources()
 	if err != nil {
 		return err
 	}
-	for i, src := range sourceSpecs(rows) {
-		if src.ID != change.ID || sourceState(rows[i:i+1]) != change.AddedRow {
+	for _, src := range sourceSpecs(rows) {
+		if src.ID != change.ID || sourceTrustState(src) != change.AddedRow {
 			continue
 		}
 		if src.Fingerprint != "" && len(src.Signers) == 1 {
 			signer := src.Signers[0]
-			if strings.HasPrefix(signer, "panasms-") || !signerPattern.MatchString(signer) || (len(change.Keys) != 0 && change.Keys[signer] == nil) {
+			if signer != change.AddSigner {
 				return reject("Invalid module repository journal")
 			}
 			err := c.confirmSourceAddKey(signer, src.Fingerprint, change.Keys[signer])
@@ -116,7 +116,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 				err = c.clearFailedAdd(dir, signer)
 			}
 			if errors.Is(err, errForeignPublisherHold) || errors.Is(err, errSourceAddFenced) {
-				if cleanup := c.discardSourceAdd(dir, change); cleanup != nil {
+				if cleanup := c.discardSourceAdd(dir, config, change); cleanup != nil {
 					return cleanup
 				}
 				return errSourceAddFenced
@@ -127,9 +127,14 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		} else if len(change.Keys) != 0 {
 			return reject("Invalid module repository journal")
 		}
-		return unlinkCatalogFile(dir, sourceIntent)
+		if c.sourceBoundary != nil {
+			if err := c.sourceBoundary("publisher-confirmed"); err != nil {
+				return err
+			}
+		}
+		return c.retireSourceAdd(dir, config, change)
 	}
-	return c.discardSourceAdd(dir, change)
+	return c.discardSourceAdd(dir, config, change)
 }
 
 func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged []byte) error {
@@ -157,7 +162,7 @@ func (c catalogService) confirmSourceAddKey(signer, fingerprint string, staged [
 	defer keys.Close()
 	name := signer + ".pem"
 	if len(staged) != 0 {
-		err = atomicWriteAt(keys, name, staged, 0644, c.owner, uint32(os.Getegid()), "", true)
+		err = atomicWriteAt(keys, name, staged, 0644, c.owner, uint32(os.Getegid()), true)
 		if err != nil && !errors.Is(err, unix.EEXIST) {
 			return err
 		}

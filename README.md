@@ -367,17 +367,16 @@ prove a fan is connected. SMART and temperature polling stay configurable withou
 Administrators manage catalog URLs from the repository icon in Modules. The official
 `https://panasms.github.io/module-registry/` source is added by default. Removing a source keeps
 installed modules, and with no sources the panel still accepts module archive uploads. The list is
-stored in `/etc/panasms/module-sources.json`. On filesystems with user extended
-attributes, recovery can recognize a committed addition immediately after the configuration rename.
-Without that support, an interruption between the rename and its journal update requires confirming
-the publisher again. If adding a new publisher fails before
-the configuration is replaced, recovery preserves later edits and leaves that publisher inactive.
-If the repository already appears in Modules, remove its entry first. Then add the repository
-and confirm its fingerprint to enroll the publisher. If an independently installed key has a
-different fingerprint, preserve it outside the active key directory before enrolling the new key.
-An unrelated file on the publisher's hold path also needs to be moved aside. The repository manager locks its state during
-changes and recovery. Make manual edits to its private state files only while the manager and
-module operations are stopped.
+stored in `/etc/panasms/module-sources.json`. The helper keeps its enrollment journal and private
+staging files until recovery finishes. Leave those files in place when editing or restoring the
+configuration and publisher keys. If a new publisher fails to enroll, recovery preserves later
+edits and keeps that publisher inactive. Other catalogs can still refresh.
+
+To enroll the publisher again, remove its existing repository entry in Modules, then add it and
+confirm the fingerprint. If a locally installed key has a different fingerprint, preserve it
+outside the active key directory before enrolling the new key. If a separate operator file
+occupies the publisher's hold path, move that file aside. Stop the repository manager and module
+operations before making manual repairs.
 
 A custom HTTPS repository publishes `catalog.json` (schemaVersion 1 with a unique catalog id),
 `catalog.sig` (an Ed25519 envelope) and `keys/<signer>.pem` (an Ed25519 public key). Choose a

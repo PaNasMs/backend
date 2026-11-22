@@ -175,9 +175,11 @@ func (c catalogService) keyBytes(signer string) ([]byte, error) {
 }
 
 type sourceChange struct {
-	AddCommitted  bool   `json:",omitempty"`
-	AddedRow      string `json:",omitempty"`
-	AddID         string `json:",omitempty"`
+	AddDecision   string          `json:",omitempty"`
+	AddSigner     string          `json:",omitempty"`
+	Stage         *sourceAddStage `json:",omitempty"`
+	AddedRow      string          `json:",omitempty"`
+	AddID         string          `json:",omitempty"`
 	Before, After string
 	ID            string
 	Add           bool
@@ -321,24 +323,23 @@ func (c catalogService) repairSources(ctx context.Context, dir *os.File, r *syst
 		return err
 	}
 	defer lock.Close()
-	repaired, _ := ctx.Value(sourceAddRepairKey{}).(*bool)
-	err = c.finishSourceChange(dir, raw, repaired)
+	if repaired, _ := ctx.Value(sourceRepairKey{}).(*bool); repaired != nil {
+		*repaired = true
+	}
+	err = c.finishSourceChange(dir, raw)
 	if err == errSourceAddFenced {
 		return nil
 	}
 	return err
 }
 
-func (c catalogService) finishSourceChange(dir *os.File, raw []byte, repaired *bool) error {
+func (c catalogService) finishSourceChange(dir *os.File, raw []byte) error {
 	var change sourceChange
 	if systemops.Decode(raw, &change) != nil || identifier(change.ID) != nil || change.Before == change.After ||
 		len(change.Retired) > 0 && (change.Add || len(change.Keys) > 0) {
 		return reject("Invalid module repository journal")
 	}
 	if change.AddID != "" {
-		if repaired != nil {
-			*repaired = true
-		}
 		return c.finishSourceAdd(dir, change)
 	}
 	sources, err := c.sources()
@@ -417,22 +418,57 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 				return nil, err
 			}
 			change.AddID = hex.EncodeToString(nonce[:])
-			change.AddedRow = sourceState([]map[string]any{row})
+			change.AddedRow = sourceTrustState(src)
+			change.AddSigner = src.Signers[0]
 		}
-	}
-	raw, err := json.Marshal(change)
-	if err != nil {
-		return nil, err
 	}
 	next, err := json.Marshal(plan.after)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > maxSourceState || len(next) > maxSourceState {
+	if len(next) > maxSourceState {
 		return nil, systemops.BeforeMutation(reject("Module repository state is too large"))
+	}
+	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
+	if err != nil {
+		return nil, err
+	}
+	defer config.Close()
+	if change.AddID != "" {
+		// An early I/O failure can leave no journal to recover. Keep new or
+		// already-held publishers inactive until their enrollment completes.
+		if err := c.holdFailedAdd(dir, change.AddSigner); err != nil {
+			return nil, err
+		}
+		stage, err := c.prepareSourceAdd(config, change.AddID, next)
+		if err != nil {
+			return nil, err
+		}
+		change.Stage = &stage
+	}
+	raw, err := json.Marshal(change)
+	if err == nil && len(raw) > maxSourceState {
+		err = reject("Module repository state is too large")
+		if change.Stage == nil {
+			err = systemops.BeforeMutation(err)
+		}
+	}
+	if err != nil {
+		if change.Stage != nil {
+			err = errors.Join(err, change.Stage.cleanup(config))
+		}
+		return nil, err
 	}
 	if journal {
 		if err = atomicAt(dir, sourceIntent, raw, 0600, c.owner); err != nil {
+			// Sync may have failed after rename. Preserve the private stage if
+			// the journal can be observed and recovered on a subsequent run.
+			if change.Stage != nil {
+				var stat unix.Stat_t
+				if errors.Is(unix.Fstatat(int(dir.Fd()), sourceIntent, &stat, unix.AT_SYMLINK_NOFOLLOW), unix.ENOENT) {
+					err = errors.Join(err, change.Stage.cleanup(config))
+				}
+			}
 			return nil, err
 		}
 	}
@@ -450,24 +486,16 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 			return nil, err
 		}
 	}
-	config, err := trustedDirectory(filepath.Dir(c.config), c.owner)
-	if err != nil {
-		return nil, err
-	}
-	defer config.Close()
-	if err = atomicWriteAt(config, filepath.Base(c.config), next, 0600, c.owner, uint32(os.Getegid()), change.AddID, false); err != nil {
-		if change.AddID != "" {
-			renamed, checkErr := c.sourceAddCommitted(config, change.AddID)
-			if checkErr == nil && renamed {
+	if change.Stage != nil {
+		renamed, err := change.Stage.publish(config, filepath.Base(c.config))
+		if err != nil {
+			if renamed {
 				return err, nil
 			}
+			return nil, err
 		}
+	} else if err := atomicAt(config, filepath.Base(c.config), next, 0600, c.owner); err != nil {
 		return nil, err
-	}
-	if change.AddID != "" {
-		if err := c.recordSourceAddCommit(dir, &change); err != nil {
-			return err, nil
-		}
 	}
 	if err = boundary("config-written"); err != nil {
 		return err, nil
@@ -478,5 +506,5 @@ func (c catalogService) applySource(dir *os.File, plan sourcePlan) (cleanupErr, 
 	if change.Add {
 		return c.finishSourceAdd(dir, change), nil
 	}
-	return c.finishSourceChange(dir, raw, nil), nil
+	return c.finishSourceChange(dir, raw), nil
 }

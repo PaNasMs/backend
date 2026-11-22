@@ -557,7 +557,7 @@ func TestSourceAddRecoveryPublishesKeyOnce(t *testing.T) {
 		{name: "committed", phase: "config-written"},
 		{name: "preparing", phase: "key-preparing"},
 		{name: "ready", phase: "key-ready"},
-		{name: "before-rename", phase: "key-publishing"},
+		{name: "before-publication-decision", phase: "key-publishing"},
 		{name: "existing-key-withdrawn", phase: "key-exists", withdraw: true, supplyMatching: true},
 		{name: "renamed", phase: "key-published", withdraw: true},
 		{name: "confirmed", phase: "publisher-confirmed", withdraw: true},
@@ -806,10 +806,10 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 			t.Fatal(err)
 		}
 		c.sourceBoundary = func(phase string) error {
-			if phase == "config-written" && cut != "key-publishing" {
+			if phase == "config-written" && cut != "key-publishing" && cut != "key-rename" {
 				return os.WriteFile(filepath.Join(c.keys, "pending.pem"), raw, 0600)
 			}
-			if phase == "key-link" {
+			if phase == "key-rename" {
 				switch cut {
 				case "immutable", "immutable-withdrawn":
 					return unix.EPERM
@@ -817,7 +817,7 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 					return unix.EXDEV
 				}
 			}
-			if phase == cut || phase == "key-exists" && cut != "key-publishing" {
+			if phase == cut || phase == "key-exists" {
 				os.Exit(exited)
 			}
 			return nil
@@ -826,7 +826,7 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 		t.Fatalf("child did not stop at %s: %v", cut, err)
 	}
 
-	for _, cut := range []string{"key-publishing", "key-exists", "immutable", "immutable-withdrawn", "mounted", "mounted-withdrawn"} {
+	for _, cut := range []string{"key-publishing", "key-rename", "key-exists", "immutable", "immutable-withdrawn", "mounted", "mounted-withdrawn"} {
 		t.Run(cut, func(t *testing.T) {
 			c, serve := catalogFixture(t)
 			params := servePendingRepository(t, &c)
@@ -852,8 +852,24 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 			}
 			path := filepath.Join(c.keys, "pending.pem")
 			withdrawn := cut == "key-exists" || cut == "immutable-withdrawn" || cut == "mounted-withdrawn"
+			held := withdrawn || cut == "key-rename"
+			var journal sourceChange
+			journalRaw, err := os.ReadFile(filepath.Join(c.root, sourceIntent))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(journalRaw, &journal); err != nil {
+				t.Fatal(err)
+			}
+			wantDecision := "key-probing"
+			if cut == "key-publishing" {
+				wantDecision = "key-ready"
+			}
+			if journal.AddDecision != wantDecision {
+				t.Fatalf("interrupted with decision %q, want %q", journal.AddDecision, wantDecision)
+			}
 			var supplied os.FileInfo
-			if cut != "key-publishing" {
+			if cut != "key-publishing" && cut != "key-rename" {
 				supplied, err = os.Stat(path)
 				if err != nil {
 					t.Fatal(err)
@@ -868,14 +884,14 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
-			} else if cut == "key-publishing" {
+			} else if supplied == nil {
 				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("expected an unpublished key, stat returned %v", err)
 				}
 			}
 			serve("9.0.0", true)
-			visibleCatalog(t, c, "9.0.0", withdrawn)
-			if withdrawn {
+			visibleCatalog(t, c, "9.0.0", held)
+			if held {
 				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("recovery recreated a withdrawn key: %v", err)
 				}
@@ -899,7 +915,7 @@ func TestSourceKeyPublicationAfterHelperExit(t *testing.T) {
 	}
 }
 
-func TestKeyObservationReservesOnlyVacantName(t *testing.T) {
+func TestOnlyLegacyKeyJournalsUseReservedObservation(t *testing.T) {
 	c, _ := catalogFixture(t)
 	keys, err := trustedDirectory(c.keys, c.owner)
 	if err != nil {
@@ -921,8 +937,13 @@ func TestKeyObservationReservesOnlyVacantName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stage.reserveKeyObservation(keys); !errors.Is(err, errSourceAddFenced) {
-		t.Fatalf("expected occupied observation name to stop enrollment: %v", err)
+	if seen, err := stage.legacyKeyObserved(keys); err != nil || seen {
+		t.Fatalf("new journal mistook a foreign entry for a witness: %v, %v", seen, err)
+	}
+	legacy := stage
+	legacy.SeenVacant = true
+	if seen, err := legacy.legacyKeyObserved(keys); err != nil || !seen {
+		t.Fatalf("old journal lost its reserved witness: %v, %v", seen, err)
 	}
 	if err := stage.releaseKeyObservation(keys); err != nil {
 		t.Fatal(err)

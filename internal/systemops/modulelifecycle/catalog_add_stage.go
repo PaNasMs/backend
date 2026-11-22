@@ -198,33 +198,39 @@ func (stage sourceAddStage) writeDraftWithBoundary(parentDir *os.File, next []by
 	return stage, nil
 }
 
-func (s sourceAddStage) publishKey(parent *os.File, target string, boundary func(string) error) error {
+func (s sourceAddStage) publishKey(parent *os.File, target string, reserve func() error, boundary func(string) error) (bool, error) {
 	dir, err := s.open(parent)
+	if errors.Is(err, unix.ENOENT) {
+		return false, nil
+	}
 	if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
-		return errSourceAddFenced
+		return false, errSourceAddFenced
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer dir.Close()
 	// On retry, make either side of the previous rename durable before
 	// interpreting a missing private slot as a completed publication.
 	if err := errors.Join(dir.Sync(), parent.Sync()); err != nil {
-		return err
+		return false, err
 	}
 	draft, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
 	var rejected *systemops.Rejected
 	if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
-		return errSourceAddFenced
+		return false, errSourceAddFenced
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if draft.Inode == 0 {
-		return unix.ENOENT
+		return false, nil
 	}
 	if draft != s.After {
-		return errSourceAddFenced
+		return false, errSourceAddFenced
+	}
+	if err := reserve(); err != nil {
+		return false, err
 	}
 	if boundary != nil {
 		err = boundary("key-rename")
@@ -232,13 +238,16 @@ func (s sourceAddStage) publishKey(parent *os.File, target string, boundary func
 	if err == nil {
 		err = unix.Renameat2(int(dir.Fd()), s.ID, int(parent.Fd()), target, unix.RENAME_NOREPLACE)
 	}
-	if errors.Is(err, unix.EXDEV) {
-		return errSourceAddFenced
+	// A protected or separately mounted destination may still hold the
+	// reviewed PEM. The caller verifies it through the normal trust reader.
+	if errors.Is(err, unix.EEXIST) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) ||
+		errors.Is(err, unix.EBUSY) || errors.Is(err, unix.EXDEV) {
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
-	return errors.Join(dir.Sync(), parent.Sync())
+	return true, errors.Join(dir.Sync(), parent.Sync())
 }
 
 func (s *sourceAddStage) publish(config *os.File, target string) (bool, error) {

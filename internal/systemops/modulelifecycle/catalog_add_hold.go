@@ -18,8 +18,9 @@ func holdPrefix(signer string) string {
 }
 
 const (
-	publisherHeld     byte = 'H'
-	publisherReleased byte = 'R'
+	publisherHeld       byte = 'H'
+	publisherReleased   byte = 'R'
+	publisherCheckWrite byte = '?'
 )
 
 func failedAddRecord(name string, state byte) string {
@@ -28,7 +29,8 @@ func failedAddRecord(name string, state byte) string {
 
 var errForeignPublisherHold = reject("An unrelated file occupies the module publisher hold path")
 
-// A zero transition reads the record. A state change writes through the same
+// Zero reads the record. publisherCheckWrite opens it read/write without updating it.
+// A state change writes through the same
 // descriptor that supplied the validated record, preserving replacements at the path.
 func (s store) publisherHoldAt(dir *os.File, name string, transition byte) (byte, error) {
 	var entry unix.Stat_t
@@ -66,7 +68,7 @@ func (s store) publisherHoldAt(dir *os.File, name string, transition byte) (byte
 	if (state != publisherHeld && state != publisherReleased) || string(raw[1:]) != expected[1:] {
 		return 0, errForeignPublisherHold
 	}
-	if transition != 0 {
+	if transition == publisherHeld || transition == publisherReleased {
 		if state != transition {
 			if _, err := file.WriteAt([]byte{transition}, 0); err != nil {
 				return 0, err
@@ -159,7 +161,13 @@ func (c catalogService) clearFailedAdd(dir *os.File, signer string) error {
 		return err
 	}
 	for _, name := range names {
-		_, err := c.publisherHoldAt(dir, name, publisherReleased)
+		state, err := c.publisherHoldAt(dir, name, 0)
+		if err == nil && state == publisherReleased {
+			continue
+		}
+		if err == nil {
+			_, err = c.publisherHoldAt(dir, name, publisherReleased)
+		}
 		if foreignPublisherHold(err) {
 			if err := c.holdFailedAdd(dir, signer); err != nil {
 				return err

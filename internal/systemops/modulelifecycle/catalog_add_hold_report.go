@@ -22,6 +22,10 @@ func (c catalogService) inactivePublisherHolds(dir *os.File) (map[string][]strin
 			continue
 		}
 		state, err := c.publisherHoldAt(dir, name, 0)
+		if err == nil && state == publisherHeld {
+			// A recognizable hold can still be immutable or on a read-only mount.
+			_, err = c.publisherHoldAt(dir, name, publisherCheckWrite)
+		}
 		if foreignPublisherHold(err) {
 			inactive[signer] = append(inactive[signer], filepath.Join(c.root, name))
 			continue

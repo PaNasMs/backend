@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
-	"panasms.local/backend/internal/systemops"
 )
 
 func keyStageBlockedAt(keys *os.File, owner uint32) (bool, error) {
@@ -38,28 +37,16 @@ func keyStageBlockedAt(keys *os.File, owner uint32) (bool, error) {
 	return keyMount.Mask&draftMount.Mask&unix.STATX_MNT_ID != 0 && keyMount.Mnt_id != draftMount.Mnt_id, nil
 }
 
-func (s sourceAddStage) reserveKeyObservation(keys *os.File) error {
+// Earlier journals reserved a private .seen name and could have observed an
+// operator's key there before recording their verify-only decision.
+func (s sourceAddStage) legacyKeyObserved(keys *os.File) (bool, error) {
+	if !s.SeenVacant {
+		return false, nil
+	}
 	dir, err := s.open(keys)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	var entry unix.Stat_t
-	err = unix.Fstatat(int(dir.Fd()), s.ID+".seen", &entry, unix.AT_SYMLINK_NOFOLLOW)
-	if err == nil {
-		return errSourceAddFenced
-	}
 	if errors.Is(err, unix.ENOENT) {
-		return nil
+		return true, nil
 	}
-	return err
-}
-
-// Link the operator's entry without following it. The hard link records the
-// observation even if the process stops before it can update the journal.
-// ENOENT from this method means the private publication slot was consumed.
-func (s sourceAddStage) observeExistingKey(keys *os.File, target string, boundary func(string) error) (bool, error) {
-	dir, err := s.open(keys)
 	if errors.Is(err, unix.ESTALE) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) {
 		return false, errSourceAddFenced
 	}
@@ -67,55 +54,12 @@ func (s sourceAddStage) observeExistingKey(keys *os.File, target string, boundar
 		return false, err
 	}
 	defer dir.Close()
-	if err := errors.Join(dir.Sync(), keys.Sync()); err != nil {
-		return false, err
-	}
-	slot, _, err := sourceAddFileAt(dir, s.ID, s.Owner)
-	var rejected *systemops.Rejected
-	if errors.As(err, &rejected) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENXIO) {
-		return false, errSourceAddFenced
-	}
-	if err != nil {
-		return false, err
-	}
-	if slot.Inode == 0 {
-		return false, unix.ENOENT
-	}
-	if slot != s.After || !s.SeenVacant {
-		return false, errSourceAddFenced
-	}
-	seen := s.ID + ".seen"
 	var entry unix.Stat_t
-	err = unix.Fstatat(int(dir.Fd()), seen, &entry, unix.AT_SYMLINK_NOFOLLOW)
-	if err == nil {
-		return true, nil
-	}
-	if !errors.Is(err, unix.ENOENT) {
-		return false, err
-	}
-	var linkErr error
-	if boundary != nil {
-		linkErr = boundary("key-link")
-	}
-	if linkErr == nil {
-		linkErr = unix.Linkat(int(keys.Fd()), target, int(dir.Fd()), seen, 0)
-	}
-	err = linkErr
-	switch {
-	case err == nil, errors.Is(err, unix.EEXIST):
-		return true, dir.Sync()
-	case errors.Is(err, unix.ENOENT):
+	err = unix.Fstatat(int(dir.Fd()), s.ID+".seen", &entry, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(err, unix.ENOENT) {
 		return false, nil
-	case errors.Is(err, unix.EPERM), errors.Is(err, unix.EACCES), errors.Is(err, unix.EMLINK), errors.Is(err, unix.EXDEV):
-		// Immutable and separately mounted PEMs can be valid trust inputs.
-		// Reserve verify-only recovery before inspecting their contents.
-		if err := unix.Symlinkat("verify-live-key", int(dir.Fd()), seen); err != nil && !errors.Is(err, unix.EEXIST) {
-			return false, err
-		}
-		return true, dir.Sync()
-	default:
-		return false, err
 	}
+	return err == nil, err
 }
 
 func (s sourceAddStage) releaseKeyObservation(keys *os.File) error {

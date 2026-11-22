@@ -376,6 +376,11 @@ Enrollment starts when the helper reserves the publisher in its state directory.
 full and the reservation fails, restore space and retry before installing the configuration or
 key manually. A failed reservation leaves the existing trust settings in effect.
 
+If the helper stops while it is checking the public key or attempting to publish it, recovery
+verifies the current PEM. If the PEM is missing and the journal cannot tell whether publication
+was attempted, the publisher stays inactive. Remove the repository entry, add it again, and
+confirm its fingerprint. This can be necessary even if nobody changed a file.
+
 When recovery resumes after a configuration exchange, it retains the previous configuration in
 `/etc/panasms/.panasms-source-staging/<transaction-id>`. An editor may still have saved changes
 through a descriptor opened before the exchange. Inspect the retained file when reconciling

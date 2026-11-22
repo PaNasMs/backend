@@ -115,7 +115,7 @@ func (c catalogService) finishSourceAdd(dir *os.File, change sourceChange) error
 		if change.KeyStage == nil || len(change.Keys) != 1 {
 			return reject("Invalid module repository journal")
 		}
-	case "key-ready", "key-observed", "key-confirmed":
+	case "key-ready", "key-probing", "key-observed", "key-confirmed":
 		if change.KeyStage == nil || len(change.Keys) != 0 || change.KeyStage.After.Inode == 0 {
 			return reject("Invalid module repository journal")
 		}
@@ -223,10 +223,6 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 				return err
 			}
 		}
-		if err := draft.reserveKeyObservation(keys); err != nil {
-			return err
-		}
-		draft.SeenVacant = true
 		change.KeyStage = &draft
 		change.Keys = nil
 		if err := c.recordSourceAddDecision(dir, change, "key-ready"); err != nil {
@@ -238,45 +234,43 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 			}
 		}
 	}
-	for change.AddDecision == "key-ready" {
-		seen, err := change.KeyStage.observeExistingKey(keys, name, c.sourceBoundary)
-		if errors.Is(err, unix.ENOENT) {
-			break
-		}
+	if change.AddDecision == "key-ready" {
+		seen, err := change.KeyStage.legacyKeyObserved(keys)
 		if err != nil {
 			return err
 		}
-		if seen {
+		if !seen {
+			published, err := change.KeyStage.publishKey(keys, name, func() error {
+				if c.sourceBoundary != nil {
+					if err := c.sourceBoundary("key-publishing"); err != nil {
+						return err
+					}
+				}
+				// Only this call may rename. A restart in key-probing must
+				// respect any withdrawal even if the draft is still present.
+				return c.recordSourceAddDecision(dir, change, "key-probing")
+			}, c.sourceBoundary)
+			if err != nil {
+				return err
+			}
 			if c.sourceBoundary != nil {
-				if err := c.sourceBoundary("key-exists"); err != nil {
+				phase := "key-exists"
+				if published {
+					phase = "key-published"
+				}
+				if err := c.sourceBoundary(phase); err != nil {
 					return err
 				}
 			}
-			if err := c.recordSourceAddDecision(dir, change, "key-observed"); err != nil {
-				return err
-			}
-			break
 		}
-		if c.sourceBoundary != nil {
-			if err := c.sourceBoundary("key-publishing"); err != nil {
+		// A legacy journal may have a witness or a consumed private draft.
+		if change.AddDecision == "key-ready" {
+			if err := c.recordSourceAddDecision(dir, change, "key-probing"); err != nil {
 				return err
 			}
 		}
-		err = change.KeyStage.publishKey(keys, name, c.sourceBoundary)
-		if errors.Is(err, unix.EEXIST) {
-			continue
-		}
-		if err != nil && !errors.Is(err, unix.ENOENT) {
-			return err
-		}
-		if err == nil && c.sourceBoundary != nil {
-			if err := c.sourceBoundary("key-published"); err != nil {
-				return err
-			}
-		}
-		break
 	}
-	if change.AddDecision == "key-observed" {
+	if change.AddDecision == "key-probing" || change.AddDecision == "key-observed" {
 		if err := change.KeyStage.releaseKeyObservation(keys); err != nil {
 			return err
 		}
@@ -295,7 +289,7 @@ func (c catalogService) confirmSourceAddKey(dir *os.File, change *sourceChange, 
 	if err := keys.Sync(); err != nil {
 		return err
 	}
-	if change.AddDecision == "key-ready" || change.AddDecision == "key-observed" {
+	if change.AddDecision == "key-probing" || change.AddDecision == "key-observed" {
 		return c.recordSourceAddDecision(dir, change, "key-confirmed")
 	}
 	return nil

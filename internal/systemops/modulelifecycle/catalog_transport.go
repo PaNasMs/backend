@@ -3,6 +3,7 @@ package modulelifecycle
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
@@ -68,21 +69,60 @@ func dialCatalog(ctx context.Context, network, address string) (net.Conn, error)
 	}
 	return nil, err
 }
+
+// catalogTimeout bounds each network operation of a download, like the socket
+// timeout of module_catalog.py: a slow transfer that keeps delivering data is
+// not cut off, a stalled one fails.
+func catalogTimeout(limit int64) time.Duration {
+	if limit > 2<<20 {
+		return time.Minute
+	}
+	return 10 * time.Second
+}
+
+type catalogTransfer struct {
+	dial    func(context.Context, string, string) (net.Conn, error)
+	tls     *tls.Config
+	timeout time.Duration
+}
+
 func downloadCatalog(ctx context.Context, value string, limit int64) ([]byte, error) {
+	return catalogTransfer{dial: dialCatalog, timeout: catalogTimeout(limit)}.download(ctx, value, limit)
+}
+
+// idleReader cancels the transfer when a single read waits longer than the
+// per-operation timeout.
+type idleReader struct {
+	body    io.Reader
+	timer   *time.Timer
+	timeout time.Duration
+}
+
+func (r idleReader) Read(p []byte) (int, error) {
+	r.timer.Reset(r.timeout)
+	n, err := r.body.Read(p)
+	r.timer.Stop()
+	return n, err
+}
+
+func (t catalogTransfer) download(ctx context.Context, value string, limit int64) ([]byte, error) {
 	if _, err := catalogURL(value, false); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, value, nil)
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{DialContext: dialCatalog}
-	defer transport.CloseIdleConnections()
-	timeout := 10 * time.Second
-	if limit > 2<<20 {
-		timeout = time.Minute
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		ctx, stop := context.WithTimeout(ctx, t.timeout)
+		defer stop()
+		return t.dial(ctx, network, address)
 	}
-	client := http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	transport := &http.Transport{DialContext: dial, TLSClientConfig: t.tls, TLSHandshakeTimeout: t.timeout, ResponseHeaderTimeout: t.timeout}
+	defer transport.CloseIdleConnections()
+	client := http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return reject("Unexpected module download redirect")
 		}
@@ -97,11 +137,16 @@ func downloadCatalog(ctx context.Context, value string, limit int64) ([]byte, er
 	if res.StatusCode != http.StatusOK {
 		return nil, reject("Module catalog download failed. Check the internet connection and try again.")
 	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	timer := time.AfterFunc(t.timeout, cancel)
+	defer timer.Stop()
+	b, err := io.ReadAll(io.LimitReader(idleReader{body: res.Body, timer: timer, timeout: t.timeout}, limit+1))
+	if err != nil {
+		return nil, reject("Module catalog download failed. Check the internet connection and try again.")
+	}
 	if int64(len(b)) > limit {
 		return nil, reject("Module download exceeds size limit")
 	}
-	return b, err
+	return b, nil
 }
 
 type catalogEnvelope struct {

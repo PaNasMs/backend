@@ -1,7 +1,6 @@
 package modulelifecycle
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -10,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"os"
 	"panasms.local/backend/internal/systemops"
 	"path/filepath"
@@ -58,6 +58,142 @@ func signCatalogFixture(t *testing.T, files map[string][]byte, priv ed25519.Priv
 	raw := mustJSON(t, Manifest{"schemaVersion": 1, "id": "demo-repo", "modules": modules})
 	files[fixtureBase+"catalog.json"] = raw
 	files[fixtureBase+"catalog.sig"] = mustJSON(t, catalogEnvelope{Algorithm: "Ed25519", Signer: "catalog", Signature: ed25519.Sign(priv, raw)})
+}
+
+// tamperCatalogSignature keeps the trusted signer and algorithm and flips one
+// bit of the ed25519 signature, so only signature verification can reject it.
+func tamperCatalogSignature(t *testing.T, files map[string][]byte) {
+	t.Helper()
+	var env catalogEnvelope
+	if e := json.Unmarshal(files[fixtureBase+"catalog.sig"], &env); e != nil || len(env.Signature) != ed25519.SignatureSize {
+		t.Fatal(env, e)
+	}
+	env.Signature[0] ^= 1
+	files[fixtureBase+"catalog.sig"] = mustJSON(t, env)
+}
+
+// snapshotState records every file below the module configuration directory
+// (sources, pending intent and trusted keys) and the raw bytes of
+// registry.json, so a rewrite with equivalent contents still counts as a
+// change.
+func snapshotState(t *testing.T, s lifecycle) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	root := filepath.Dir(s.keys)
+	if e := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		out[path] = string(raw)
+		return err
+	}); e != nil {
+		t.Fatal(e)
+	}
+	raw, e := os.ReadFile(filepath.Join(s.root, "registry.json"))
+	switch {
+	case os.IsNotExist(e):
+		out["registry"] = "<absent>"
+	case e != nil:
+		t.Fatal(e)
+	default:
+		out["registry"] = "present:" + string(raw)
+	}
+	return out
+}
+
+// A rejected operation that writes registry.json with equivalent contents
+// must be visible to snapshotState.
+func TestSnapshotStateSeesRegistryRewrite(t *testing.T) {
+	s, _, _ := catalogFixture(t)
+	path := filepath.Join(s.root, "registry.json")
+	before := snapshotState(t, s)
+	if e := os.WriteFile(path, []byte("{}"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	created := snapshotState(t, s)
+	if maps.Equal(before, created) {
+		t.Fatal("registry.json was created but snapshotState reports unchanged state")
+	}
+	if e := os.WriteFile(path, []byte("{ }"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	if maps.Equal(created, snapshotState(t, s)) {
+		t.Fatal("registry.json was rewritten but snapshotState reports unchanged state")
+	}
+}
+
+func assertRejected(t *testing.T, e error, want string) {
+	t.Helper()
+	if e == nil || e.Error() != want {
+		t.Fatalf("got error %v, want %q", e, want)
+	}
+}
+
+func TestTamperedCatalogSignatureRejected(t *testing.T) {
+	ctx := context.Background()
+	t.Run("source-add", func(t *testing.T) {
+		s, f, key := catalogFixture(t)
+		// The publisher key is already trusted locally and is the one the
+		// repository serves, so discovery reaches signature verification.
+		if e := os.WriteFile(filepath.Join(s.keys, "catalog.pem"), f[fixtureBase+"keys/catalog.pem"], 0644); e != nil {
+			t.Fatal(e)
+		}
+		signCatalogFixture(t, f, key, []any{})
+		before := snapshotState(t, s)
+		p := map[string]any{"url": fixtureBase}
+		signed := f[fixtureBase+"catalog.json"]
+		f[fixtureBase+"catalog.json"] = mustJSON(t, Manifest{"schemaVersion": 1, "id": "other-repo", "modules": []any{}})
+		_, e := s.prepare(ctx, "module.source-add", p, "alice")
+		assertRejected(t, e, "Invalid module catalog signature")
+		f[fixtureBase+"catalog.json"] = signed
+		tamperCatalogSignature(t, f)
+		_, e = s.prepare(ctx, "module.source-add", p, "alice")
+		assertRejected(t, e, "Invalid module catalog signature")
+		_, e = s.execute(ctx, "module.source-add", p, "alice", "any", nil, func() error { return nil })
+		assertRejected(t, e, "Invalid module catalog signature")
+		if after := snapshotState(t, s); !maps.Equal(before, after) {
+			t.Fatalf("state changed:\n%v\n%v", before, after)
+		}
+	})
+	t.Run("configured-source", func(t *testing.T) {
+		s, f, key := catalogFixture(t)
+		dir, e := s.configDir()
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer dir.Close()
+		src := Manifest{"id": "demo-repo", "url": fixtureBase, "signers": []any{"catalog"}, "official": false}
+		if e = atomicAt(dir, sourceFile, mustJSON(t, []Manifest{src}), 0600, s.owner); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(filepath.Join(s.keys, "catalog.pem"), f[fixtureBase+"keys/catalog.pem"], 0644); e != nil {
+			t.Fatal(e)
+		}
+		signCatalogFixture(t, f, key, []any{})
+		if _, e = s.readCatalog(ctx, src); e != nil {
+			t.Fatal("valid catalog rejected:", e)
+		}
+		tamperCatalogSignature(t, f)
+		before := snapshotState(t, s)
+		_, e = s.readCatalog(ctx, src)
+		assertRejected(t, e, "Invalid module catalog signature")
+		list, e := s.catalogAvailable(ctx)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var got struct {
+			Available []Manifest
+			Errors    []Manifest
+		}
+		if e = json.Unmarshal(list, &got); e != nil || len(got.Available) != 0 || len(got.Errors) != 1 ||
+			got.Errors[0]["repository"] != "demo-repo" || got.Errors[0]["error"] != "Invalid module catalog signature" {
+			t.Fatal(string(list), e)
+		}
+		if after := snapshotState(t, s); !maps.Equal(before, after) {
+			t.Fatalf("state changed:\n%v\n%v", before, after)
+		}
+	})
 }
 func TestSourceTrustStalePlanAndRestart(t *testing.T) {
 	s, f, key := catalogFixture(t)
@@ -125,6 +261,13 @@ func TestSourceTrustStalePlanAndRestart(t *testing.T) {
 	if _, e = os.Stat(filepath.Join(s.keys, "catalog.pem")); !os.IsNotExist(e) {
 		t.Fatal("removed key still present", e)
 	}
+	rows, e = s.sources()
+	if e != nil || len(rows) != 1 || rows[0]["id"] != "legacy-repo" || rows[0]["extra"] != "keep" {
+		t.Fatal(rows, e)
+	}
+	if _, e = os.Stat(filepath.Join(dir.Name(), sourceIntent)); !os.IsNotExist(e) {
+		t.Fatal("pending source change retained", e)
+	}
 }
 func TestSignedCatalogInstall(t *testing.T) {
 	s, f, priv := catalogFixture(t)
@@ -160,22 +303,47 @@ func TestSignedCatalogInstall(t *testing.T) {
 	modules := []Manifest{{"id": "example", "releases": []Manifest{entry}}}
 	signCatalogFixture(t, f, priv, modules)
 	list, e := s.catalogAvailable(ctx)
-	if e != nil || !bytes.Contains(list, []byte(`"reason":""`)) {
+	if e != nil {
+		t.Fatal(e)
+	}
+	var listing struct {
+		Available []Manifest
+		Errors    []Manifest
+	}
+	if e = json.Unmarshal(list, &listing); e != nil || len(listing.Errors) != 0 || len(listing.Available) != 1 {
 		t.Fatal(string(list), e)
+	}
+	if got := listing.Available[0]; got["id"] != "example" || got["version"] != "1.0.0" || got["signer"] != "fixture" ||
+		got["repository"] != "demo-repo" || got["reason"] != "" || got["updateAvailable"] != false {
+		t.Fatal(string(list))
 	}
 	p := map[string]any{"version": "1.0.0", "target": "example"}
 	fp := executionPlan(t, s, "module.catalog-install", p)
+	// The replacement download is valid and matches the catalog entry, so
+	// only the stale plan fingerprint can reject the install.
+	f[fixtureBase+"replacement.zip"] = raw
 	entry["url"] = fixtureBase + "replacement.zip"
 	signCatalogFixture(t, f, priv, modules)
-	if _, e = s.execute(ctx, "module.catalog-install", p, "alice", fp, nil, func() error { return nil }); e == nil {
-		t.Fatal("accepted stale catalog")
+	if got, e := s.catalogFetch(ctx, fixtureBase+"replacement.zip", int64(len(raw))); e != nil || sha256.Sum256(got) != sum {
+		t.Fatal("replacement archive is not usable", e)
+	}
+	replaced := executionPlan(t, s, "module.catalog-install", p)
+	if replaced == fp {
+		t.Fatal("replacement release did not change the plan")
+	}
+	_, e = s.execute(ctx, "module.catalog-install", p, "alice", fp, nil, func() error { return nil })
+	assertRejected(t, e, "State has changed. Review a new operation plan.")
+	if reg, e := s.registry(); e != nil || len(reg) != 0 {
+		t.Fatal("stale plan changed state", reg, e)
 	}
 	entry["url"] = url
 	signCatalogFixture(t, f, priv, modules)
 	f[url] = append([]byte{}, raw...)
 	f[url][0] ^= 1
-	if _, e = s.execute(ctx, "module.catalog-install", p, "alice", fp, nil, func() error { return nil }); e == nil {
-		t.Fatal("ignored digest mismatch")
+	_, e = s.execute(ctx, "module.catalog-install", p, "alice", fp, nil, func() error { return nil })
+	assertRejected(t, e, "Module archive checksum mismatch: example")
+	if reg, e := s.registry(); e != nil || len(reg) != 0 {
+		t.Fatal("digest mismatch changed state", reg, e)
 	}
 	f[url] = raw
 	result, e := s.execute(ctx, "module.catalog-install", p, "alice", fp, nil, func() error { return nil })

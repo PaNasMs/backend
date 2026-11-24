@@ -3,6 +3,7 @@ package modulelifecycle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -85,6 +86,53 @@ func TestCatalogDownloadStalledTransferFails(t *testing.T) {
 				t.Fatalf("stalled download failed after %s, want about %s", elapsed, timeout)
 			}
 		})
+	}
+}
+
+// A redirect response whose body stalls must still fail after the
+// per-operation timeout instead of hanging the catalog request.
+func TestCatalogDownloadStalledRedirectBodyFails(t *testing.T) {
+	const timeout = 200 * time.Millisecond
+	transfer := catalogTestTransfer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/catalog.json" {
+			w.Write([]byte("{}"))
+			return
+		}
+		w.Header().Set("Location", "https://example.com/catalog.json")
+		w.WriteHeader(http.StatusFound)
+		w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(20 * time.Second):
+		}
+	}, timeout)
+	done := make(chan error, 1)
+	go func() {
+		_, err := transfer.download(context.Background(), "https://example.com/redirect", 4096)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled redirect accepted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("download still blocked 5s after a stalled redirect body (per-operation timeout 200ms)")
+	}
+}
+
+func TestCatalogDownloadReportsCallerCancellation(t *testing.T) {
+	transfer := catalogTestTransfer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}, 5*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	if _, err := transfer.download(ctx, "https://example.com/catalog.json", 4096); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled download returned %v, want context.Canceled", err)
 	}
 }
 

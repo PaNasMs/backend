@@ -90,27 +90,33 @@ func downloadCatalog(ctx context.Context, value string, limit int64) ([]byte, er
 	return catalogTransfer{dial: dialCatalog, timeout: catalogTimeout(limit)}.download(ctx, value, limit)
 }
 
-// idleReader cancels the transfer when a single read waits longer than the
-// per-operation timeout.
-type idleReader struct {
-	body    io.Reader
-	timer   *time.Timer
+// idleConn fails any single read or write that waits longer than the
+// per-operation timeout. Bounding the connection itself covers every read the
+// HTTP client makes, including the TLS handshake and the drain of an
+// intermediate redirect body, not only the final response body.
+type idleConn struct {
+	net.Conn
 	timeout time.Duration
 }
 
-func (r idleReader) Read(p []byte) (int, error) {
-	r.timer.Reset(r.timeout)
-	n, err := r.body.Read(p)
-	r.timer.Stop()
-	return n, err
+func (c idleConn) Read(p []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
+}
+
+func (c idleConn) Write(p []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
 }
 
 func (t catalogTransfer) download(ctx context.Context, value string, limit int64) ([]byte, error) {
 	if _, err := catalogURL(value, false); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, value, nil)
 	if err != nil {
 		return nil, err
@@ -118,7 +124,11 @@ func (t catalogTransfer) download(ctx context.Context, value string, limit int64
 	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
 		ctx, stop := context.WithTimeout(ctx, t.timeout)
 		defer stop()
-		return t.dial(ctx, network, address)
+		conn, err := t.dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return idleConn{Conn: conn, timeout: t.timeout}, nil
 	}
 	transport := &http.Transport{DialContext: dial, TLSClientConfig: t.tls, TLSHandshakeTimeout: t.timeout, ResponseHeaderTimeout: t.timeout}
 	defer transport.CloseIdleConnections()
@@ -126,22 +136,35 @@ func (t catalogTransfer) download(ctx context.Context, value string, limit int64
 		if len(via) >= 10 {
 			return reject("Unexpected module download redirect")
 		}
-		_, err := catalogURL(req.URL.String(), true)
-		return err
+		if _, err := catalogURL(req.URL.String(), true); err != nil {
+			return err
+		}
+		// http.Client ignores errors while it discards a redirect body, so a
+		// stalled one would be silently skipped. Read it here, like urllib
+		// does in module_catalog.py, so a stall fails the download.
+		if _, err := io.CopyN(io.Discard, req.Response.Body, 64<<10); err != nil && err != io.EOF {
+			return reject("Module catalog download failed. Check the internet connection and try again.")
+		}
+		return nil
 	}}
+	failed := func() error {
+		// Caller cancellation is not a network failure: report it as such.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return reject("Module catalog download failed. Check the internet connection and try again.")
+	}
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, reject("Module catalog download failed. Check the internet connection and try again.")
+		return nil, failed()
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, reject("Module catalog download failed. Check the internet connection and try again.")
 	}
-	timer := time.AfterFunc(t.timeout, cancel)
-	defer timer.Stop()
-	b, err := io.ReadAll(io.LimitReader(idleReader{body: res.Body, timer: timer, timeout: t.timeout}, limit+1))
+	b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
-		return nil, reject("Module catalog download failed. Check the internet connection and try again.")
+		return nil, failed()
 	}
 	if int64(len(b)) > limit {
 		return nil, reject("Module download exceeds size limit")

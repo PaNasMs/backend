@@ -88,7 +88,11 @@ func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
 		}
 	}()
 	state, err := s.loadTransaction()
-	if err != nil || state == nil {
+	if err != nil {
+		return err
+	}
+	source, err := s.pendingSource()
+	if err != nil || state == nil && source == nil {
 		return err
 	}
 	lease, err := acquireMaintenance(s.maintenance, s.owner)
@@ -101,6 +105,21 @@ func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
 		return err
 	}
 	defer lock.Close()
+	source, err = s.pendingSource()
+	if err != nil {
+		return err
+	}
+	if source != nil {
+		dir, e := s.configDir()
+		if e != nil {
+			return e
+		}
+		defer dir.Close()
+		restoring = true
+		if e = s.finishSource(dir, *source); e != nil {
+			return e
+		}
+	}
 	state, err = s.loadTransaction()
 	if err != nil || state == nil {
 		return err

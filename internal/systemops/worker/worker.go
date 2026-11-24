@@ -192,6 +192,8 @@ func changing() (bool, error) {
 }
 func query(ctx context.Context, view, target, user string) (json.RawMessage, error) {
 	switch view {
+	case "module-sources", "module-catalog":
+		return modulelifecycle.CatalogQuery(ctx, view)
 	case "modules":
 		member, _ := ctx.Value(moduleMemberKey{}).(bool)
 		return modulelifecycle.Query(member)

@@ -41,7 +41,7 @@ func TestRouteEmptyViewRejected(t *testing.T) {
 func TestRouteKnownViewGoesLegacy(t *testing.T) {
 	var hit bool
 	r := route(nil, recordingRunner(&hit))
-	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "module-catalog"}); err != nil {
+	if _, err := r(context.Background(), "query", "u", map[string]string{"view": "system-updates"}); err != nil {
 		t.Fatalf("known view: %v", err)
 	}
 	if !hit {
@@ -163,7 +163,7 @@ func TestCatalogRecoveryNeverFallsBackToLegacyMutations(t *testing.T) {
 	if _, err := r(context.Background(), "recover", "admin", Request{Action: "module.catalog-install"}); err == nil || hit {
 		t.Fatal(err, hit)
 	}
-	if actionModules["module.catalog-install"] != legacy {
+	if actionModules["module.catalog-install"] != goNative {
 		t.Fatal("catalog selection/download route changed")
 	}
 }
@@ -177,7 +177,7 @@ func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
 	if _, err := r(context.Background(), "query", "member", map[string]string{"view": "modules"}); !errors.Is(err, failure) || hit {
 		t.Fatal("native module query fell back", err, hit)
 	}
-	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover"} {
+	for _, action := range []string{"module.install", "module.enable", "module.disable", "module.remove", "module.recover", "module.catalog-install", "module.source-add", "module.source-remove"} {
 		for _, mode := range []string{"plan", "execute", "recover"} {
 			if _, err := r(context.Background(), mode, "admin", Request{Action: action}); !errors.Is(err, failure) || hit {
 				t.Fatal("native lifecycle fell back", action, mode, err, hit)
@@ -185,7 +185,7 @@ func TestModuleLifecycleNativeFailuresNeverFallBackToPython(t *testing.T) {
 		}
 	}
 	for _, action := range []string{"module.catalog-install", "module.source-add", "module.source-remove"} {
-		if actionModules[action] != legacy {
+		if actionModules[action] != goNative {
 			t.Fatal("catalog selection/source ownership changed", action)
 		}
 	}

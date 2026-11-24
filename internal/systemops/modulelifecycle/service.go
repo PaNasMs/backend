@@ -106,6 +106,11 @@ func (s lifecycle) inspect() (json.RawMessage, error) {
 		return nil, err
 	}
 	result := map[string]any{"pending": state != nil}
+	if c, e := s.pendingSource(); e != nil {
+		return nil, e
+	} else if c != nil {
+		result["pending"] = true
+	}
 	if state != nil {
 		result["modules"] = state.Affected
 		result["committed"] = state.Committed

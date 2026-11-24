@@ -100,7 +100,9 @@ func TestSelectedBtrfsCannotAuthorizeAnUnrelatedDirectory(t *testing.T) {
 		t.Fatalf("wrong mount ID: %v", err)
 	}
 	witness.mountID = st.Mnt_id
-	if err := apply(m, &witness); err == nil || (!errors.Is(err, unix.ENOTTY) && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.EOPNOTSUPP) && err.Error() != "Multi-device or changed Btrfs volumes require a separate workflow") {
+	// The identity ioctl fails on a foreign filesystem. An unprivileged
+	// container's seccomp filter may answer it with EPERM instead of ENOTTY.
+	if err := apply(m, &witness); err == nil || (!errors.Is(err, unix.ENOTTY) && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EPERM) && err.Error() != "Multi-device or changed Btrfs volumes require a separate workflow") {
 		t.Fatalf("foreign filesystem identity: %v", err)
 	}
 }

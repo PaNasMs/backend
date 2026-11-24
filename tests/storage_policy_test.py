@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import storage
 import common
+import sharing
 from types import SimpleNamespace
 import storage_luks
 import storage_reshape
@@ -79,6 +80,8 @@ class Policies(unittest.TestCase):
                 self.assertNotIn('SECRET', str(caught.exception))
 
     def test_user_home_blocks_unmount_even_without_open_files(self):
+        state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(sharing, 'STATE', state / 'sharing.json'))
         account = SimpleNamespace(pw_name='alice', pw_dir='/srv/test/home/alice')
         with patch.object(storage, 'mount_targets', return_value={'/srv/test'}), patch.object(storage, 'nfs_exports', return_value=[]), patch.object(storage, 'mounted_rows', return_value=[('/dev/test', '/srv/test')]), patch.object(storage.pwd, 'getpwall', return_value=[account]), patch.object(storage.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='', stderr='')):
             with self.assertRaises(Rejected) as caught:

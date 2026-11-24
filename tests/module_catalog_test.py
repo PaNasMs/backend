@@ -12,18 +12,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import module_catalog as c
 from common import Rejected
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / 'tests/fixtures/module-catalog'
 
 
 class Catalog(unittest.TestCase):
     def setUp(self):
-        self.key = patch.object(c.manager, 'KEYS', ROOT / 'backend/packaging')
+        state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(c.module_sources, 'CONFIG', state / 'sources.json'))
+        self.key = patch.object(c.manager, 'KEYS', ROOT / 'packaging')
         self.key.start()
         self.addCleanup(self.key.stop)
 
     def test_published_catalog_signature_and_tampering(self):
-        raw = (ROOT / 'backend/tests/fixtures/module-catalog/catalog.json').read_bytes()
-        envelope = json.loads((ROOT / 'backend/tests/fixtures/module-catalog/catalog.sig').read_text())
+        raw = (FIXTURES / 'catalog.json').read_bytes()
+        envelope = json.loads((FIXTURES / 'catalog.sig').read_text())
         c.verify(raw, envelope)
         with self.assertRaisesRegex(Rejected, 'signature'):
             c.verify(raw + b' ', envelope)
@@ -49,7 +52,7 @@ class Catalog(unittest.TestCase):
                     c.verify(raw, {**envelope, 'signer': '../private'})
 
     def test_signed_catalog_parser(self):
-        with patch.object(c, 'download', side_effect=lambda url, limit: (ROOT / 'backend/tests/fixtures/module-catalog' / url.rsplit('/', 1)[1]).read_bytes()):
+        with patch.object(c, 'download', side_effect=lambda url, limit: (FIXTURES / url.rsplit('/', 1)[1]).read_bytes()):
             self.assertEqual(set(c.catalog()), {'files', 'terminal'})
 
     def test_dependencies_and_no_downgrade(self):

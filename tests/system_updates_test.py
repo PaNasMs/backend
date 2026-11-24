@@ -184,6 +184,8 @@ class Updates(unittest.TestCase):
         self.assertEqual(json.loads(u.sharing_compat.GUARD.read_text()),guard)
 
     def test_backup_repacks_every_installed_package(self):
+        # Probe a private filesystem for optional backup inputs, not the host.
+        self.enterContext(patch.object(u, 'Path', lambda p: self.root if p == '/' else Path(p)))
         u.save('state.json',{'id':'a'*32,'phase':'backing-up','version':'0.2.6'})
         current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}
         def run(args,cwd=None,**kw):

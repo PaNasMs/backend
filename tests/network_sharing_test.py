@@ -1,13 +1,21 @@
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch, Mock
 from contextlib import ExitStack
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network_sharing as s
 
+def isolate_network_paths(test):
+    root = Path(test.enterContext(tempfile.TemporaryDirectory()))
+    # Supply private runtime state, sysfs topology and USB gadget configuration.
+    test.enterContext(patch.object(s.n, 'Path', lambda p: root / Path(p).relative_to('/')))
+
+
 class SharingTests(unittest.TestCase):
     def setUp(self):
+        isolate_network_paths(self)
         # Synthetic adapters must not inherit the CI container's eth0 topology.
         patcher = patch.object(s.n, 'system_interface', side_effect=lambda name: name in {'docker0', 'veth1234'})
         patcher.start()
@@ -152,6 +160,7 @@ class ActivationTests(unittest.TestCase):
 
 class PortLifecycleTests(unittest.TestCase):
     def setUp(self):
+        isolate_network_paths(self)
         # Synthetic adapters must not inherit the CI container's eth0 topology.
         patcher = patch.object(s.n, 'system_interface', side_effect=lambda name: name in {'docker0', 'veth1234'})
         patcher.start()

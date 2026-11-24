@@ -10,6 +10,7 @@ from common import Rejected
 class SharingTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.enterContext(patch.object(sharing.sharing_compat, 'GUARD', Path(self.tmp.name) / 'restore.json'))
         for key in ('STATE','SMB','EXPORTS','JOURNAL','LOCK'):
             p=patch.object(sharing,key,Path(self.tmp.name)/key);p.start();self.addCleanup(p.stop)
         def atomic(p,s,mode=0o600): p.write_text(s)

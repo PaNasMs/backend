@@ -46,6 +46,8 @@ class WifiValidation(unittest.TestCase):
             self.assertEqual(w.RECOVERY.stat().st_mode & 0o777, 0o600)
 
     def test_hardware_block_prevents_enable(self):
+        state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(n.sharing, 'ROOT', state / 'groups'))
         adapter = Mock()
         with patch.object(n, 'current', return_value=None), patch.object(w, 'device', return_value=('/', {'ActiveConnection': '/'})), patch.object(w, 'radio', return_value={'enabled': False, 'hardwareEnabled': False}):
             with self.assertRaisesRegex(n.Rejected, 'hardware'):

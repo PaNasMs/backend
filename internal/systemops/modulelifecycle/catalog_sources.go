@@ -143,10 +143,11 @@ func (s lifecycle) discover(ctx context.Context, value string) (Manifest, []byte
 }
 
 type sourceChange struct {
-	Sources   []Manifest
-	Publisher string
-	Key       []byte
-	Remove    bool
+	Sources          []Manifest
+	Publisher        string
+	Key              []byte
+	Remove           bool     // Legacy pending single-publisher removal.
+	RemovePublishers []string `json:",omitempty"`
 }
 
 func (s lifecycle) prepareSource(ctx context.Context, action string, p map[string]any) (*prepared, error) {
@@ -195,14 +196,16 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 			return nil, reject("Module repository not found")
 		}
 		ids, _ := sourceSigners(source)
-		if len(ids) == 1 && !strings.HasPrefix(ids[0], "panasms-") {
-			used := false
-			for _, m := range change.Sources {
-				signers, _ := sourceSigners(m)
-				used = used || slices.Contains(signers, ids[0])
+		used := map[string]bool{}
+		for _, m := range change.Sources {
+			signers, _ := sourceSigners(m)
+			for _, id := range signers {
+				used[id] = true
 			}
-			if !used {
-				change.Publisher, change.Remove = ids[0], true
+		}
+		for _, id := range ids {
+			if !used[id] && !strings.HasPrefix(id, "panasms-") {
+				change.RemovePublishers = append(change.RemovePublishers, id)
 			}
 		}
 		details = []string{text(source, "url"), "Installed modules are retained"}
@@ -224,6 +227,15 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 	if c.Publisher != "" && (!signerPattern.MatchString(c.Publisher) || strings.HasPrefix(c.Publisher, "panasms-")) {
 		return reject("Invalid repository publisher")
 	}
+	removals := c.RemovePublishers
+	if c.Remove {
+		removals = append(removals, c.Publisher)
+	}
+	for _, id := range removals {
+		if !signerPattern.MatchString(id) || strings.HasPrefix(id, "panasms-") {
+			return reject("Invalid repository publisher")
+		}
+	}
 	if len(c.Key) > 0 {
 		if _, _, err := sourcePublic(c.Key); err != nil {
 			return err
@@ -244,14 +256,16 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 	if err = atomicAt(dir, sourceFile, raw, 0600, s.owner); err != nil {
 		return err
 	}
-	if c.Remove {
+	if len(removals) > 0 {
 		keys, err := trustedDirectory(s.keys, s.owner)
 		if err != nil {
 			return err
 		}
 		defer keys.Close()
-		if err = removeCatalogFile(keys, c.Publisher+".pem"); err != nil {
-			return err
+		for _, id := range removals {
+			if err = removeCatalogFile(keys, id+".pem"); err != nil {
+				return err
+			}
 		}
 	}
 	return removeCatalogFile(dir, sourceIntent)

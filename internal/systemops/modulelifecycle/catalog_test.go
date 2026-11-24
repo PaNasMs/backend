@@ -73,7 +73,9 @@ func tamperCatalogSignature(t *testing.T, files map[string][]byte) {
 }
 
 // snapshotState records every file below the module configuration directory
-// (sources, pending intent and trusted keys) and the module registry.
+// (sources, pending intent and trusted keys) and the raw bytes of
+// registry.json, so a rewrite with equivalent contents still counts as a
+// change.
 func snapshotState(t *testing.T, s lifecycle) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -88,12 +90,37 @@ func snapshotState(t *testing.T, s lifecycle) map[string]string {
 	}); e != nil {
 		t.Fatal(e)
 	}
-	reg, e := s.registry()
-	if e != nil {
+	raw, e := os.ReadFile(filepath.Join(s.root, "registry.json"))
+	switch {
+	case os.IsNotExist(e):
+		out["registry"] = "<absent>"
+	case e != nil:
+		t.Fatal(e)
+	default:
+		out["registry"] = "present:" + string(raw)
+	}
+	return out
+}
+
+// A rejected operation that writes registry.json with equivalent contents
+// must be visible to snapshotState.
+func TestSnapshotStateSeesRegistryRewrite(t *testing.T) {
+	s, _, _ := catalogFixture(t)
+	path := filepath.Join(s.root, "registry.json")
+	before := snapshotState(t, s)
+	if e := os.WriteFile(path, []byte("{}"), 0644); e != nil {
 		t.Fatal(e)
 	}
-	out["registry"] = string(mustJSON(t, reg))
-	return out
+	created := snapshotState(t, s)
+	if maps.Equal(before, created) {
+		t.Fatal("registry.json was created but snapshotState reports unchanged state")
+	}
+	if e := os.WriteFile(path, []byte("{ }"), 0644); e != nil {
+		t.Fatal(e)
+	}
+	if maps.Equal(created, snapshotState(t, s)) {
+		t.Fatal("registry.json was rewritten but snapshotState reports unchanged state")
+	}
 }
 
 func assertRejected(t *testing.T, e error, want string) {
@@ -297,6 +324,9 @@ func TestSignedCatalogInstall(t *testing.T) {
 	f[fixtureBase+"replacement.zip"] = raw
 	entry["url"] = fixtureBase + "replacement.zip"
 	signCatalogFixture(t, f, priv, modules)
+	if got, e := s.catalogFetch(ctx, fixtureBase+"replacement.zip", int64(len(raw))); e != nil || sha256.Sum256(got) != sum {
+		t.Fatal("replacement archive is not usable", e)
+	}
 	replaced := executionPlan(t, s, "module.catalog-install", p)
 	if replaced == fp {
 		t.Fatal("replacement release did not change the plan")

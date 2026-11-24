@@ -11,6 +11,7 @@ class ReshapeControlTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.md = Path(self.tmp.name)
+        self.enterContext(patch.object(storage.storage_reshape, 'ROOT', self.md / 'records'))
         for k, v in {
             "uuid": "01234567:89abcdef:01234567:89abcdef",
             "level": "raid5",

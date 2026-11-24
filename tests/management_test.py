@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "management"))
 import storage, accounts, host
+import sharing
 import common
 from common import Rejected
 
@@ -236,6 +237,8 @@ class StorageSafety(unittest.TestCase):
         self.assertEqual(result, other + "\n")
 
     def setUp(self):
+        state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(sharing, 'STATE', state / 'sharing.json'))
         self.inv = {
             "/dev/system": {"type": "disk", "parent": None, "mountpoints": [], "ro": False},
             "/dev/system1": {"type": "part", "parent": "/dev/system", "mountpoints": ["/"], "ro": False},

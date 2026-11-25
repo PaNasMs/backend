@@ -182,7 +182,7 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 	if err != nil {
 		return err
 	}
-	return directory.Sync()
+	return syncDir(directory)
 }
 
 func (s store) saveRegistry(registry Registry) error {

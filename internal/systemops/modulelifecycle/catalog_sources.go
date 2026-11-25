@@ -47,6 +47,9 @@ func (s lifecycle) sources() ([]Manifest, error) {
 		return nil, err
 	}
 	defer dir.Close()
+	return s.sourcesAt(dir)
+}
+func (s lifecycle) sourcesAt(dir *os.File) ([]Manifest, error) {
 	raw, err := readOwnedAt(dir, sourceFile, s.owner, 1<<20)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Manifest{officialSource()}, nil
@@ -142,13 +145,22 @@ func (s lifecycle) discover(ctx context.Context, value string) (Manifest, []byte
 	return Manifest{"id": doc.ID, "url": base, "signers": []any{sig.Signer}, "fingerprint": fp, "official": false}, raw, nil
 }
 
+// sourceChange is the durable intent of one repository change. Add and
+// Withdraw name the change itself, so a replay applies it to the current
+// configuration and keeps independent updates made meanwhile. Sources is the
+// full snapshot that versions without Add/Withdraw replay; it is kept for them.
 type sourceChange struct {
 	Sources          []Manifest
 	Publisher        string
 	Key              []byte
 	Remove           bool     // Legacy pending single-publisher removal.
 	RemovePublishers []string `json:",omitempty"`
+	Add              Manifest `json:",omitempty"`
+	Withdraw         string   `json:",omitempty"`
 }
+
+// syncDir makes directory entries durable. Tests replace it to fail a sync.
+var syncDir = func(dir *os.File) error { return dir.Sync() }
 
 func (s lifecycle) prepareSource(ctx context.Context, action string, p map[string]any) (*prepared, error) {
 	existing, err := s.sources()
@@ -184,6 +196,7 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 			change.Publisher, change.Key = ids[0], raw
 		}
 		change.Sources = append(slices.Clone(existing), source)
+		change.Add = source
 	} else {
 		for _, m := range existing {
 			if m["id"] == text(p, "target") {
@@ -195,6 +208,7 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 		if source == nil {
 			return nil, reject("Module repository not found")
 		}
+		change.Withdraw = text(source, "id")
 		ids, _ := sourceSigners(source)
 		used := map[string]bool{}
 		for _, m := range change.Sources {
@@ -220,6 +234,10 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 
 // Replay a durable, already-authorized decision. The module lock serializes
 // writers. Add the key before the source; remove a key only after its source.
+// The change is merged into the current configuration, so sources and keys
+// updated independently since the intent was written survive the replay.
+// Every step syncs its directory even when the content is already in place:
+// an earlier attempt may have stopped after a rename but before its sync.
 func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 	if c.Sources == nil {
 		return reject("Invalid repository transaction")
@@ -236,7 +254,21 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return reject("Invalid repository publisher")
 		}
 	}
-	if len(c.Key) > 0 {
+	current, err := s.sourcesAt(dir)
+	if err != nil {
+		return err
+	}
+	merged, changed, err := mergeSources(current, c)
+	if err != nil {
+		return err
+	}
+	// The key is needed when this change adds its source now or added it in
+	// an earlier attempt. An independent row for the same ID or URL keeps the
+	// keys it already has.
+	needKey := c.Add == nil || changed || slices.ContainsFunc(current, func(m Manifest) bool {
+		return text(m, "id") == text(c.Add, "id") && text(m, "url") == text(c.Add, "url")
+	})
+	if len(c.Key) > 0 && needKey {
 		if _, _, err := sourcePublic(c.Key); err != nil {
 			return err
 		}
@@ -245,15 +277,25 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return err
 		}
 		defer keys.Close()
-		if err = atomicAt(keys, c.Publisher+".pem", c.Key, 0644, s.owner); err != nil {
+		placed, err := s.placeKey(keys, c.Publisher, c.Key)
+		if err != nil {
 			return err
 		}
+		if !placed && c.Add != nil && changed {
+			// An independent update gave this publisher another key. Keep
+			// it and leave the source out: it was reviewed with this key.
+			merged, changed = current, false
+		}
 	}
-	raw, err := json.Marshal(c.Sources)
-	if err != nil {
-		return err
-	}
-	if err = atomicAt(dir, sourceFile, raw, 0600, s.owner); err != nil {
+	if changed {
+		raw, err := json.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		if err = atomicAt(dir, sourceFile, raw, 0600, s.owner); err != nil {
+			return err
+		}
+	} else if err = syncDir(dir); err != nil {
 		return err
 	}
 	if len(removals) > 0 {
@@ -262,20 +304,93 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return err
 		}
 		defer keys.Close()
+		used := map[string]bool{}
+		for _, m := range merged {
+			signers, _ := sourceSigners(m)
+			for _, id := range signers {
+				used[id] = true
+			}
+		}
 		for _, id := range removals {
-			if err = removeCatalogFile(keys, id+".pem"); err != nil {
+			if used[id] {
+				continue // An independent source trusts this publisher now.
+			}
+			if err = os.Remove(filepath.Join(keys.Name(), id+".pem")); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
+		if err = syncDir(keys); err != nil {
+			return err
+		}
 	}
 	return removeCatalogFile(dir, sourceIntent)
+}
+
+// mergeSources applies the recorded change to the current rows. An intent
+// without Add or Withdraw comes from an older version and carries only the
+// snapshot it was planned against.
+func mergeSources(current []Manifest, c sourceChange) (merged []Manifest, changed bool, err error) {
+	switch {
+	case c.Add != nil && c.Withdraw != "":
+		return nil, false, reject("Invalid repository transaction")
+	case c.Add != nil:
+		id, url := text(c.Add, "id"), text(c.Add, "url")
+		if identifier(id) != nil {
+			return nil, false, reject("Invalid repository transaction")
+		}
+		if _, err = sourceSigners(c.Add); err != nil {
+			return nil, false, err
+		}
+		if _, err = catalogURL(url, false); err != nil {
+			return nil, false, err
+		}
+		for _, m := range current {
+			if text(m, "id") == id || text(m, "url") == url {
+				// Either this change was already applied or an independent
+				// update configured the repository; keep the current row.
+				return current, false, nil
+			}
+		}
+		if len(current) >= 16 {
+			// Independent additions filled the list; they win.
+			return current, false, nil
+		}
+		return append(slices.Clone(current), c.Add), true, nil
+	case c.Withdraw != "":
+		merged = []Manifest{}
+		for _, m := range current {
+			if text(m, "id") == c.Withdraw {
+				changed = true
+			} else {
+				merged = append(merged, m)
+			}
+		}
+		return merged, changed, nil
+	}
+	return c.Sources, true, nil
+}
+
+// placeKey installs the authorized key unless one is present. It reports
+// whether the publisher now uses that key; a different key is an independent
+// update and stays in place.
+func (s lifecycle) placeKey(keys *os.File, publisher string, key []byte) (bool, error) {
+	previous, err := readOwnedAt(keys, publisher+".pem", s.owner, 8192)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, atomicAt(keys, publisher+".pem", key, 0644, s.owner)
+	}
+	if err != nil {
+		return false, err
+	}
+	_, want, _ := sourcePublic(key)
+	_, have, e := sourcePublic(previous)
+	return e == nil && have == want, syncDir(keys)
 }
 func removeCatalogFile(dir *os.File, name string) error {
 	err := os.Remove(filepath.Join(dir.Name(), name))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return dir.Sync()
+	return syncDir(dir)
 }
 func (s lifecycle) pendingSource() (*sourceChange, error) {
 	if s.keys == "" {

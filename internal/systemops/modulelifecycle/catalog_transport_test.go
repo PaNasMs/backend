@@ -123,16 +123,25 @@ func TestCatalogDownloadStalledRedirectBodyFails(t *testing.T) {
 }
 
 func TestCatalogDownloadReportsCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	transfer := catalogTestTransfer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("partial"))
 		w.(http.Flusher).Flush()
+		// Cancel the caller only once the transfer is under way, instead of
+		// racing a timer against the request.
+		cancel()
 		<-r.Context().Done()
+		// Abort rather than return: a normal return lets the server finish the
+		// chunked body, and the client could read that clean end before it
+		// notices the cancellation, turning a cancelled transfer into a
+		// successful truncated one.
+		panic(http.ErrAbortHandler)
 	}, 5*time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
-	if _, err := transfer.download(ctx, "https://example.com/catalog.json", 4096); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled download returned %v, want context.Canceled", err)
+	raw, err := transfer.download(ctx, "https://example.com/catalog.json", 4096)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled download returned %v (body %q), want context.Canceled", err, raw)
 	}
 }
 

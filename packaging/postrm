@@ -12,13 +12,25 @@ if [ "${1:-}" = purge ]; then
  done
  python3 - <<'CLEAN'
 from pathlib import Path
+import os
 import re
 import json
 import shutil
-for folder in ('/var/lib/panasms-updates', '/var/lib/panasms-modules', '/var/lib/panasms-agent/module-uploads'):
+for folder in ('/var/lib/panasms-updates', '/var/lib/panasms-agent/module-uploads'):
     path=Path(folder)
     if path.is_dir() and not path.is_symlink() and path.stat().st_uid==0:
         shutil.rmtree(path)
+# A publisher hold fences a failed repository enrollment. It outlives the
+# package so a reinstall keeps refusing that publisher until it is reviewed.
+hold=re.compile(r'\.source-add-hold-[a-zA-Z0-9_-]{1,64}\.[0-9a-f]{32}')
+modules=Path('/var/lib/panasms-modules')
+if modules.is_dir() and not modules.is_symlink() and modules.stat().st_uid==os.geteuid():
+    for child in modules.iterdir():
+        if hold.fullmatch(child.name) and child.is_file() and not child.is_symlink():continue
+        if child.is_dir() and not child.is_symlink():shutil.rmtree(child)
+        else:child.unlink()
+    try:modules.rmdir()
+    except OSError:pass
 for unit in Path('/etc/systemd/system').glob('panasms-module-*.service'):
     if re.fullmatch(r'panasms-module-[a-z][a-z0-9-]{1,39}\.service',unit.name) and not unit.is_symlink():
         unit.unlink()
@@ -47,12 +59,14 @@ for folder in ('/usr/lib/panasms/management','/usr/lib/panasms'):
     except OSError:pass
 sources=Path('/etc/panasms/module-sources.json')
 keys=Path('/etc/panasms/module-keys')
-if sources.is_file() and not sources.is_symlink() and keys.is_dir() and not keys.is_symlink():
-    for source in json.loads(sources.read_text()):
-        for signer in source.get('signers', []):
-            if re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', signer) and not signer.startswith('panasms-'):
-                key=keys/(signer+'.pem')
-                if key.is_file() and not key.is_symlink() and key.stat().st_uid==0:key.unlink()
+# Revoke every third-party publisher key, including orphans without a source
+# row: a reinstall must not trust a publisher nobody reviewed again. Official
+# panasms-* keys and unrelated operator files stay. Purge runs as root, so the
+# key owner is the purging user.
+if keys.is_dir() and not keys.is_symlink():
+    for key in keys.iterdir():
+        if re.fullmatch(r'[a-zA-Z0-9_-]{1,64}\.pem', key.name) and not key.name.startswith('panasms-'):
+            if key.is_file() and not key.is_symlink() and key.stat().st_uid==os.geteuid():key.unlink()
 sources.unlink(missing_ok=True)
 Path('/etc/panasms/updates.json').unlink(missing_ok=True)
 Path('/etc/panasms/disk-sleep.json').unlink(missing_ok=True)

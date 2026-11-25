@@ -1,8 +1,11 @@
+import base64
+import json
 import os
 import runpy
 import sqlite3
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -13,11 +16,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTest(unittest.TestCase):
     def test_pending_module_transaction_blocks_package_before_any_calls(self):
+        # A crash during a repository change leaves only the source intent; it
+        # must block package changes like a pending module journal does.
+        markers = ('var/lib/panasms-modules/.transaction', 'etc/panasms/module-sources.pending.json')
         for script_name, action in [('preinst', 'upgrade'), ('prerm', 'upgrade'), ('prerm', 'remove'), ('prerm', 'deconfigure')]:
-            for symlink in (False, True):
-                with self.subTest(script=script_name, action=action, symlink=symlink), tempfile.TemporaryDirectory() as folder:
+            for marker, symlink in [(marker, symlink) for marker in markers for symlink in (False, True)]:
+                with self.subTest(script=script_name, action=action, marker=marker, symlink=symlink), tempfile.TemporaryDirectory() as folder:
                     root = Path(folder)
-                    pending = root / 'var/lib/panasms-modules/.transaction'
+                    pending = root / marker
                     pending.parent.mkdir(parents=True)
                     if symlink:
                         pending.symlink_to('missing-evidence')
@@ -232,6 +238,55 @@ class PackagingTest(unittest.TestCase):
             self.assertEqual(runtime.exists(), os.geteuid() != 0)
             self.assertEqual(preserved_runtime.read_text(), "keep")
             subprocess.run([str(fixture.bin / "sh"), str(path), "purge"], env=env, check=True, capture_output=True)
+
+    def test_purge_revokes_orphan_publishers_and_keeps_holds_for_reinstall(self):
+        # A publisher PEM without a source row is still trusted by direct module
+        # verification; a reinstall must not inherit it. Holds fence publishers
+        # across reinstall, so they survive the purge.
+        sys.path.insert(0, str(ROOT / "management"))
+        import module_catalog
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            keys = root / "etc/panasms/module-keys"
+            modules = root / "var/lib/panasms-modules"
+            for p in (keys, modules / "fixture", root / "var/lib/panasms-installer"):
+                p.mkdir(parents=True)
+            official = {name: (ROOT / "packaging" / name).read_bytes() for name in ("panasms-local.pem", "panasms-ci.pem")}
+            for name, raw in official.items():
+                (keys / name).write_bytes(raw)
+            subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(root / "orphan.key")], check=True)
+            subprocess.run(["openssl", "pkey", "-in", str(root / "orphan.key"), "-pubout", "-out", str(keys / "orphan.pem")], check=True)
+            operator = keys / "README.operator"
+            operator.write_text("operator notes")
+            (root / "etc/panasms/module-sources.json").write_text(json.dumps([
+                {"id": "panasms-official", "url": "https://panasms.github.io/module-registry/",
+                 "signers": ["panasms-local", "panasms-ci"], "official": True}]))
+            hold = modules / (".source-add-hold-orphan." + "ab" * 16)
+            hold.write_text("H panasms source-add hold v1\n" + hold.name + "\n")
+            (modules / "registry.json").write_text("{}")
+            (modules / "fixture/manifest.json").write_text("{}")
+            fixture = MaintenanceFixture(root)
+            script = root / "postrm"
+            script.write_text(fixture.rebase((ROOT / "packaging/postrm").read_text()))
+            subprocess.run([str(fixture.bin / "sh"), str(script), "purge"], env=fixture.env, check=True, capture_output=True)
+            self.assertFalse((keys / "orphan.pem").exists())
+            self.assertEqual({name: (keys / name).read_bytes() for name in official}, official)
+            self.assertEqual(operator.read_text(), "operator notes")
+            self.assertEqual(hold.read_text(), "H panasms source-add hold v1\n" + hold.name + "\n")
+            self.assertFalse((modules / "registry.json").exists())
+            self.assertFalse((modules / "fixture").exists())
+            # Reinstall ships only the official keys; the orphan publisher stays untrusted.
+            for name, raw in official.items():
+                (keys / name).write_bytes(raw)
+            data = root / "catalog.json"
+            data.write_bytes(b'{"schemaVersion":1}')
+            subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(root / "orphan.key"), "-rawin",
+                            "-in", str(data), "-out", str(root / "sig")], check=True)
+            envelope = {"algorithm": "Ed25519", "signer": "orphan",
+                        "signature": base64.b64encode((root / "sig").read_bytes()).decode()}
+            with self.assertRaises(module_catalog.Rejected):
+                module_catalog.verify(data.read_bytes(), envelope, allowed=["orphan"], keys=keys)
+            self.assertEqual(sorted(p.name for p in keys.iterdir()), sorted([*official, operator.name]))
 
     def test_active_job_blocks_package_change(self):
         with tempfile.TemporaryDirectory() as d:

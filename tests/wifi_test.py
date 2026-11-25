@@ -7,9 +7,22 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network as n
 w = n.wifi
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import host_isolation
+
+
+def isolate_wifi_paths(test):
+    # Private sysfs and boot ID: a host wlan0 rfkill switch must not override the radio() mock.
+    root = host_isolation.private_root(test)
+    test.enterContext(patch.object(w, 'Path', host_isolation.redirect(root)))
+    host_isolation.forbid_host_reads(test)
+    return root
 
 
 class WifiValidation(unittest.TestCase):
+    def setUp(self):
+        self.root = isolate_wifi_paths(self)
+
     def test_security_classification_does_not_treat_wep_or_enterprise_as_open(self):
         for flags, expected in [(0x100, 'wpa2'), (0x500, 'wpa3'), (0x200, 'enterprise'), (0x800, 'owe'), (0x2000, 'enterprise')]:
             self.assertEqual(w.security({'RsnFlags': flags, 'Flags': 1}), expected)
@@ -46,6 +59,8 @@ class WifiValidation(unittest.TestCase):
             self.assertEqual(w.RECOVERY.stat().st_mode & 0o777, 0o600)
 
     def test_hardware_block_prevents_enable(self):
+        state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(n.sharing, 'ROOT', state / 'groups'))
         adapter = Mock()
         with patch.object(n, 'current', return_value=None), patch.object(w, 'device', return_value=('/', {'ActiveConnection': '/'})), patch.object(w, 'radio', return_value={'enabled': False, 'hardwareEnabled': False}):
             with self.assertRaisesRegex(n.Rejected, 'hardware'):
@@ -65,6 +80,7 @@ class WifiValidation(unittest.TestCase):
 
 class AdapterSwitches(unittest.TestCase):
     def setUp(self):
+        self.root = isolate_wifi_paths(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.config = patch.object(w, 'CONFIG', Path(self.temp.name))

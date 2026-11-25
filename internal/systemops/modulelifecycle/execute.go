@@ -319,6 +319,19 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		return nil, err
 	}
 	if action == "module.recover" {
+		// Source changes have no payload or service transaction to roll back.
+		if plan.source != nil {
+			dir, e := s.configDir()
+			if e != nil {
+				return nil, e
+			}
+			defer dir.Close()
+			mutated = true
+			if e = s.finishSource(dir, *plan.source); e != nil {
+				return nil, e
+			}
+			return json.Marshal(Manifest{"message": "Module transaction recovered"})
+		}
 		cancellable(reporter, false)
 		if err = authorize(); err != nil {
 			return nil, err
@@ -364,6 +377,51 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		}
 		mutated = true
 		return json.Marshal(map[string]any{"message": "Module transaction recovered"})
+	}
+	if plan.source != nil {
+		dir, e := s.configDir()
+		if e != nil {
+			return nil, e
+		}
+		defer dir.Close()
+		c := plan.source
+		if len(c.Key) > 0 {
+			_, fp, e := sourcePublic(c.Key)
+			if e != nil || text(p, "keyFingerprint") != fp {
+				return nil, reject("Repository signing key changed. Review the repository again.")
+			}
+		}
+		raw, e := json.Marshal(c)
+		if e != nil {
+			return nil, e
+		}
+		mutated = true
+		if e = atomicAt(dir, sourceIntent, raw, 0600, s.owner); e != nil {
+			return nil, e
+		}
+		if e = s.finishSource(dir, *c); e != nil {
+			return nil, e
+		}
+		message := "Module repository added"
+		if action == "module.source-remove" {
+			message = "Module repository removed"
+		}
+		return json.Marshal(Manifest{"message": message})
+	}
+	if action == "module.catalog-install" {
+		var e error
+		plan, e = s.catalogInstall(ctx, plan, name)
+		if e != nil {
+			return nil, e
+		}
+		archive = plan.archive
+		action = "module.install"
+		if e = authorize(); e != nil {
+			return nil, e
+		}
+		if e = checkpoint(ctx, reporter); e != nil {
+			return nil, e
+		}
 	}
 	if len(plan.order) == 0 {
 		return json.Marshal(map[string]any{"message": "Modules installed and enabled", "modules": []string{}, "noChanges": true})

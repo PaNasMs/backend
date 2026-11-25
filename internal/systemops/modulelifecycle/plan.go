@@ -19,6 +19,7 @@ import (
 
 type lifecycle struct {
 	store
+	catalogFetch                                                    func(context.Context, string, int64) ([]byte, error)
 	core, architecture, units, uploads, keys, maintenance, coreFile string
 	run                                                             command
 	compare                                                         versionCompare
@@ -27,6 +28,8 @@ type lifecycle struct {
 }
 
 type prepared struct {
+	entries     Registry
+	source      *sourceChange
 	installed   Registry
 	target      string
 	order       []string
@@ -44,7 +47,7 @@ type prepared struct {
 
 func IsAction(action string) bool {
 	switch action {
-	case "module.install", "module.enable", "module.disable", "module.remove", "module.recover":
+	case "module.install", "module.enable", "module.disable", "module.remove", "module.recover", "module.source-add", "module.source-remove", "module.catalog-install":
 		return true
 	}
 	return false
@@ -122,6 +125,16 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 		return nil, reject("Unknown operation")
 	}
 	if action == "module.recover" {
+		if pending, e := s.pendingSource(); e != nil {
+			return nil, e
+		} else if pending != nil {
+			fp, e := planFingerprint(action, p, pending)
+			if e != nil {
+				return nil, e
+			}
+			body, e := json.Marshal(Manifest{"target": "modules", "confirmation": "modules", "details": []string{"Finish the recorded repository change"}, "fingerprint": fp})
+			return &prepared{source: pending, fingerprint: fp, result: body, target: "modules"}, e
+		}
 		state, err := s.loadTransaction()
 		if err != nil {
 			return nil, err
@@ -153,6 +166,17 @@ func (s lifecycle) prepare(ctx context.Context, action string, p map[string]any,
 		return nil, err
 	} else if state != nil {
 		return nil, reject("Recover the recorded module transaction before changing modules")
+	}
+	if pending, e := s.pendingSource(); e != nil {
+		return nil, e
+	} else if pending != nil {
+		return nil, reject(incompleteRecovery)
+	}
+	if action == "module.source-add" || action == "module.source-remove" {
+		return s.prepareSource(ctx, action, p)
+	}
+	if action == "module.catalog-install" {
+		return s.catalogPlan(ctx, p)
 	}
 	installed, err := s.registry()
 	if err != nil {

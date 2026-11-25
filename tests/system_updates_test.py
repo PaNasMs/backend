@@ -217,10 +217,12 @@ class Updates(unittest.TestCase):
         _,sources,keys=self.withdrawn_backup()
         u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.4'})
         with patch.object(u,'preflight'),patch.object(u,'module_idle'),patch.object(u,'services',return_value=['core']),\
-             patch.object(u,'stop'),patch.object(u,'start') as start,patch.object(u,'restore') as restore:
+             patch.object(u,'stop') as stop,patch.object(u,'start') as start,patch.object(u,'restore') as restore:
             u.work()
         restore.assert_not_called()
-        start.assert_called_once_with(['core'])
+        # The refusal comes before any service, terminal sessions included, is stopped.
+        stop.assert_not_called()
+        start.assert_not_called()
         state=u.read('state.json',{})
         self.assertEqual(state['phase'],'failed')
         self.assertIn('withdrawn',state['error'])
@@ -235,6 +237,45 @@ class Updates(unittest.TestCase):
         self.assertEqual(u.withdrawn_trust(folder),[])
         (keys/'community.pem').write_text('replaced key')
         self.assertEqual(u.withdrawn_trust(folder),['publisher key community.pem'])
+
+    def test_retry_rollback_refuses_withdrawn_trust_without_restore(self):
+        # The rollback failed before a sharing guard existed, or with one still
+        # prepared; the administrator then withdrew the source and key.
+        _,sources,keys=self.withdrawn_backup()
+        for guard in (None,{'phase':'prepared'}):
+            with self.subTest(guard=guard):
+                u.sharing_compat.GUARD.unlink(missing_ok=True)
+                if guard:u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps(guard).encode())
+                u.save('state.json',{'id':'test','phase':'recovery-required','operation':'rollback','version':'0.2.4'})
+                with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore') as restore:
+                    with self.assertRaisesRegex(Rejected,'repository community.*publisher key community.pem'):
+                        u.recover(boot=False,retry=True)
+                restore.assert_not_called()
+                self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
+                self.assertFalse((keys/'community.pem').exists())
+                self.assertEqual([s['id'] for s in json.loads(sources.read_text())],['panasms-official'])
+
+    def test_retry_rollback_with_restoring_guard_finishes(self):
+        # /etc/panasms may already be cleared once the guard reached restoring.
+        _,sources,keys=self.withdrawn_backup()
+        sources.unlink()
+        u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps({'phase':'restoring'}).encode())
+        u.save('state.json',{'id':'test','phase':'recovery-required','operation':'rollback','version':'0.2.4'})
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',return_value=[]) as restore:
+            u.recover(boot=False,retry=True)
+        restore.assert_called_once_with(boot=False)
+        self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
+
+    def test_rollback_plan_checks_trust_unless_restore_started(self):
+        _,_,_=self.withdrawn_backup()
+        u.save('state.json',{'id':'test','phase':'recovery-required','operation':'rollback'})
+        current={'installed':{'panasms-prototype':'0.2.4'},'candidate':None}
+        u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps({'phase':'prepared'}).encode())
+        with patch.object(u,'query',return_value=current),patch.object(u,'module_idle'):
+            with self.assertRaisesRegex(Rejected,'withdrawn'):
+                u.plan('system.update.rollback',{})
+            u.sharing_compat.atomic(u.sharing_compat.GUARD,json.dumps({'phase':'restoring'}).encode())
+            self.assertEqual(u.plan('system.update.rollback',{})['target'],'0.2.4')
 
     def test_backup_repacks_every_installed_package(self):
         # Probe a private filesystem for optional backup inputs and the module registry, not the host.
@@ -276,8 +317,9 @@ class Updates(unittest.TestCase):
 
     def test_explicit_root_retry_admits_recovery_required_without_agent(self):
         u.save('state.json',{'id':'original','phase':'recovery-required'})
-        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',return_value=['core','agent']) as restore:
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'require_trust_kept') as trust,patch.object(u,'restore',return_value=['core','agent']) as restore:
             u.recover(boot=False,retry=True)
+        trust.assert_called_once()
         restore.assert_called_once_with(boot=False)
         self.assertEqual(os.environ['PANASMS_UPDATE_TRANSACTION'],'original')
         self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
@@ -288,7 +330,7 @@ class Updates(unittest.TestCase):
         with patch.object(u,'restore') as restore:
             u.recover()
             restore.assert_not_called()
-        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'restore',side_effect=Rejected('foreign sharing file')):
+        with patch.object(u.os,'geteuid',return_value=0),patch.object(u,'require_trust_kept'),patch.object(u,'restore',side_effect=Rejected('foreign sharing file')):
             with self.assertRaisesRegex(Rejected,'foreign sharing file'):
                 u.recover(boot=False,retry=True)
         self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')

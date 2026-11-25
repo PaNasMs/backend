@@ -430,10 +430,23 @@ def withdrawn_trust(folder):
     return withdrawn
 
 
+def restore_started():
+    """Whether an earlier attempt of this rollback reached the restoring phase.
+
+    Only then may /etc/panasms already be cleared. A guard that is still
+    prepared, unreadable or invalid proves nothing about the live trust."""
+    guard=sharing_compat.GUARD
+    if not guard.exists() or guard.is_symlink():return False
+    try:value=json.loads(sharing_compat.secure_read(guard))
+    except (OSError,ValueError,Rejected):return False
+    return isinstance(value,dict) and value.get('phase')=='restoring'
+
+
 def require_trust_kept(folder):
-    # A sharing restore guard means an earlier attempt of this rollback already
-    # passed this check and may have cleared /etc/panasms; let its retry finish.
-    if sharing_compat.GUARD.exists() or sharing_compat.GUARD.is_symlink():return
+    # A guard in the restoring phase means an earlier attempt of this rollback
+    # already passed this check and may have cleared /etc/panasms; let its
+    # retry finish. Any other guard still leaves the live trust to compare.
+    if restore_started():return
     require(folder,'No complete rollback backup is available')
     withdrawn=withdrawn_trust(folder)
     require(not withdrawn,'Module repository trust was withdrawn after the backup ('+', '.join(withdrawn)+'); automatic rollback would restore it. Re-add the repository or use manual recovery.')
@@ -499,6 +512,8 @@ def work():
         try:
             if op=='rollback':
                 preflight(read('backup.json',{})['version'],worker=True)
+                # Refuse withdrawn trust before any service stop; checked again under the lock below.
+                require_trust_kept(read('backup.json',{}).get('folder'))
                 units=services();save('active-units.json',units)
                 stop_terminals(units)
                 module_idle()
@@ -554,7 +569,10 @@ def recover(boot=True, retry=False):
         if s.get('phase') in ('installing','verifying','rolling-back') or retry:
             try:
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id']
-                with maintenance():restored_units=restore(boot=boot)
+                with maintenance():
+                    # An administrator may have withdrawn trust after the failed rollback.
+                    if retry:require_trust_kept(read('backup.json',{}).get('folder'))
+                    restored_units=restore(boot=boot)
                 # Package removal cancels boot jobs; queue them again without waiting on this unit.
                 if boot:start(restored_units if restored_units is not None else read('backup.json',{})['units'],boot=True)
                 finish('rolled-back','Failed rollback retried by administrator' if retry else 'Interrupted update restored during boot')

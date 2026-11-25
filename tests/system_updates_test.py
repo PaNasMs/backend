@@ -1,5 +1,6 @@
 import datetime as dt
 import fcntl
+import hashlib
 import os
 import importlib
 import json
@@ -13,6 +14,8 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parents[1]/'management'))
 import system_updates as u
 from common import Rejected
+sys.path.insert(0,str(Path(__file__).parent))
+import host_isolation
 
 class Updates(unittest.TestCase):
     def setUp(self):
@@ -184,8 +187,11 @@ class Updates(unittest.TestCase):
         self.assertEqual(json.loads(u.sharing_compat.GUARD.read_text()),guard)
 
     def test_backup_repacks_every_installed_package(self):
-        # Probe a private filesystem for optional backup inputs, not the host.
-        self.enterContext(patch.object(u, 'Path', lambda p: self.root if p == '/' else Path(p)))
+        # Probe a private filesystem for optional backup inputs and the module registry, not the host.
+        self.enterContext(patch.object(u, 'Path', host_isolation.redirect(self.root)))
+        host_isolation.forbid_host_reads(self)
+        registry=self.root/'var/lib/panasms-modules/registry.json'
+        registry.parent.mkdir(parents=True);registry.write_text('{"fixture":{"enabled":true}}')
         u.save('state.json',{'id':'a'*32,'phase':'backing-up','version':'0.2.6'})
         current={'panasms-prototype':'0.2.5','panasms-cooling':'0.2.5'}
         def run(args,cwd=None,**kw):
@@ -197,6 +203,7 @@ class Updates(unittest.TestCase):
         backup=u.read('backup.json',{})
         self.assertEqual(sorted(Path(p).name.split('_')[0] for p in backup['packages']),['panasms-cooling','panasms-prototype'])
         self.assertEqual((backup['version'],backup['toVersion'],backup['units']),('0.2.5','0.2.6',['core','panasms-cooling.service']))
+        self.assertEqual(backup['moduleHash'],hashlib.sha256(registry.read_bytes()).hexdigest())
     def test_failed_health_rolls_back_without_retrying_update(self):
         events=self.transaction(True)
         self.assertEqual(events.count('restore'),1)

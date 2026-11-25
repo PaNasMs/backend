@@ -8,8 +8,11 @@ import (
 	"os"
 	"panasms.local/backend/internal/auth"
 	"panasms.local/backend/internal/systemops"
+	"runtime"
 	"strconv"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func setup() (Dispatcher, *int) {
@@ -124,13 +127,7 @@ func TestMutationFailureIsNotNoChanges(t *testing.T) {
 func TestCancelBeforeMutation(t *testing.T) {
 	for _, duringPlan := range []bool{false, true} {
 		d, calls := setup()
-		read, write, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := systemops.NewReporter(io.Discard, func(string) string { return strconv.Itoa(int(read.Fd())) })
-		defer r.Close()
-		defer write.Close()
+		r, write := reporterWithPipe(t)
 		if duringPlan {
 			plan := d.Plan
 			d.Plan = func(ctx context.Context, a string, p map[string]any, u string) (json.RawMessage, error) {
@@ -140,11 +137,55 @@ func TestCancelBeforeMutation(t *testing.T) {
 		} else {
 			write.Close()
 		}
-		_, err = d.Handle(systemops.ModeExecute, "admin", request(), r)
+		_, err := d.Handle(systemops.ModeExecute, "admin", request(), r)
 		if !errors.Is(err, systemops.ErrCancelled) || *calls != 0 {
 			t.Fatal(err, *calls)
 		}
 	}
+}
+
+// reporterWithPipe builds a Reporter that owns a duplicate of a fresh pipe's
+// read end, so the Reporter and the *os.File returned by os.Pipe never close
+// the same descriptor. It returns the write end for the test to drive.
+func reporterWithPipe(t *testing.T) (*systemops.Reporter, *os.File) {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := unix.FcntlInt(read.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	read.Close()
+	if err != nil {
+		write.Close()
+		t.Fatal(err)
+	}
+	r := systemops.NewReporter(io.Discard, func(key string) string {
+		if key == systemops.ControlFDEnv {
+			return strconv.Itoa(fd)
+		}
+		return ""
+	})
+	t.Cleanup(func() { r.Close(); write.Close() })
+	return r, write
+}
+
+// TestReporterPipeSurvivesGC keeps the control pipe usable after garbage
+// collection: a finalizer on a second owner must not close the Reporter's fd.
+func TestReporterPipeSurvivesGC(t *testing.T) {
+	r, write := reporterWithPipe(t)
+	for range 10 {
+		runtime.GC()
+	}
+	if err := r.Checkpoint(); err != nil {
+		t.Fatalf("idle control pipe reported %v", err)
+	}
+	if _, err := write.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Checkpoint(); !errors.Is(err, systemops.ErrCancelled) {
+		t.Fatalf("live reporter lost its control pipe: got %v, want ErrCancelled", err)
+	}
+	runtime.KeepAlive(r)
 }
 func TestOrdinaryQueriesAreOwnerScoped(t *testing.T) {
 	d, _ := setup()

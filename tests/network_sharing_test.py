@@ -6,11 +6,15 @@ from unittest.mock import patch, Mock
 from contextlib import ExitStack
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'management'))
 import network_sharing as s
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import host_isolation
 
 def isolate_network_paths(test):
-    root = Path(test.enterContext(tempfile.TemporaryDirectory()))
-    # Supply private runtime state, sysfs topology and USB gadget configuration.
+    root = host_isolation.private_root(test)
+    # Supply private runtime state, sysfs topology, USB gadget configuration and boot ID.
     test.enterContext(patch.object(s.n, 'Path', lambda p: root / Path(p).relative_to('/')))
+    test.enterContext(patch.object(s, 'Path', host_isolation.redirect(root)))
+    host_isolation.forbid_host_reads(test)
 
 
 class SharingTests(unittest.TestCase):
@@ -242,6 +246,7 @@ class PortLifecycleTests(unittest.TestCase):
         with ExitStack() as stack:
             for name in ('plan', 'remember', 'command', 'store', 'detach_port', 'confirm'):
                 stack.enter_context(patch.object(s, name))
+            remember = s.remember
             stack.enter_context(patch.object(s, 'load', return_value=[old]))
             stack.enter_context(patch.object(s, 'original', return_value={}))
             stack.enter_context(patch.object(s, 'profiles', return_value={}))
@@ -252,5 +257,7 @@ class PortLifecycleTests(unittest.TestCase):
             activate.assert_not_called()
             deactivate.assert_not_called()
             self.assertEqual(result['message'], 'Sharing recipient removed')
+            # The recovery state carries the fixture boot ID, not the host's.
+            self.assertEqual(remember.call_args.args[0]['boot'], host_isolation.BOOT_ID)
 
 if __name__ == '__main__': unittest.main()

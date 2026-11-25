@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import ssl
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -32,6 +33,10 @@ PACKAGES = {CORE, 'panasms-cooling'}
 # Kept running through the transaction: package scripts restart them and verification requires them.
 INDEPENDENT = ['panasms-cooling.service']
 MAINTENANCE = Path('/run/lock/panasms-maintenance.lock')
+MODULE_SOURCES = Path('/etc/panasms/module-sources.json')
+MODULE_KEYS = Path('/etc/panasms/module-keys')
+# Repositories trusted when no repository configuration exists.
+OFFICIAL_SOURCES = [{'id':'panasms-official','url':'https://panasms.github.io/module-registry/','signers':['panasms-local','panasms-ci'],'official':True}]
 
 
 def atomic(path, text):
@@ -159,6 +164,7 @@ def plan(action,p,user=None):
         require(backup.get('sharingPairHash'),'This backup predates paired sharing rollback; manual recovery is required')
         require(backup.get('moduleHash')==module_hash(),'Installed modules changed after the backup; automatic rollback is unavailable')
         require(current['installed'].get(CORE)==backup.get('toVersion') or read('state.json',{}).get('phase')=='recovery-required','Rollback backup does not match the installed version')
+        require_trust_kept(backup['folder'])
         target=backup['version'];details=[target,'Restore previous PaNasMs packages, settings and databases. User files are not restored.']
     else:target=config()['channel'];details=['Check signed system update catalog']
     return {'target':str(target),'confirmation':str(target),'details':details,
@@ -392,6 +398,47 @@ def module_hash():
     return hashlib.sha256(p.read_bytes() if p.exists() else b'').hexdigest()
 
 
+def source_rows(raw):
+    rows=OFFICIAL_SOURCES if raw is None else json.loads(raw)
+    require(isinstance(rows,list) and all(isinstance(r,dict) for r in rows),'Invalid module repository configuration')
+    return [json.dumps(r,sort_keys=True) for r in rows]
+
+
+def withdrawn_trust(folder):
+    """Return the module publisher trust that restoring this backup would bring back.
+
+    A source row or a third-party publisher key in the archive that the
+    administrator removed or replaced after the backup counts as withdrawn.
+    Official panasms-* keys ship with the package and are not compared."""
+    archived_sources=None;archived_keys={}
+    with tarfile.open(Path(folder)/'data.tar') as archive:
+        for member in archive:
+            name=member.name.removeprefix('./')
+            if name=='etc/panasms/module-sources.json':
+                require(member.isfile() and member.size<=1<<20,'Invalid module repository configuration in the rollback backup')
+                archived_sources=archive.extractfile(member).read()
+            elif re.fullmatch(r'etc/panasms/module-keys/[a-zA-Z0-9_-]{1,64}\.pem',name) and not name.rsplit('/',1)[1].startswith('panasms-'):
+                require(member.isfile() and member.size<=8192,'Invalid module signing key in the rollback backup')
+                archived_keys[name.rsplit('/',1)[1]]=archive.extractfile(member).read()
+    current=MODULE_SOURCES.read_bytes() if MODULE_SOURCES.exists() or MODULE_SOURCES.is_symlink() else None
+    present=set(source_rows(current))
+    withdrawn=['repository '+json.loads(r).get('id','?') for r in source_rows(archived_sources) if r not in present]
+    for key,value in sorted(archived_keys.items()):
+        live=MODULE_KEYS/key
+        if live.is_symlink() or not live.is_file() or live.read_bytes()!=value:
+            withdrawn.append('publisher key '+key)
+    return withdrawn
+
+
+def require_trust_kept(folder):
+    # A sharing restore guard means an earlier attempt of this rollback already
+    # passed this check and may have cleared /etc/panasms; let its retry finish.
+    if sharing_compat.GUARD.exists() or sharing_compat.GUARD.is_symlink():return
+    require(folder,'No complete rollback backup is available')
+    withdrawn=withdrawn_trust(folder)
+    require(not withdrawn,'Module repository trust was withdrawn after the backup ('+', '.join(withdrawn)+'); automatic rollback would restore it. Re-add the repository or use manual recovery.')
+
+
 def backup(units):
     with sharing_compat.locked():
         sharing_compat.resume_check()
@@ -458,6 +505,8 @@ def work():
                 guards.enter_context(maintenance(drain=True))
                 module_idle()
                 preflight(read('backup.json',{})['version'],worker=True)
+                # Repository changes are excluded from here on; check the trust the archive would restore.
+                require_trust_kept(read('backup.json',{}).get('folder'))
                 mutated=True
                 os.environ['PANASMS_UPDATE_TRANSACTION']=s['id'];restore();finish('rolled-back');return
             data=check()

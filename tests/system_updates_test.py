@@ -69,7 +69,7 @@ class Updates(unittest.TestCase):
         u.save('state.json',{'id':'test','phase':'queued','operation':'rollback'})
         u.save('backup.json',{'version':'0.2.5'})
         events=[]
-        with patch.object(u,'preflight'), patch.object(u,'module_idle'), patch.object(u,'services',return_value=['core','panasms-module-terminal.service']), patch.object(u,'stop',side_effect=lambda units:events.append(('stop',units))), patch.object(u,'restore',side_effect=lambda:events.append(('restore',None))):
+        with patch.object(u,'preflight'), patch.object(u,'module_idle'), patch.object(u,'require_trust_kept'), patch.object(u,'services',return_value=['core','panasms-module-terminal.service']), patch.object(u,'stop',side_effect=lambda units:events.append(('stop',units))), patch.object(u,'restore',side_effect=lambda:events.append(('restore',None))):
             u.work()
         self.assertEqual(events,[('stop',['panasms-module-terminal.service']),('restore',None)])
         self.assertEqual(u.read('state.json',{})['phase'],'rolled-back')
@@ -186,6 +186,56 @@ class Updates(unittest.TestCase):
         self.assertEqual(u.read('state.json',{})['id'],'original-transaction')
         self.assertEqual(json.loads(u.sharing_compat.GUARD.read_text()),guard)
 
+    def withdrawn_backup(self):
+        # Back up a configured third-party publisher, then withdraw its source and key.
+        etc=self.root/'etc/panasms';keys=etc/'module-keys';keys.mkdir(parents=True)
+        official={'id':'panasms-official','url':'https://panasms.github.io/module-registry/','signers':['panasms-local','panasms-ci'],'official':True}
+        community={'id':'community','url':'https://example.org/modules/','signers':['community'],'fingerprint':'f'*64,'official':False}
+        sources=etc/'module-sources.json';sources.write_text(json.dumps([official,community]))
+        (keys/'community.pem').write_text('community key')
+        (keys/'panasms-ci.pem').write_text('official key')
+        (etc/'panasms.env').write_text('PANASMS_AUTH_MODE=sudo\n')
+        folder=self.root/'updates-backup';folder.mkdir()
+        with tarfile.open(folder/'data.tar','w') as archive:archive.add(self.root/'etc',arcname='etc')
+        sources.write_text(json.dumps([official]));(keys/'community.pem').unlink()
+        for obj,name,value in [(u,'MODULE_SOURCES',sources),(u,'MODULE_KEYS',keys),(u,'module_hash',lambda:'modules')]:
+            p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
+        u.save('backup.json',{'folder':str(folder),'complete':True,'sharingPairHash':'pair','moduleHash':'modules','version':'0.2.4','toVersion':'0.2.5','units':[]})
+        return folder,sources,keys
+
+    def test_rollback_plan_refuses_to_restore_withdrawn_publisher_trust(self):
+        _,sources,keys=self.withdrawn_backup()
+        u.save('state.json',{})
+        current={'installed':{'panasms-prototype':'0.2.5'},'candidate':None}
+        before=(sources.read_text(),sorted(p.name for p in keys.iterdir()))
+        with patch.object(u,'query',return_value=current),patch.object(u,'module_idle'):
+            with self.assertRaisesRegex(Rejected,'repository community.*publisher key community.pem'):
+                u.plan('system.update.rollback',{})
+        self.assertEqual((sources.read_text(),sorted(p.name for p in keys.iterdir())),before)
+
+    def test_rollback_worker_refuses_withdrawn_trust_before_any_change(self):
+        _,sources,keys=self.withdrawn_backup()
+        u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.4'})
+        with patch.object(u,'preflight'),patch.object(u,'module_idle'),patch.object(u,'services',return_value=['core']),\
+             patch.object(u,'stop'),patch.object(u,'start') as start,patch.object(u,'restore') as restore:
+            u.work()
+        restore.assert_not_called()
+        start.assert_called_once_with(['core'])
+        state=u.read('state.json',{})
+        self.assertEqual(state['phase'],'failed')
+        self.assertIn('withdrawn',state['error'])
+        self.assertFalse((keys/'community.pem').exists())
+        self.assertEqual([s['id'] for s in json.loads(sources.read_text())],['panasms-official'])
+
+    def test_rollback_with_kept_trust_is_admitted(self):
+        folder,sources,keys=self.withdrawn_backup()
+        with tarfile.open(folder/'data.tar') as archive:
+            sources.write_bytes(archive.extractfile('etc/panasms/module-sources.json').read())
+            (keys/'community.pem').write_bytes(archive.extractfile('etc/panasms/module-keys/community.pem').read())
+        self.assertEqual(u.withdrawn_trust(folder),[])
+        (keys/'community.pem').write_text('replaced key')
+        self.assertEqual(u.withdrawn_trust(folder),['publisher key community.pem'])
+
     def test_backup_repacks_every_installed_package(self):
         # Probe a private filesystem for optional backup inputs and the module registry, not the host.
         self.enterContext(patch.object(u, 'Path', host_isolation.redirect(self.root)))
@@ -211,7 +261,7 @@ class Updates(unittest.TestCase):
     def test_failed_manual_restore_keeps_recovery_required(self):
         u.save('state.json',{'id':'test','phase':'queued','operation':'rollback','version':'0.2.5'})
         u.save('backup.json',{'version':'0.2.5'})
-        with patch.object(u,'preflight'), patch.object(u,'services',return_value=[]), patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
+        with patch.object(u,'preflight'), patch.object(u,'require_trust_kept'), patch.object(u,'services',return_value=[]), patch.object(u,'restore',side_effect=Rejected('restore failed')):u.work()
         self.assertEqual(u.read('state.json',{})['phase'],'recovery-required')
         self.assertTrue(u.changing())
 

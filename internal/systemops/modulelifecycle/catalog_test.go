@@ -269,6 +269,82 @@ func TestSourceTrustStalePlanAndRestart(t *testing.T) {
 		t.Fatal("pending source change retained", e)
 	}
 }
+// A crash leaves a durable repository change. Package changes must wait for
+// the installed version to finish it; otherwise a downgraded version edits
+// sources without knowing the intent and the next upgrade replays it.
+func TestCheckInstallHonorsPendingSourceChange(t *testing.T) {
+	s, f, key := catalogFixture(t)
+	ctx := context.Background()
+	dir, e := s.configDir()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer dir.Close()
+	legacy := Manifest{"id": "legacy-repo", "signers": []any{"other"}, "url": "https://example.net/"}
+	if e = atomicAt(dir, sourceFile, mustJSON(t, []Manifest{legacy}), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	signCatalogFixture(t, f, key, []any{})
+	plan, e := s.prepare(ctx, "module.source-add", map[string]any{"url": fixtureBase}, "alice")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.checkInstall(); e != nil {
+		t.Fatal("clean state refused", e)
+	}
+	// Crash after the durable decision and key write, before the config rename.
+	if e = atomicAt(dir, sourceIntent, mustJSON(t, plan.source), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(s.keys, "catalog.pem"), plan.source.Key, 0644); e != nil {
+		t.Fatal(e)
+	}
+	before := snapshotState(t, s)
+	assertRejected(t, s.checkInstall(), "Recover pending module transactions with the installed version before package changes")
+	if after := snapshotState(t, s); !maps.Equal(before, after) {
+		t.Fatalf("check-install changed state:\n%v\n%v", before, after)
+	}
+	// An unreadable intent must not pass as clean either.
+	if e = atomicAt(dir, sourceIntent, []byte("{"), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.checkInstall(); e == nil {
+		t.Fatal("corrupt pending source change accepted")
+	}
+	if e = atomicAt(dir, sourceIntent, mustJSON(t, plan.source), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	// The installed version finishes the change; only then may the package move.
+	if e = s.recoverStartup(ctx); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.checkInstall(); e != nil {
+		t.Fatal("recovered state refused", e)
+	}
+	// The intent is gone once recovered, so nothing remains to replay. A later
+	// downgrade that removes the repository without the intent protocol must
+	// survive the following upgrade's startup unchanged.
+	if e = atomicAt(dir, sourceFile, mustJSON(t, []Manifest{legacy}), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Remove(filepath.Join(s.keys, "catalog.pem")); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.checkInstall(); e != nil {
+		t.Fatal(e)
+	}
+	before = snapshotState(t, s)
+	if e = s.recoverStartup(ctx); e != nil {
+		t.Fatal(e)
+	}
+	if after := snapshotState(t, s); !maps.Equal(before, after) {
+		t.Fatalf("upgrade replayed an old source change:\n%v\n%v", before, after)
+	}
+	if rows, e := s.sources(); e != nil || len(rows) != 1 || rows[0]["id"] != "legacy-repo" {
+		t.Fatal(rows, e)
+	}
+}
+
 func TestSignedCatalogInstall(t *testing.T) {
 	s, f, priv := catalogFixture(t)
 	s.run = func(_ context.Context, argv []string, _ systemops.CommandOptions) ([]byte, error) {

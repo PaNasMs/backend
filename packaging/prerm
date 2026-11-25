@@ -5,7 +5,10 @@ case "${1:-}" in failed-upgrade)
  exit 1
  ;;
  remove|upgrade|deconfigure)
- if [ -e /var/lib/panasms-modules/.transaction ] || [ -L /var/lib/panasms-modules/.transaction ]; then
+ # A pending repository change is part of the module transaction state: another
+ # version must not edit sources or keys before the installed one finishes it.
+ if [ -e /var/lib/panasms-modules/.transaction ] || [ -L /var/lib/panasms-modules/.transaction ] ||
+    [ -e /etc/panasms/module-sources.pending.json ] || [ -L /etc/panasms/module-sources.pending.json ]; then
   echo 'Recover pending module transactions with the installed version before package changes.' >&2
   exit 1
  fi

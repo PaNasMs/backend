@@ -292,6 +292,25 @@ func (s lifecycle) resume(ctx context.Context) error {
 	return nil
 }
 
+// checkInstall refuses package changes while a module transaction or a
+// durable repository change is pending. Another package version must not
+// change sources or keys first: a later startup would replay the stale intent
+// over them.
+func (s lifecycle) checkInstall() error {
+	state, err := s.loadTransaction()
+	if err != nil {
+		return err
+	}
+	source, err := s.pendingSource()
+	if err != nil {
+		return err
+	}
+	if state != nil || source != nil {
+		return reject("Recover pending module transactions with the installed version before package changes")
+	}
+	return nil
+}
+
 func Command(ctx context.Context, mode string, out io.Writer) error {
 	s, err := installedLifecycle()
 	if err != nil {
@@ -305,14 +324,7 @@ func Command(ctx context.Context, mode string, out io.Writer) error {
 	case "resume":
 		return s.resume(ctx)
 	case "check-install":
-		state, err := s.loadTransaction()
-		if err != nil {
-			return err
-		}
-		if state != nil {
-			return reject("Recover pending module transactions with the installed version before package changes")
-		}
-		return nil
+		return s.checkInstall()
 	case "inspect":
 		raw, err := Inspect()
 		if err == nil {

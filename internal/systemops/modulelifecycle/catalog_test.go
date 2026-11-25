@@ -321,8 +321,9 @@ func TestCheckInstallHonorsPendingSourceChange(t *testing.T) {
 	if e = s.checkInstall(); e != nil {
 		t.Fatal("recovered state refused", e)
 	}
-	// Downgrade: an older version removes the repository without the intent
-	// protocol. The following upgrade must not replay the finished change.
+	// The intent is gone once recovered, so nothing remains to replay. A later
+	// downgrade that removes the repository without the intent protocol must
+	// survive the following upgrade's startup unchanged.
 	if e = atomicAt(dir, sourceFile, mustJSON(t, []Manifest{legacy}), 0600, s.owner); e != nil {
 		t.Fatal(e)
 	}

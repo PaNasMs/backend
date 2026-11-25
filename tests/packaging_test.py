@@ -13,11 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTest(unittest.TestCase):
     def test_pending_module_transaction_blocks_package_before_any_calls(self):
+        # A crash during a repository change leaves only the source intent; it
+        # must block package changes like a pending module journal does.
+        markers = ('var/lib/panasms-modules/.transaction', 'etc/panasms/module-sources.pending.json')
         for script_name, action in [('preinst', 'upgrade'), ('prerm', 'upgrade'), ('prerm', 'remove'), ('prerm', 'deconfigure')]:
-            for symlink in (False, True):
-                with self.subTest(script=script_name, action=action, symlink=symlink), tempfile.TemporaryDirectory() as folder:
+            for marker, symlink in [(marker, symlink) for marker in markers for symlink in (False, True)]:
+                with self.subTest(script=script_name, action=action, marker=marker, symlink=symlink), tempfile.TemporaryDirectory() as folder:
                     root = Path(folder)
-                    pending = root / 'var/lib/panasms-modules/.transaction'
+                    pending = root / marker
                     pending.parent.mkdir(parents=True)
                     if symlink:
                         pending.symlink_to('missing-evidence')

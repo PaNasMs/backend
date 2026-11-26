@@ -419,7 +419,7 @@ func (s lifecycle) retirePublisherKey(keys *os.File, id, approved string) error 
 }
 
 func sourceRecoveryConflict() error {
-	return reject("Repository configuration conflict: resolve the pending change before continuing.")
+	return reject("Repository configuration conflict: preserve the journal for review. For an unpublished addition with an absent publisher key, root can use modules abandon-source-add with the reviewed journal SHA256.")
 }
 
 // mergeSources only changes rows that can be identified from the reviewed intent.
@@ -475,9 +475,8 @@ func mergeSources(current []Manifest, c sourceChange) (merged []Manifest, change
 	return current, false, nil
 }
 
-// placeKey installs the authorized key unless one is present. It reports
-// whether the publisher now uses that key; a different key is an independent
-// update and stays in place.
+// placeKey installs an absent key only with fresh approval. Replay can confirm
+// an existing matching key, but cannot undo a revocation or replace a key.
 func (s lifecycle) placeKey(keys *os.File, publisher string, key []byte, freshApproval bool) (bool, error) {
 	previous, err := readOwnedAt(keys, publisher+".pem", s.owner, 8192)
 	if errors.Is(err, os.ErrNotExist) {
@@ -518,7 +517,7 @@ func (s lifecycle) pendingSource() (*sourceChange, error) {
 		return nil, err
 	}
 	var c sourceChange
-	if err = json.Unmarshal(raw, &c); err != nil {
+	if err = systemops.Decode(raw, &c); err != nil {
 		return nil, err
 	}
 	return &c, nil

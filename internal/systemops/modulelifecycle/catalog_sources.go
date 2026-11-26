@@ -55,6 +55,9 @@ func (s lifecycle) sources() ([]Manifest, error) {
 }
 func (s lifecycle) sourcesAt(dir *os.File) ([]Manifest, error) {
 	raw, err := readOwnedAt(dir, sourceFile, s.owner, 1<<20)
+	return parseSources(raw, err)
+}
+func parseSources(raw []byte, err error) ([]Manifest, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return []Manifest{officialSource()}, nil
 	}
@@ -302,7 +305,11 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return reject("Invalid repository publisher")
 		}
 	}
-	current, err := s.sourcesAt(dir)
+	if err := s.finishSourceStages(dir); err != nil {
+		return err
+	}
+	before, readErr := readOwnedAt(dir, sourceFile, s.owner, 1<<20)
+	current, err := parseSources(before, readErr)
 	if err != nil {
 		return err
 	}
@@ -340,7 +347,7 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 		if err != nil {
 			return err
 		}
-		if err = atomicAt(dir, sourceFile, raw, 0600, s.owner); err != nil {
+		if err = s.publishSources(dir, before, readErr == nil, raw); err != nil {
 			var renamed *renamedSyncError
 			if c.Add != nil && errors.As(err, &renamed) {
 				return reject("The added repository is visible, but the configuration directory could not be synced. Recover the recorded transaction to confirm the change.")

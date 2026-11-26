@@ -116,7 +116,7 @@ func (s lifecycle) recoverStartup(ctx context.Context) (err error) {
 		}
 		defer dir.Close()
 		restoring = true
-		if e = s.finishSource(dir, *source); e != nil {
+		if e = s.finishSource(dir, *source, replaySource); e != nil {
 			return e
 		}
 	}

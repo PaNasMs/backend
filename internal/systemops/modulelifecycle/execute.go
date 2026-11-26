@@ -327,7 +327,7 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 			}
 			defer dir.Close()
 			mutated = true
-			if e = s.finishSource(dir, *plan.source); e != nil {
+			if e = s.finishSource(dir, *plan.source, replaySource); e != nil {
 				return nil, e
 			}
 			return json.Marshal(Manifest{"message": "Module transaction recovered"})
@@ -399,7 +399,7 @@ func (s lifecycle) execute(ctx context.Context, action string, p map[string]any,
 		if e = atomicAt(dir, sourceIntent, raw, 0600, s.owner); e != nil {
 			return nil, e
 		}
-		if e = s.finishSource(dir, *c); e != nil {
+		if e = s.finishSource(dir, *c, approvedSourceChange); e != nil {
 			return nil, e
 		}
 		message := "Module repository added"

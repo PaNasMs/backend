@@ -341,6 +341,10 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return err
 		}
 		if err = atomicAt(dir, sourceFile, raw, 0600, s.owner); err != nil {
+			var renamed *renamedSyncError
+			if c.Add != nil && errors.As(err, &renamed) {
+				return reject("The added repository is visible, but the configuration directory could not be synced. Recover the recorded transaction to confirm the change.")
+			}
 			return err
 		}
 	} else if err = syncDir(dir); err != nil {

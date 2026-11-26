@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +30,56 @@ func failSync(t *testing.T, n int) *int {
 	}
 	t.Cleanup(func() { syncDir = original })
 	return &calls
+}
+
+func TestOfficialSourceAddSyncFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sync    int
+		visible bool
+	}{{"before source save", 1, false}, {"after source rename", 2, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := catalogFixture(t)
+			ctx := context.Background()
+			dir := filepath.Dir(s.keys)
+			if err := os.WriteFile(filepath.Join(dir, sourceFile), []byte("[]"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			p := map[string]any{"url": officialSource()["url"]}
+			plan, err := s.prepare(ctx, "module.source-add", p, "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			failSync(t, tc.sync)
+			_, err = s.execute(ctx, "module.source-add", p, "alice", plan.fingerprint, nil, func() error { return nil })
+			if err == nil || strings.Contains(err.Error(), "repository is visible") != tc.visible {
+				t.Fatalf("unexpected add result: %v", err)
+			}
+			if got := sourceIDs(t, s); slices.Contains(got, "panasms-official") != tc.visible {
+				t.Fatalf("unexpected visible sources: %v", got)
+			}
+			if tc.visible {
+				if !strings.Contains(err.Error(), "Recover the recorded transaction") {
+					t.Fatal(err)
+				}
+				// Even a matching row needs a successful sync before cleanup.
+				failSync(t, 1)
+				if err := s.recoverStartup(ctx); err == nil {
+					t.Fatal("recovery confirmed an unsynced source")
+				}
+				if _, err := os.Stat(filepath.Join(dir, sourceIntent)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.recoverStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := sourceIDs(t, s); !slices.Equal(got, []string{"panasms-official"}) {
+				t.Fatalf("sources after recovery = %v", got)
+			}
+			assertAbsent(t, filepath.Join(dir, sourceIntent))
+		})
+	}
 }
 
 func sourceIDs(t *testing.T, s lifecycle) []string {

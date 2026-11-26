@@ -55,6 +55,11 @@ func assertAbsent(t *testing.T, path string) {
 // then records the authorized withdrawal of demo-repo as a crash would leave it.
 func withdrawalPending(t *testing.T) (lifecycle, *os.File) {
 	t.Helper()
+	return withdrawalPendingWithKey(t, true)
+}
+
+func withdrawalPendingWithKey(t *testing.T, present bool) (lifecycle, *os.File) {
+	t.Helper()
 	s, f, key := catalogFixture(t)
 	ctx := context.Background()
 	dir, e := s.configDir()
@@ -75,6 +80,11 @@ func withdrawalPending(t *testing.T) (lifecycle, *os.File) {
 	p["keyFingerprint"] = plan.source.Sources[1]["fingerprint"]
 	if _, e = s.execute(ctx, "module.source-add", p, "alice", plan.fingerprint, nil, func() error { return nil }); e != nil {
 		t.Fatal(e)
+	}
+	if !present {
+		if e = os.Remove(filepath.Join(s.keys, "catalog.pem")); e != nil {
+			t.Fatal(e)
+		}
 	}
 	plan, e = s.prepare(ctx, "module.source-remove", map[string]any{"target": "demo-repo"}, "alice")
 	if e != nil {

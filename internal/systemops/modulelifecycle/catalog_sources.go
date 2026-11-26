@@ -3,18 +3,22 @@ package modulelifecycle
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"log"
 	"maps"
 	"os"
 	"panasms.local/backend/internal/systemops"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 const sourceFile = "module-sources.json"
@@ -360,17 +364,10 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 				continue // An independent source trusts this publisher now.
 			}
 			if c.RemovePEMHashes != nil {
-				want := c.RemovePEMHashes[id]
-				if want == "" {
-					continue
-				}
-				have, err := s.pemHash(keys, id)
-				if err != nil {
+				if err := s.retirePublisherKey(keys, id, c.RemovePEMHashes[id]); err != nil {
 					return err
 				}
-				if have != want {
-					continue
-				} // Keep an independently replaced key.
+				continue
 			}
 			if err = os.Remove(filepath.Join(keys.Name(), id+".pem")); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
@@ -381,6 +378,31 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 		}
 	}
 	return removeCatalogFile(dir, sourceIntent)
+}
+
+// Move the file out of the signer lookup namespace before deciding whether
+// to delete it. Comparing at the live path and then unlinking could delete a
+// different file. A crash after rename leaves at worst an untrusted backup.
+func (s lifecycle) retirePublisherKey(keys *os.File, id, approved string) error {
+	backup := id + ".withdrawn-" + rand.Text()
+	fd := int(keys.Fd())
+	err := unix.Renameat2(fd, id+".pem", fd, backup, unix.RENAME_NOREPLACE)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	raw, err := readOwnedAt(keys, backup, s.owner, 8192)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != approved {
+		log.Printf("Publisher %s key changed since review; preserved without trust at %s", id, filepath.Join(keys.Name(), backup))
+		return nil
+	}
+	return unix.Unlinkat(fd, backup, 0)
 }
 
 // mergeSources applies the recorded change to the current rows. An intent

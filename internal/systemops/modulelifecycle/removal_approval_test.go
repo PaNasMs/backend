@@ -53,19 +53,31 @@ func TestRemovalRequiresApprovalForCurrentPEM(t *testing.T) {
 }
 
 func TestWithdrawalReplayKeepsReplacementPEM(t *testing.T) {
-	s, dir := withdrawalPending(t)
-	path := filepath.Join(s.keys, "catalog.pem")
-	if err := os.WriteFile(path, []byte("replacement"), 0644); err != nil {
-		t.Fatal(err)
+	for _, present := range []bool{true, false} {
+		t.Run(fmt.Sprintf("keyAtPreview=%t", present), func(t *testing.T) {
+			s, dir := withdrawalPendingWithKey(t, present)
+			raw := replacementPublicPEM(t)
+			path := filepath.Join(s.keys, "catalog.pem")
+			if err := os.WriteFile(path, raw, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.recoverStartup(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readPublicKey(s.keys, "catalog", s.owner); err == nil {
+				t.Fatal("replacement still trusted")
+			}
+			backups, err := filepath.Glob(filepath.Join(s.keys, "catalog.withdrawn-*"))
+			if err != nil || len(backups) != 1 {
+				t.Fatalf("backups = %v, %v", backups, err)
+			}
+			if b, err := os.ReadFile(backups[0]); err != nil || !slices.Equal(b, raw) {
+				t.Fatalf("replacement not preserved: %q, %v", b, err)
+			}
+			if ids := sourceIDs(t, s); !slices.Equal(ids, []string{"legacy-repo"}) {
+				t.Fatal(ids)
+			}
+			assertAbsent(t, filepath.Join(dir.Name(), sourceIntent))
+		})
 	}
-	if err := s.recoverStartup(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if b, err := os.ReadFile(path); err != nil || string(b) != "replacement" {
-		t.Fatalf("replacement not preserved: %q, %v", b, err)
-	}
-	if ids := sourceIDs(t, s); !slices.Equal(ids, []string{"legacy-repo"}) {
-		t.Fatal(ids)
-	}
-	assertAbsent(t, filepath.Join(dir.Name(), sourceIntent))
 }

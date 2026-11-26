@@ -153,14 +153,28 @@ type sourceChange struct {
 	Sources          []Manifest
 	Publisher        string
 	Key              []byte
-	Remove           bool     // Legacy pending single-publisher removal.
-	RemovePublishers []string `json:",omitempty"`
-	Add              Manifest `json:",omitempty"`
-	Withdraw         string   `json:",omitempty"`
+	Remove           bool              // Legacy pending single-publisher removal.
+	RemovePublishers []string          `json:",omitempty"`
+	RemovePEMHashes  map[string]string `json:",omitempty"` // Absent on legacy intents.
+	Add              Manifest          `json:",omitempty"`
+	Withdraw         string            `json:",omitempty"`
 }
 
 // syncDir makes directory entries durable. Tests replace it to fail a sync.
 var syncDir = func(dir *os.File) error { return dir.Sync() }
+
+// An empty digest denotes a missing file, not a wildcard.
+func (s lifecycle) pemHash(keys *os.File, publisher string) (string, error) {
+	raw, err := readOwnedAt(keys, publisher+".pem", s.owner, 8192)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
 
 func (s lifecycle) prepareSource(ctx context.Context, action string, p map[string]any) (*prepared, error) {
 	existing, err := s.sources()
@@ -223,12 +237,42 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 			}
 		}
 		details = []string{text(source, "url"), "Installed modules are retained"}
+		if len(change.RemovePublishers) > 0 {
+			keys, err := trustedDirectory(s.keys, s.owner)
+			if err != nil {
+				return nil, err
+			}
+			defer keys.Close()
+			change.RemovePEMHashes = make(map[string]string)
+			for _, id := range change.RemovePublishers {
+				hash, err := s.pemHash(keys, id)
+				if err != nil {
+					return nil, err
+				}
+				change.RemovePEMHashes[id] = hash
+				if hash == "" {
+					details = append(details, id+": no publisher key file")
+				} else {
+					details = append(details, id+" PEM SHA256: "+hash)
+				}
+			}
+		}
 	}
-	fp, err := planFingerprint(action, p, []any{existing, source})
+	identity := []any{existing, source}
+	if change.RemovePEMHashes != nil {
+		identity = append(identity, change.RemovePEMHashes)
+	}
+	fp, err := planFingerprint(action, p, identity)
 	if err != nil {
 		return nil, err
 	}
-	result, err := json.Marshal(Manifest{"target": source["id"], "confirmation": source["id"], "details": details, "publisherFingerprint": source["fingerprint"], "fingerprint": fp})
+	preview := Manifest{"target": source["id"], "confirmation": source["id"], "details": details, "fingerprint": fp}
+	if action == "module.source-add" {
+		preview["publisherFingerprint"] = source["fingerprint"]
+	} else {
+		preview["removePEMHashes"] = change.RemovePEMHashes
+	}
+	result, err := json.Marshal(preview)
 	return &prepared{target: text(source, "id"), fingerprint: fp, result: result, source: &change}, err
 }
 
@@ -314,6 +358,19 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 		for _, id := range removals {
 			if used[id] {
 				continue // An independent source trusts this publisher now.
+			}
+			if c.RemovePEMHashes != nil {
+				want := c.RemovePEMHashes[id]
+				if want == "" {
+					continue
+				}
+				have, err := s.pemHash(keys, id)
+				if err != nil {
+					return err
+				}
+				if have != want {
+					continue
+				} // Keep an independently replaced key.
 			}
 			if err = os.Remove(filepath.Join(keys.Name(), id+".pem")); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err

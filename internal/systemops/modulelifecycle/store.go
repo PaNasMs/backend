@@ -120,6 +120,12 @@ func (s store) registry() (Registry, error) {
 	return decodeRegistry(raw)
 }
 
+// renamedSyncError means the new file is visible, but the directory entry
+// might not survive a crash.
+type renamedSyncError struct{ error }
+
+func (e *renamedSyncError) Unwrap() error { return e.error }
+
 func atomicAt(directory *os.File, name string, raw []byte, mode uint32, owner uint32) error {
 	return atomicOwnedAt(directory, name, raw, mode, owner, uint32(os.Getegid()))
 }
@@ -182,7 +188,10 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 	if err != nil {
 		return err
 	}
-	return syncDir(directory)
+	if err := syncDir(directory); err != nil {
+		return &renamedSyncError{err}
+	}
+	return nil
 }
 
 func (s store) saveRegistry(registry Registry) error {

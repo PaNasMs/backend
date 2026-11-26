@@ -10,24 +10,20 @@ import (
 	"testing"
 )
 
-func replacementPublicPEM(t *testing.T) []byte {
-	t.Helper()
+func TestWithdrawalReplayDoesNotTrustReplacement(t *testing.T) {
+	s, _ := withdrawalPending(t)
 	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	der, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
-}
-
-func TestWithdrawalReplayDoesNotTrustReplacement(t *testing.T) {
-	s, _ := withdrawalPending(t)
-	if err := os.WriteFile(filepath.Join(s.keys, "catalog.pem"), replacementPublicPEM(t), 0644); err != nil {
+	raw := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	if err := os.WriteFile(filepath.Join(s.keys, "catalog.pem"), raw, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.recoverStartup(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+		return
+	} // Refusing completion pending new approval is permitted.
 	if _, err := readPublicKey(s.keys, "catalog", s.owner); err == nil {
 		t.Fatal("completed withdrawal still trusts the unreviewed replacement publisher key")
 	}

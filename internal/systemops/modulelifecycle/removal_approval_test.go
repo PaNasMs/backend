@@ -2,7 +2,10 @@ package modulelifecycle
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"maps"
 	"os"
@@ -52,11 +55,21 @@ func TestRemovalRequiresApprovalForCurrentPEM(t *testing.T) {
 	}
 }
 
+func removalReplacementPEM(t *testing.T) []byte {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public()
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
 func TestWithdrawalReplayKeepsReplacementPEM(t *testing.T) {
 	for _, present := range []bool{true, false} {
 		t.Run(fmt.Sprintf("keyAtPreview=%t", present), func(t *testing.T) {
 			s, dir := withdrawalPendingWithKey(t, present)
-			raw := replacementPublicPEM(t)
+			raw := removalReplacementPEM(t)
 			path := filepath.Join(s.keys, "catalog.pem")
 			if err := os.WriteFile(path, raw, 0644); err != nil {
 				t.Fatal(err)

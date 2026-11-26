@@ -82,6 +82,17 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 3 && os.Args[1] == "modules" && os.Args[2] == "abandon-source-add" {
+		if len(os.Args) != 4 {
+			fmt.Fprintln(os.Stderr, "usage: panasms-system-helper modules abandon-source-add REVIEWED_JOURNAL_SHA256")
+			os.Exit(2)
+		}
+		if err := modulelifecycle.AbandonSourceAdd(context.Background(), os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "modules" {
 		if os.Geteuid() != 0 {
 			os.Exit(1)

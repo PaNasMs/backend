@@ -280,8 +280,7 @@ func retainIntent(t *testing.T, s lifecycle, dir *os.File, intent []byte, last b
 	}
 }
 
-// addPending records the authorized addition of demo-repo as a crash before
-// any config or key change would leave it.
+// addPending records a crash after the approved key write, before adding the row.
 func addPending(t *testing.T) (lifecycle, *os.File, *sourceChange) {
 	t.Helper()
 	s, f, key := catalogFixture(t)
@@ -300,6 +299,9 @@ func addPending(t *testing.T) (lifecycle, *os.File, *sourceChange) {
 		t.Fatal(e)
 	}
 	if e = atomicAt(dir, sourceIntent, mustJSON(t, plan.source), 0600, s.owner); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(s.keys, "catalog.pem"), plan.source.Key, 0644); e != nil {
 		t.Fatal(e)
 	}
 	return s, dir, plan.source
@@ -339,16 +341,13 @@ func TestAdditionReplayKeepsIndependentKey(t *testing.T) {
 	if e := os.WriteFile(filepath.Join(s.keys, "catalog.pem"), independent, 0644); e != nil {
 		t.Fatal(e)
 	}
-	if e := s.recoverStartup(context.Background()); e != nil {
-		t.Fatal(e)
-	}
+	assertSourceConflict(t, s, dir)
 	if raw, e := os.ReadFile(filepath.Join(s.keys, "catalog.pem")); e != nil || !bytes.Equal(raw, independent) {
 		t.Fatalf("independent key replaced: %v", e)
 	}
 	if got := sourceIDs(t, s); !slices.Equal(got, []string{"legacy-repo"}) {
 		t.Fatalf("source trusted with an unreviewed key: %v", got)
 	}
-	assertAbsent(t, filepath.Join(dir.Name(), sourceIntent))
 }
 
 func TestAdditionReplayRetriesAfterFailedSync(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"os"
 	"panasms.local/backend/internal/systemops"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -165,6 +166,7 @@ type sourceChange struct {
 	RemovePEMHashes  map[string]string `json:",omitempty"` // Absent on legacy intents.
 	Add              Manifest          `json:",omitempty"`
 	Withdraw         string            `json:",omitempty"`
+	WithdrawRow      Manifest          `json:",omitempty"` // Full reviewed row; old intents only recorded its ID.
 }
 
 // syncDir makes directory entries durable. Tests replace it to fail a sync.
@@ -230,6 +232,7 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 			return nil, reject("Module repository not found")
 		}
 		change.Withdraw = text(source, "id")
+		change.WithdrawRow = source
 		ids, _ := sourceSigners(source)
 		used := map[string]bool{}
 		for _, m := range change.Sources {
@@ -283,13 +286,20 @@ func (s lifecycle) prepareSource(ctx context.Context, action string, p map[strin
 	return &prepared{target: text(source, "id"), fingerprint: fp, result: result, source: &change}, err
 }
 
-// Replay a durable, already-authorized decision. The module lock serializes
+type sourceCommitMode uint8
+
+const (
+	replaySource sourceCommitMode = iota
+	approvedSourceChange
+)
+
+// Finish a durable decision. The module lock serializes
 // writers. Add the key before the source; remove a key only after its source.
 // The change is merged into the current configuration, so sources and keys
 // updated independently since the intent was written survive the replay.
 // Every step syncs its directory even when the content is already in place:
 // an earlier attempt may have stopped after a rename but before its sync.
-func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
+func (s lifecycle) finishSource(dir *os.File, c sourceChange, mode sourceCommitMode) error {
 	if c.Sources == nil {
 		return reject("Invalid repository transaction")
 	}
@@ -317,13 +327,7 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 	if err != nil {
 		return err
 	}
-	// The key is needed when this change adds its source now or added it in
-	// an earlier attempt. An independent row for the same ID or URL keeps the
-	// keys it already has.
-	needKey := c.Add == nil || changed || slices.ContainsFunc(current, func(m Manifest) bool {
-		return text(m, "id") == text(c.Add, "id") && text(m, "url") == text(c.Add, "url")
-	})
-	if len(c.Key) > 0 && needKey {
+	if len(c.Key) > 0 {
 		if _, _, err := sourcePublic(c.Key); err != nil {
 			return err
 		}
@@ -332,14 +336,12 @@ func (s lifecycle) finishSource(dir *os.File, c sourceChange) error {
 			return err
 		}
 		defer keys.Close()
-		placed, err := s.placeKey(keys, c.Publisher, c.Key)
+		placed, err := s.placeKey(keys, c.Publisher, c.Key, mode == approvedSourceChange)
 		if err != nil {
 			return err
 		}
-		if !placed && c.Add != nil && changed {
-			// An independent update gave this publisher another key. Keep
-			// it and leave the source out: it was reviewed with this key.
-			merged, changed = current, false
+		if !placed {
+			return sourceRecoveryConflict()
 		}
 	}
 	if changed {
@@ -416,9 +418,11 @@ func (s lifecycle) retirePublisherKey(keys *os.File, id, approved string) error 
 	return unix.Unlinkat(fd, backup, 0)
 }
 
-// mergeSources applies the recorded change to the current rows. An intent
-// without Add or Withdraw comes from an older version and carries only the
-// snapshot it was planned against.
+func sourceRecoveryConflict() error {
+	return reject("Repository configuration conflict: preserve the journal for review. For an unpublished addition with an absent publisher key, root can use modules abandon-source-add with the reviewed journal SHA256.")
+}
+
+// mergeSources only changes rows that can be identified from the reviewed intent.
 func mergeSources(current []Manifest, c sourceChange) (merged []Manifest, changed bool, err error) {
 	switch {
 	case c.Add != nil && c.Withdraw != "":
@@ -434,22 +438,29 @@ func mergeSources(current []Manifest, c sourceChange) (merged []Manifest, change
 		if _, err = catalogURL(url, false); err != nil {
 			return nil, false, err
 		}
+		matched := false
 		for _, m := range current {
 			if text(m, "id") == id || text(m, "url") == url {
-				// Either this change was already applied or an independent
-				// update configured the repository; keep the current row.
-				return current, false, nil
+				if matched || !reflect.DeepEqual(m, c.Add) {
+					return nil, false, sourceRecoveryConflict()
+				}
+				matched = true
 			}
 		}
-		if len(current) >= 16 {
-			// Independent additions filled the list; they win.
+		if matched {
 			return current, false, nil
+		}
+		if len(current) >= 16 {
+			return nil, false, sourceRecoveryConflict()
 		}
 		return append(slices.Clone(current), c.Add), true, nil
 	case c.Withdraw != "":
 		merged = []Manifest{}
 		for _, m := range current {
 			if text(m, "id") == c.Withdraw {
+				if changed || !reflect.DeepEqual(m, c.WithdrawRow) {
+					return nil, false, sourceRecoveryConflict()
+				}
 				changed = true
 			} else {
 				merged = append(merged, m)
@@ -457,15 +468,22 @@ func mergeSources(current []Manifest, c sourceChange) (merged []Manifest, change
 		}
 		return merged, changed, nil
 	}
-	return c.Sources, true, nil
+	// Snapshot-only journals cannot identify which live row they may replace.
+	if !reflect.DeepEqual(current, c.Sources) {
+		return nil, false, sourceRecoveryConflict()
+	}
+	return current, false, nil
 }
 
-// placeKey installs the authorized key unless one is present. It reports
-// whether the publisher now uses that key; a different key is an independent
-// update and stays in place.
-func (s lifecycle) placeKey(keys *os.File, publisher string, key []byte) (bool, error) {
+// placeKey installs an absent key only with fresh approval. Replay can confirm
+// an existing matching key, but cannot undo a revocation or replace a key.
+func (s lifecycle) placeKey(keys *os.File, publisher string, key []byte, freshApproval bool) (bool, error) {
 	previous, err := readOwnedAt(keys, publisher+".pem", s.owner, 8192)
 	if errors.Is(err, os.ErrNotExist) {
+		// A journal cannot distinguish an interrupted install from revocation.
+		if !freshApproval {
+			return false, nil
+		}
 		return true, atomicAt(keys, publisher+".pem", key, 0644, s.owner)
 	}
 	if err != nil {
@@ -499,7 +517,7 @@ func (s lifecycle) pendingSource() (*sourceChange, error) {
 		return nil, err
 	}
 	var c sourceChange
-	if err = json.Unmarshal(raw, &c); err != nil {
+	if err = systemops.Decode(raw, &c); err != nil {
 		return nil, err
 	}
 	return &c, nil

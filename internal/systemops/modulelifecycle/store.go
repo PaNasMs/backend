@@ -131,6 +131,10 @@ func atomicAt(directory *os.File, name string, raw []byte, mode uint32, owner ui
 }
 
 func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32) error {
+	return writeOwnedAt(directory, name, raw, mode, owner, group, nil)
+}
+
+func writeOwnedAt(directory *os.File, name string, raw []byte, mode uint32, owner, group uint32, publish func(string, uint64) error) error {
 	if filepath.Base(name) != name || name == "." || name == ".." {
 		return reject("Invalid module state path")
 	}
@@ -172,6 +176,9 @@ func atomicOwnedAt(directory *os.File, name string, raw []byte, mode uint32, own
 	}
 	if err = file.Sync(); err != nil {
 		return err
+	}
+	if publish != nil {
+		return publish(temporary, created.Ino)
 	}
 	if existed {
 		var current unix.Stat_t
